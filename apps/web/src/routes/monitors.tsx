@@ -182,6 +182,14 @@ function MonitorsPage() {
                           paused
                         </span>
                       )}
+                      {m.lastError && (
+                        <span
+                          title={m.lastError}
+                          className="rounded-[3px] border border-coral/30 bg-coral/[0.06] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-coral"
+                        >
+                          degraded
+                        </span>
+                      )}
                     </div>
                     <p className="mt-1.5 font-mono text-xs text-mist-dim">{describe(m)}</p>
                     <code className="mt-2 inline-block max-w-full truncate rounded-[3px] border border-white/[0.08] bg-ink-850 px-2 py-1 font-mono text-[11px] text-mist">
@@ -273,15 +281,29 @@ function MonitorsPage() {
                   <span className="w-24 shrink-0 text-mist-faint">{relTime(a.firedAt)}</span>
                   <span className="w-36 shrink-0 truncate text-mist-dim">{a.monitorName ?? "monitor"}</span>
                   <span className="truncate text-mist">{a.summary}</span>
-                  {a.state === "fired" && a.resolvedAt === null ? (
-                    <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.12em] text-coral">
-                      fired
-                    </span>
-                  ) : (
-                    <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.12em] text-gold-dim">
-                      resolved
-                    </span>
-                  )}
+                  <span className="ml-auto flex shrink-0 items-center gap-2">
+                    {a.state === "fired" && a.notifyStatus && a.notifyStatus !== "none" && (
+                      <span
+                        title={a.notifyError ?? "Notification delivery"}
+                        className={`text-[10px] uppercase tracking-[0.12em] ${
+                          a.notifyStatus === "sent"
+                            ? "text-mist-faint"
+                            : a.notifyStatus === "partial"
+                              ? "text-gold"
+                              : "text-coral"
+                        }`}
+                      >
+                        notify {a.notifyStatus}
+                      </span>
+                    )}
+                    {a.state === "fired" && a.resolvedAt === null ? (
+                      <span className="text-[10px] uppercase tracking-[0.12em] text-coral">fired</span>
+                    ) : (
+                      <span className="text-[10px] uppercase tracking-[0.12em] text-gold-dim">
+                        resolved
+                      </span>
+                    )}
+                  </span>
                 </div>
               ))}
               {alerts.length === 0 && (

@@ -25,19 +25,34 @@ import * as schema from "../storage/schema.js";
  */
 export function createAuth(
   db: KingletDb,
-  opts: { baseUrl?: string; port: number; secret: string; trustedProxies?: string[] }
+  opts: {
+    baseUrl?: string;
+    port: number;
+    secret: string;
+    trustedProxies?: string[];
+    sessionDays?: number;
+  }
 ) {
   const rawBase = opts.baseUrl ?? `http://localhost:${opts.port}`;
   let baseOrigin = rawBase;
+  let baseHost = "";
   try {
-    baseOrigin = new URL(rawBase).origin;
+    const parsed = new URL(rawBase);
+    baseOrigin = parsed.origin;
+    baseHost = parsed.hostname;
   } catch {
     // keep the raw value if it isn't a URL
   }
-  const localOrigins = ["localhost", "127.0.0.1"].flatMap((host) =>
-    [3000, 5173, 8080].map((port) => `http://${host}:${port}`)
-  );
+  // Local origins are only trusted for local base URLs (dev + local Docker),
+  // never on a production deployment with a real hostname.
+  const localOrigins =
+    baseHost === "localhost" || baseHost === "127.0.0.1"
+      ? ["localhost", "127.0.0.1"].flatMap((host) =>
+          [3000, 5173, 8080].map((port) => `http://${host}:${port}`)
+        )
+      : [];
   const trustedProxies = opts.trustedProxies ?? [];
+  const sessionDays = opts.sessionDays ?? 30;
 
   return betterAuth({
     baseURL: baseOrigin,
@@ -57,13 +72,30 @@ export function createAuth(
       minPasswordLength: 8,
     },
     session: {
-      // Performance guide: avoid a database round trip per request.
+      expiresIn: sessionDays * 86_400,
+      // Short cookie cache: fewer DB hits than no cache, but revocation and
+      // role changes take effect quickly.
       cookieCache: {
         enabled: true,
-        maxAge: 5 * 60,
+        maxAge: 60,
       },
     },
     plugins: [admin({ defaultRole: "viewer" })],
+    // HTTP admin endpoints are unused by Kinglet (we call the server API with
+    // explicit permission checks); disabling them removes bypass routes.
+    disabledPaths: [
+      "/admin/set-role",
+      "/admin/create-user",
+      "/admin/remove-user",
+      "/admin/ban-user",
+      "/admin/unban-user",
+      "/admin/impersonate-user",
+      "/admin/stop-impersonating",
+      "/admin/list-users",
+      "/admin/update-user",
+      "/admin/set-user-password",
+      "/admin/revoke-user-sessions",
+    ],
     rateLimit: {
       enabled: true,
       window: 60,
@@ -72,9 +104,11 @@ export function createAuth(
         "/sign-in/email": { window: 60, max: 20 },
       },
     },
-    ...(trustedProxies.length > 0
-      ? { advanced: { ipAddress: { trustedProxies } } }
-      : {}),
+    advanced: {
+      ...(trustedProxies.length > 0
+        ? { ipAddress: { trustedProxies } }
+        : { ipAddress: { ipAddressHeaders: ["x-kinglet-client-ip"] } }),
+    },
   });
 }
 

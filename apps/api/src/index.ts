@@ -17,7 +17,6 @@ import type { MonitorEngine } from "./monitors.js";
 import { startRetentionJob } from "./retention.js";
 import { registerRoutes } from "./routes.js";
 import * as schema from "./storage/schema.js";
-import { systemStatus } from "./status.js";
 import { createStorage } from "./storage/index.js";
 import type { Storage } from "./storage/index.js";
 
@@ -46,6 +45,7 @@ async function main(): Promise<void> {
     port: config.port,
     secret: config.authSecret,
     trustedProxies: config.trustedProxies,
+    sessionDays: config.sessionDays,
   });
   const bootstrap = await ensureBootstrapAdmin(storage, config, auth);
 
@@ -87,6 +87,49 @@ async function main(): Promise<void> {
     onError: (c) => c.json({ error: "payload too large (max 256 KiB)" }, 413),
   });
   app.use("/api/auth/*", smallJsonLimit);
+
+  // Better Auth rate limits by client IP. When no reverse proxy is trusted,
+  // derive the IP from the socket ourselves so a client-supplied
+  // X-Forwarded-For cannot rotate around the limit.
+  if (config.trustedProxies.length === 0) {
+    app.use("/api/auth/*", async (c, next) => {
+      const env = c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined;
+      const address = env?.incoming?.socket?.remoteAddress;
+      if (address) c.req.raw.headers.set("x-kinglet-client-ip", address);
+      await next();
+    });
+  }
+
+  // CSRF guard for cookie-authenticated mutations. Sibling subdomains are
+  // same-site (SameSite=Lax does not help), so require either a Bearer token
+  // or the same-origin request marker that cross-site forms cannot send.
+  const allowedOrigins = (() => {
+    const origins = new Set<string>();
+    try {
+      origins.add(new URL(config.baseUrl ?? `http://localhost:${config.port}`).origin);
+    } catch {
+      // ignore invalid base URL
+    }
+    for (const host of ["localhost", "127.0.0.1"]) {
+      for (const port of [3000, 5173, 8080]) origins.add(`http://${host}:${port}`);
+    }
+    return origins;
+  })();
+  app.use("/v1/*", async (c, next) => {
+    const method = c.req.method;
+    if (method === "GET" || method === "HEAD" || method === "OPTIONS") return next();
+    const hasBearer = (c.req.header("authorization") ?? "").toLowerCase().startsWith("bearer ");
+    if (hasBearer) return next();
+    const origin = c.req.header("origin");
+    if (origin && !allowedOrigins.has(origin)) {
+      return c.json({ error: "cross-origin request rejected" }, 403);
+    }
+    if (c.req.header("x-kinglet-request") !== "1") {
+      return c.json({ error: "missing X-Kinglet-Request header (CSRF guard)" }, 403);
+    }
+    await next();
+  });
+
   app.use("/v1/monitors/*", smallJsonLimit);
   app.use("/v1/users/*", smallJsonLimit);
   app.use("/v1/projects/*", smallJsonLimit);
@@ -96,6 +139,11 @@ async function main(): Promise<void> {
     c.header("x-content-type-options", "nosniff");
     c.header("referrer-policy", "no-referrer");
     c.header("x-frame-options", "DENY");
+    c.header(
+      "content-security-policy",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+        "connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    );
     const path = c.req.path;
     if (path.startsWith("/v1/") || path.startsWith("/api/auth/")) {
       c.header("cache-control", "no-store");
@@ -109,24 +157,8 @@ async function main(): Promise<void> {
     } catch {
       databaseOk = false;
     }
-    return c.json(
-      {
-        ok: databaseOk,
-        name: "kinglet",
-        version: "0.3.0",
-        uptimeMs: Date.now() - systemStatus.startedAt,
-        database: databaseOk ? "ok" : "error",
-        retention: {
-          lastRunAt: systemStatus.retentionLastRunAt,
-          lastError: systemStatus.retentionLastError,
-        },
-        monitors: {
-          refreshedAt: systemStatus.monitorRefreshAt,
-          refreshError: systemStatus.monitorRefreshError,
-        },
-      },
-      databaseOk ? 200 : 503
-    );
+    // Public endpoint: minimal surface. Diagnostics live behind /v1/system/status.
+    return c.json({ ok: databaseOk, version: "0.3.0" }, databaseOk ? 200 : 503);
   });
 
   // Better Auth owns /api/auth/* (sign-in, sign-out, session, password).
@@ -138,7 +170,10 @@ async function main(): Promise<void> {
 
   app.use("/v1/*", authMiddleware(storage, config, auth));
 
-  const engine: MonitorEngine = startMonitorEngine(storage, { baseUrl: config.baseUrl });
+  const engine: MonitorEngine = startMonitorEngine(storage, {
+    baseUrl: config.baseUrl,
+    allowPrivateWebhooks: config.allowPrivateWebhooks,
+  });
   registerRoutes(app, storage, engine, config, auth);
   registerStaticUi(app);
 
@@ -261,8 +296,10 @@ function printBanner(
     }
   } else if (config.savedToken) {
     console.log(`  Token (legacy)→ stored at ${path.join(config.dataDir, "kinglet.token")} (not printed)`);
-  } else {
+  } else if (config.tokens.length > 0) {
     console.log(`  Tokens        → from KINGLET_TOKENS env (legacy)`);
+  } else {
+    console.log(`  Tokens        → legacy tokens disabled (use project API keys)`);
   }
   console.log("");
 }

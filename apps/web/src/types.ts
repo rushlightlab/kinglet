@@ -64,6 +64,10 @@ export interface Monitor {
   channels: NotifyChannel[];
   createdAt: number;
   updatedAt: number;
+  /** Runtime observability from the alert engine. */
+  lastEvalAt: number | null;
+  lastError: string | null;
+  lastErrorAt: number | null;
 }
 
 export interface AlertRecord {
@@ -76,6 +80,9 @@ export interface AlertRecord {
   sampleMessage: string | null;
   firedAt: number;
   resolvedAt: number | null;
+  /** Delivery outcome of the "fired" notification. */
+  notifyStatus: "sent" | "partial" | "failed" | "none" | null;
+  notifyError: string | null;
 }
 
 export interface ChannelTestResult {
@@ -108,6 +115,8 @@ export interface ApiKeyInfo {
   name: string;
   prefix: string;
   scopes: string[];
+  createdBy: string | null;
+  createdByEmail: string | null;
   createdAt: number;
   lastUsedAt: number | null;
 }

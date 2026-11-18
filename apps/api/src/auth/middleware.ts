@@ -47,7 +47,8 @@ async function resolveAuth(
   c: Context,
   storage: Storage,
   config: Config,
-  auth: KingletAuth
+  auth: KingletAuth,
+  forceFreshSession: boolean
 ): Promise<AuthInfo | null> {
   const header = c.req.header("authorization");
   let bearer: string | undefined;
@@ -70,8 +71,12 @@ async function resolveAuth(
   }
 
   // Better Auth session — cookieCache makes this a signed-cookie read in the
-  // common case, no database round trip.
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  // common case, no database round trip. Mutations bypass the cache so a
+  // demoted/deleted user cannot keep writing for the cache TTL.
+  const session = await auth.api.getSession({
+    headers: c.req.raw.headers,
+    ...(forceFreshSession ? { query: { disableCookieCache: true } } : {}),
+  });
   if (!session?.user) return null;
   const role = isRole(session.user.role) ? session.user.role : "viewer";
   const createdAt = session.user.createdAt instanceof Date ? session.user.createdAt.getTime() : Date.now();
@@ -92,7 +97,9 @@ export function authMiddleware(
   auth: KingletAuth
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
-    const info = await resolveAuth(c, storage, config, auth);
+    const method = c.req.method;
+    const forceFreshSession = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+    const info = await resolveAuth(c, storage, config, auth, forceFreshSession);
     if (!info) return c.json({ error: "unauthorized" }, 401);
     c.set("auth", info);
     await next();

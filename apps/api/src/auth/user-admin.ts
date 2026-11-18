@@ -90,6 +90,10 @@ export async function setUserRole(
     headers,
   });
   await storage.db.update(schema.user).set({ role }).where(eq(schema.user.id, userId));
+  // A role change must take effect now, not after the signed session cookie
+  // cache expires. Delete sessions directly: the admin-plugin endpoint can
+  // return success without touching rows in some configurations.
+  await storage.db.delete(schema.session).where(eq(schema.session.userId, userId));
 }
 
 export async function updateUserName(storage: Storage, userId: string, name: string): Promise<void> {

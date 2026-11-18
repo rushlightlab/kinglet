@@ -192,6 +192,7 @@ your UI with the query and time range pre-filled.
 | `BETTER_AUTH_SECRET` | *(generated, persisted)* | Session signing secret; set explicitly for multi-instance installs |
 | `KINGLET_TRUSTED_PROXIES` | — | CIDRs allowed to set `X-Forwarded-For` |
 | `KINGLET_ALLOW_PRIVATE_WEBHOOKS` | — | Allow private/internal webhook targets (SSRF escape hatch) |
+| `KINGLET_DISABLE_LEGACY_TOKENS` | — | Disable workspace-wide `tok_…` superuser tokens |
 | `KINGLET_SESSION_DAYS` | `30` | Web session lifetime |
 | `KINGLET_TOKENS` | *(auto-generate)* | **Legacy** global tokens — all projects, full access |
 | `KINGLET_BASE_URL` | — | Public URL, used for deep links in alert notifications |

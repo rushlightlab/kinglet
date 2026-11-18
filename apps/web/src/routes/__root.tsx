@@ -20,6 +20,7 @@ type RootState =
       permissions: string[];
       projects: Project[];
       currentProjectId: number;
+      signOutError?: string;
     };
 
 function RootComponent() {
@@ -127,14 +128,28 @@ function RootComponent() {
       }
     },
     signOut: () => {
-      void logout().catch(() => undefined);
-      setState({ phase: "login" });
+      // Never pretend a failed sign-out succeeded: the HttpOnly session
+      // cookie is only cleared by the server.
+      setState((prev) => (prev.phase === "ready" ? { ...prev, signOutError: undefined } : prev));
+      void logout()
+        .then(() => setState({ phase: "login" }))
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : "could not sign out";
+          setState((prev) => (prev.phase === "ready" ? { ...prev, signOutError: message } : prev));
+        });
     },
   };
 
   return (
     <AppContext.Provider value={value}>
       <Outlet />
+      {state.signOutError && (
+        <div className="fixed bottom-4 left-1/2 z-50 w-[min(30rem,calc(100vw-2rem))] -translate-x-1/2 rounded-[5px] border border-coral/30 bg-ink-900 px-4 py-3 font-mono text-xs text-coral shadow-lg">
+          Sign-out failed: {state.signOutError}. Your session is still active — clear cookies for
+          this site or check that <span className="text-mist">KINGLET_BASE_URL</span> matches this
+          origin.
+        </div>
+      )}
     </AppContext.Provider>
   );
 }

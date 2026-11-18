@@ -26,15 +26,17 @@ function withProject(path: string, projectId: number): string {
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
+  // The marker header is required by the server's CSRF guard for
+  // cookie-authenticated mutations; cross-site forms cannot set it.
+  const headers = new Headers(init?.headers);
+  headers.set("x-kinglet-request", "1");
+  if (init?.body !== undefined) headers.set("content-type", "application/json");
   try {
     res = await fetch(path, {
       ...init,
       credentials: "same-origin",
       signal: AbortSignal.timeout(15_000),
-      headers:
-        init?.body !== undefined
-          ? { "content-type": "application/json", ...(init?.headers ?? {}) }
-          : init?.headers,
+      headers,
     });
   } catch (err) {
     throw new Error("Cannot reach the Kinglet API — is the server running?", { cause: err });
@@ -77,7 +79,8 @@ export async function login(email: string, password: string): Promise<void> {
 }
 
 export async function logout(): Promise<void> {
-  await authClient.signOut().catch(() => undefined);
+  const { error } = await authClient.signOut();
+  if (error) throw new Error(error.message ?? "could not sign out");
 }
 
 export async function fetchMe(): Promise<{ user: AppUser; permissions: string[] }> {
@@ -281,7 +284,7 @@ export async function sprayDemoEvents(projectId: number, count = 80): Promise<vo
   const res = await fetch(withProject("/v1/events", projectId), {
     method: "POST",
     credentials: "same-origin",
-    headers: { "content-type": "application/x-ndjson" },
+    headers: { "content-type": "application/x-ndjson", "x-kinglet-request": "1" },
     body: lines.join("\n"),
   });
   if (res.status === 401) throw new UnauthorizedError("unauthorized");

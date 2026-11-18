@@ -64,8 +64,12 @@ function resolveAuthSecret(dataDir: string): string {
   try {
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(secretFile, secret + "\n", { mode: 0o600 });
-  } catch {
-    // read-only or remote data dir — env secret is recommended there
+  } catch (err) {
+    console.warn(
+      "[kinglet] could not persist the auth secret — sessions will not survive restarts. " +
+        "Set BETTER_AUTH_SECRET explicitly for multi-instance or read-only data dirs."
+    );
+    if (err instanceof Error) console.warn("[kinglet]", err.message);
   }
   return secret;
 }
@@ -81,9 +85,16 @@ export function loadConfig(): Config {
     .split(",")
     .map((t) => t.trim())
     .filter(Boolean);
+  const legacyDisabled = ["1", "true", "yes"].includes(
+    (process.env.KINGLET_DISABLE_LEGACY_TOKENS ?? "").toLowerCase()
+  );
   let generatedToken: string | null = null;
   let savedToken: string | null = null;
-  if (tokens.length === 0) {
+  if (legacyDisabled) {
+    // Machine access must go through scoped kl_ keys; the workspace-wide
+    // superuser token is opt-out.
+    tokens.length = 0;
+  } else if (tokens.length === 0) {
     // Reuse the token from a previous boot so restarts (dev or Docker) don't
     // invalidate clients that already saved it.
     const tokenFile = path.join(dataDir, "kinglet.token");

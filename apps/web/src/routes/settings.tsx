@@ -206,6 +206,7 @@ function KeysPanel() {
                 </span>
               ))}
               <span className="text-[10px] text-mist-faint">
+                {key.createdByEmail ? `by ${key.createdByEmail} · ` : ""}
                 {key.lastUsedAt ? `last used ${new Date(key.lastUsedAt).toLocaleDateString()}` : "never used"}
               </span>
               {canWriteKeys && (

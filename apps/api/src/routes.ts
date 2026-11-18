@@ -5,7 +5,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { Context } from "hono";
 import type { Config } from "./env.js";
-import { createApiKey, deleteApiKey, listApiKeys } from "./auth/apikeys.js";
+import { createApiKey, deleteApiKey, deleteApiKeysByOwner, listApiKeys, verifyApiKey } from "./auth/apikeys.js";
 import type { KingletAuth } from "./auth/auth.js";
 import {
   can,
@@ -16,7 +16,7 @@ import {
   resolveProjectId,
 } from "./auth/middleware.js";
 import type { AppEnv } from "./auth/middleware.js";
-import { KEY_SCOPES, isKeyScope, isRole, permissionsForRole } from "./auth/roles.js";
+import { isKeyScope, isRole, permissionsForRole } from "./auth/roles.js";
 import type { KeyScope, Role } from "./auth/roles.js";
 import {
   countAdmins,
@@ -42,11 +42,14 @@ import {
 } from "./monitors.js";
 import { sendNotice } from "./notify.js";
 import type { AlertNotice } from "./notify.js";
+import { systemStatus } from "./status.js";
 import * as schema from "./storage/schema.js";
 import type { Storage } from "./storage/index.js";
 import { toClientEvent } from "./types.js";
 
 const MAX_BATCH = 10000;
+const MAX_STREAMS = 200;
+let activeStreams = 0;
 
 /**
  * Validates the from/to query parameters. Rejects unsafe/non-integer values,
@@ -86,14 +89,6 @@ function allowIngest(auth: { kind: string; keyId?: number; user?: { id: string }
   if (window.count >= 600) return false;
   window.count++;
   return true;
-}
-
-function safeHost(raw: string): string {
-  try {
-    return new URL(raw).host;
-  } catch {
-    return "hidden";
-  }
 }
 
 function clampInt(value: string | undefined, fallback: number, min: number, max: number): number {
@@ -288,12 +283,16 @@ export function registerRoutes(
     }
     const name = typeof body?.name === "string" ? body.name.trim().slice(0, 80) : undefined;
     if (name !== undefined) await updateUserName(storage, userId, name);
-    if (role !== undefined) {
+    if (role !== undefined && role !== target.role) {
       try {
         await setUserRole(storage, auth, c.req.raw.headers, userId, role);
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : "could not change role" }, 400);
       }
+      // Offboarding: a demoted user must not keep machine credentials that
+      // outlive their permissions.
+      const revoked = await deleteApiKeysByOwner(storage, userId);
+      if (revoked > 0) console.log(`[kinglet] revoked ${revoked} API key(s) for demoted user ${userId}`);
     }
     const updated = await getUserById(storage, userId);
     return c.json({ user: updated });
@@ -315,6 +314,11 @@ export function registerRoutes(
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : "could not delete user" }, 400);
     }
+    const revoked = await deleteApiKeysByOwner(storage, userId);
+    if (revoked > 0) console.log(`[kinglet] revoked ${revoked} API key(s) for deleted user ${userId}`);
+    // Belt and braces: removeManagedUser normally drops sessions, but a
+    // deleted account must never keep a live cookie.
+    await storage.db.delete(schema.session).where(eq(schema.session.userId, userId));
     return c.json({ ok: true });
   });
 
@@ -340,8 +344,20 @@ export function registerRoutes(
     const body = parsedBody.body;
     const name = typeof body?.name === "string" ? body.name.trim().slice(0, 80) : "";
     if (!name) return c.json({ error: "name is required" }, 400);
-    const rawScopes = Array.isArray(body?.scopes) ? body.scopes.filter(isKeyScope) : [];
-    const scopes: KeyScope[] = rawScopes.length > 0 ? [...new Set(rawScopes)] : [...KEY_SCOPES];
+    const rawScopes: unknown = body?.scopes;
+    let scopes: KeyScope[];
+    if (rawScopes === undefined) {
+      // Least privilege: a key created without explicit scopes can only ship.
+      scopes = ["ingest"];
+    } else if (!Array.isArray(rawScopes) || rawScopes.length === 0) {
+      return c.json({ error: "scopes must be a non-empty array of: ingest, query" }, 400);
+    } else {
+      const unknown = rawScopes.filter((s) => !isKeyScope(s));
+      if (unknown.length > 0) {
+        return c.json({ error: `unknown scope(s): ${unknown.join(", ")} — use ingest and/or query` }, 400);
+      }
+      scopes = [...new Set(rawScopes as KeyScope[])];
+    }
     const me = getAuth(c);
     const createdBy = me.kind === "user" ? me.user.id : null;
     const created = await createApiKey(storage, { projectId, name, scopes, createdBy });
@@ -508,33 +524,90 @@ export function registerRoutes(
     const q = c.req.query("q") ?? "";
     const qError = validateQuery(q);
     if (qError) return c.json({ error: qError }, 400);
+    if (activeStreams >= MAX_STREAMS) {
+      return c.json({ error: "too many live streams — close one and retry" }, 429);
+    }
     const f = parseFilters(q);
+    const bearerRaw = (c.req.header("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+    const streamKey = bearerRaw || c.req.query("key") || c.req.query("token");
     return streamSSE(c, async (stream) => {
       let closed = false;
+      let counted = true;
+      let pending = 0;
+      let ticks = 0;
+      activeStreams++;
       const cleanup = (): void => {
+        if (closed) return;
         closed = true;
+        if (counted) {
+          activeStreams--;
+          counted = false;
+        }
         clearInterval(heartbeat);
+        clearTimeout(lifetime);
         unsubscribe();
       };
       const fail = (err: unknown): void => {
-        console.warn("[kinglet] SSE write failed:", err instanceof Error ? err.message : err);
+        if (closed) return;
+        console.warn("[kinglet] SSE closed:", err instanceof Error ? err.message : err);
         cleanup();
         void stream.close().catch(() => undefined);
       };
+      // Revalidate credentials at least once a minute: a revoked key or a
+      // deleted/demoted user must not keep receiving live logs. The cookie
+      // cache is bypassed for this check.
+      const revalidate = async (): Promise<boolean> => {
+        if (authInfo.kind === "user") {
+          const session = await auth.api.getSession({
+            headers: c.req.raw.headers,
+            query: { disableCookieCache: true },
+          });
+          return Boolean(session?.user);
+        }
+        if (authInfo.kind === "key") {
+          if (!streamKey) return false;
+          return Boolean(await verifyApiKey(storage, streamKey));
+        }
+        return true; // legacy tokens are env-bound and rotate on restart
+      };
       const unsubscribe = subscribeEvents((rows) => {
         if (closed) return;
+        if (pending > 500) {
+          fail(new Error("slow consumer — stream dropped"));
+          return;
+        }
         for (const row of rows) {
           if (row.projectId !== projectId) continue;
           if (!matchesEvent(f, row)) continue;
+          pending++;
           void stream
             .writeSSE({ data: JSON.stringify(toClientEvent(row)) })
-            .catch(fail);
+            .catch(fail)
+            .finally(() => {
+              pending--;
+            });
         }
       });
       const heartbeat = setInterval(() => {
         if (closed) return;
+        ticks++;
+        if (ticks % 4 === 0) {
+          void revalidate()
+            .then((ok) => {
+              if (!ok) {
+                fail(new Error("session or key revoked"));
+                return;
+              }
+              return stream.write(": ping\n");
+            })
+            .catch(fail);
+          return;
+        }
         void stream.write(": ping\n").catch(fail);
       }, 15000);
+      // EventSource reconnects automatically; bounding lifetime limits the
+      // damage from abandoned sockets and forces re-authentication.
+      const lifetime = setTimeout(() => fail(new Error("stream lifetime exceeded")), 30 * 60_000);
       stream.onAbort(cleanup);
       // Flush headers immediately so the client sees the stream open.
       await stream.write(": connected\n\n");
@@ -558,14 +631,17 @@ export function registerRoutes(
     if (projectId instanceof Response) return projectId;
     const monitors = await listMonitors(storage, projectId);
     const authInfo = getAuth(c);
-    // Webhook URLs are bearer secrets: viewers see only the host.
+    // Webhook URLs are bearer secrets and engine errors may name internal
+    // hosts: non-writers get the channel type only.
     const canSeeChannels = authInfo.kind !== "user" || can(authInfo, "monitors.write");
     return c.json({
       monitors: canSeeChannels
         ? monitors
         : monitors.map((m) => ({
             ...m,
-            channels: m.channels.map((ch) => ({ type: ch.type, url: safeHost(ch.url) })),
+            channels: m.channels.map((ch) => ({ type: ch.type, url: "hidden" })),
+            lastError: null,
+            lastErrorAt: null,
           })),
     });
   });
@@ -668,6 +744,55 @@ export function registerRoutes(
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
     const limit = clampInt(c.req.query("limit"), 100, 1, 500);
-    return c.json({ alerts: await listAlerts(storage, limit, projectId) });
+    const alerts = await listAlerts(storage, limit, projectId);
+    const authInfo = getAuth(c);
+    const canSeeErrors = authInfo.kind !== "user" || can(authInfo, "monitors.write");
+    return c.json({
+      alerts: canSeeErrors ? alerts : alerts.map((a) => ({ ...a, notifyError: null })),
+    });
+  });
+
+  // ================= diagnostics =================
+
+  app.get("/v1/system/status", async (c) => {
+    // Admin-only: retention/engine errors can contain paths or hosts, and
+    // table counts are operational data.
+    const denied = requirePermission(c, "users.write");
+    if (denied) return denied;
+    const [projects, users, monitors, alerts, keys] = await Promise.all([
+      storage.db.select({ n: count() }).from(schema.projects),
+      storage.db.select({ n: count() }).from(schema.user),
+      storage.db.select({ n: count() }).from(schema.monitors),
+      storage.db.select({ n: count() }).from(schema.alerts),
+      storage.db.select({ n: count() }).from(schema.apiKeys),
+    ]);
+    return c.json({
+      ok: true,
+      name: "kinglet",
+      version: "0.3.0",
+      uptimeMs: Date.now() - systemStatus.startedAt,
+      counts: {
+        projects: Number(projects[0]?.n ?? 0),
+        users: Number(users[0]?.n ?? 0),
+        monitors: Number(monitors[0]?.n ?? 0),
+        alerts: Number(alerts[0]?.n ?? 0),
+        apiKeys: Number(keys[0]?.n ?? 0),
+      },
+      retention: {
+        lastRunAt: systemStatus.retentionLastRunAt,
+        lastError: systemStatus.retentionLastError,
+      },
+      monitors: {
+        refreshedAt: systemStatus.monitorRefreshAt,
+        refreshError: systemStatus.monitorRefreshError,
+      },
+      config: {
+        retentionDays: config.retentionDays,
+        sessionDays: config.sessionDays,
+        baseUrl: config.baseUrl ?? null,
+        trustedProxyCount: config.trustedProxies.length,
+        allowPrivateWebhooks: config.allowPrivateWebhooks,
+      },
+    });
   });
 }
