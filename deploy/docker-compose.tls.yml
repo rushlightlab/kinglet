@@ -1,0 +1,63 @@
+# HTTPS deployment: Caddy obtains certificates, Kinglet is not published
+# directly. From this directory:
+#
+#   KINGLET_DOMAIN=logs.example.com \
+#   KINGLET_BASE_URL=https://logs.example.com \
+#   docker compose -f docker-compose.tls.yml up -d --build
+#
+# Set KINGLET_ADMIN_EMAIL / KINGLET_ADMIN_PASSWORD (or read the generated
+# password from the container logs) on first boot.
+
+services:
+  kinglet:
+    build: ..
+    image: kinglet:latest
+    environment:
+      KINGLET_DB_PATH: /data/kinglet.db
+      KINGLET_RETENTION_DAYS: 14
+      # Must match the public HTTPS origin: secure cookies + alert links.
+      KINGLET_BASE_URL: ${KINGLET_BASE_URL:?set KINGLET_BASE_URL=https://your.domain}
+      # Caddy is the only proxy in front of the app.
+      KINGLET_TRUSTED_PROXIES: 172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
+      KINGLET_ADMIN_EMAIL: ${KINGLET_ADMIN_EMAIL:-}
+      KINGLET_ADMIN_PASSWORD: ${KINGLET_ADMIN_PASSWORD:-}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+    volumes:
+      - kinglet-data:/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - kinglet
+    environment:
+      KINGLET_DOMAIN: ${KINGLET_DOMAIN:-logs.example.com}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  kinglet-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,15 @@
+# Caddy terminates TLS and forwards to Kinglet over the Compose network.
+# Replace the hostname (or set KINGLET_DOMAIN in the environment) and point
+# DNS at this server. Caddy obtains and renews certificates automatically.
+{$KINGLET_DOMAIN:logs.example.com} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	reverse_proxy kinglet:3000
+}
