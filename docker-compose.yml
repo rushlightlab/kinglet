@@ -1,0 +1,17 @@
+services:
+  kinglet:
+    build: .
+    image: kinglet:latest
+    ports:
+      - "8080:3000"
+    environment:
+      KINGLET_DB_PATH: /data/kinglet.db
+      KINGLET_RETENTION_DAYS: 14
+      # Prefer fixed tokens over the auto-generated one? Uncomment:
+      # KINGLET_TOKENS: tok_change_me
+    volumes:
+      - kinglet-data:/data
+    restart: unless-stopped
+
+volumes:
+  kinglet-data:

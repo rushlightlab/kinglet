@@ -1,0 +1,23 @@
+{
+  "name": "kinglet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Small. Light. King. — a tiny self-hostable log platform.",
+  "packageManager": "pnpm@10.15.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+/** Row shape as stored in SQLite (fields is a JSON string). */
+export interface StoredEvent {
+  id: number;
+  ts: number;
+  level: number;
+  service: string | null;
+  env: string | null;
+  message: string;
+  fields: string | null;
+}
+
+/** Event shape as sent to clients (fields is a parsed object). */
+export interface ClientEvent {
+  id: number;
+  ts: number;
+  level: number;
+  service: string | null;
+  env: string | null;
+  message: string;
+  fields: Record<string, unknown> | null;
+}
+
+export function toClientEvent(row: StoredEvent): ClientEvent {
+  let fields: Record<string, unknown> | null = null;
+  if (row.fields) {
+    try {
+      fields = JSON.parse(row.fields) as Record<string, unknown>;
+    } catch {
+      fields = null;
+    }
+  }
+  return { id: row.id, ts: row.ts, level: row.level, service: row.service, env: row.env, message: row.message, fields };
+}

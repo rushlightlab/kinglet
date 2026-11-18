@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.turbo/
+data/
+*.db
+*.db-shm
+*.db-wal
+.env
+kinglet.token
+.DS_Store
