@@ -15,7 +15,7 @@ import {
   rowToStoredEvent,
   servicesFromRows,
 } from "./queries.js";
-import type { HistogramPointRow, QueryOptions, ServiceRow, Storage } from "./types.js";
+import type { HistogramPointRow, QueryOptions, ServiceRow, SqlExecutor, Storage } from "./types.js";
 
 /**
  * The zero-config default: better-sqlite3, one file, WAL mode so readers
@@ -36,9 +36,24 @@ export function createSqliteStorage(dbPath: string): Storage {
   const services = db.prepare(SERVICES_SQL);
   const deleteChunk = db.prepare(DELETE_CHUNK_SQL);
 
+  /** Shared meta-table surface (monitors, alerts). */
+  const sql: SqlExecutor = {
+    async exec(statements) {
+      db.exec(statements);
+    },
+    async run(sqlText, args = []) {
+      const info = db.prepare(sqlText).run(...args);
+      return { rowsAffected: info.changes, lastInsertRowid: Number(info.lastInsertRowid) };
+    },
+    async all(sqlText, args = []) {
+      return db.prepare(sqlText).all(...args) as Record<string, unknown>[];
+    },
+  };
+
   const storage: Storage = {
     kind: "sqlite",
     description: `sqlite · ${path.resolve(dbPath)}`,
+    sql,
 
     async insertEvents(events: Normalized[]): Promise<StoredEvent[]> {
       if (events.length === 0) return [];

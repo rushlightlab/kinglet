@@ -8,6 +8,8 @@ export interface Config {
   dbPath: string;
   storageKind: StorageKindSetting;
   dbAuthToken?: string;
+  /** Public URL, used in alert notification links (e.g. http://logs.example.com). */
+  baseUrl?: string;
   /** Directory holding the database file (local stores only). */
   dataDir: string;
   tokens: string[];
@@ -34,6 +36,7 @@ export function loadConfig(): Config {
   const localPath = dbPath.toLowerCase().startsWith("file:") ? dbPath.slice(5) : dbPath;
   const dataDir = path.dirname(path.resolve(localPath));
   const dbAuthToken = process.env.KINGLET_DB_AUTH_TOKEN?.trim() || undefined;
+  const baseUrl = process.env.KINGLET_BASE_URL?.trim() || undefined;
   const tokens = (process.env.KINGLET_TOKENS ?? "")
     .split(",")
     .map((t) => t.trim())
@@ -45,6 +48,7 @@ export function loadConfig(): Config {
     dbPath,
     storageKind: storageKindEnv(),
     dbAuthToken,
+    baseUrl,
     dataDir,
     tokens,
     generatedToken,

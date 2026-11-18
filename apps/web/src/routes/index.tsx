@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   clearToken,
@@ -10,16 +10,12 @@ import {
   UnauthorizedError,
 } from "../api";
 import type { Histogram, KingletEvent, Service } from "../types";
-import Crown from "../components/Crown";
 import EventDrawer from "../components/EventDrawer";
 import FilterBar from "../components/FilterBar";
 import HistogramChart from "../components/Histogram";
 import LogTable from "../components/LogTable";
+import SiteHeader from "../components/SiteHeader";
 import TokenGate from "../components/TokenGate";
-
-export const Route = createFileRoute("/")({
-  component: Explorer,
-});
 
 const WINDOWS: Record<string, number> = {
   "15m": 15 * 60_000,
@@ -29,14 +25,30 @@ const WINDOWS: Record<string, number> = {
   "7d": 7 * 24 * 60 * 60_000,
 };
 
+export const Route = createFileRoute("/")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    q: typeof search.q === "string" ? search.q.slice(0, 500) : undefined,
+    from: Number.isFinite(Number(search.from)) && Number(search.from) > 0 ? Number(search.from) : undefined,
+    to: Number.isFinite(Number(search.to)) && Number(search.to) > 0 ? Number(search.to) : undefined,
+  }),
+  component: Explorer,
+});
+
 function Explorer() {
-  const [qDraft, setQDraft] = useState("");
-  const [q, setQ] = useState("");
+  const search = Route.useSearch();
+  const navigate = useNavigate();
+
+  const [qDraft, setQDraft] = useState(() => search.q ?? "");
+  const [q, setQ] = useState(() => search.q ?? "");
   const [rangeKey, setRangeKey] = useState("1h");
+  const [customRange, setCustomRange] = useState<null | { from: number; to: number }>(() =>
+    search.from !== undefined && search.to !== undefined ? { from: search.from, to: search.to } : null
+  );
   const [events, setEvents] = useState<KingletEvent[]>([]);
   const [histogram, setHistogram] = useState<Histogram | null>(null);
   const [services, setServices] = useState<Service[]>([]);
   const [selected, setSelected] = useState<KingletEvent | null>(null);
+  const [cursorId, setCursorId] = useState<number | null>(null);
   const [live, setLive] = useState(true);
   const [follow, setFollow] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -44,6 +56,7 @@ function Explorer() {
   const [authFailed, setAuthFailed] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
   const followRef = useRef(true);
 
   const signOut = (): void => {
@@ -82,10 +95,14 @@ function Explorer() {
   );
 
   const loadWindow = useCallback(() => {
+    if (customRange) {
+      void loadRange(customRange.from, customRange.to);
+      return;
+    }
     const to = Date.now();
     const width = WINDOWS[rangeKey] ?? 60 * 60_000;
     void loadRange(to - width, to);
-  }, [rangeKey, loadRange]);
+  }, [customRange, rangeKey, loadRange]);
 
   // Reload when the query or time window changes.
   useEffect(() => {
@@ -129,6 +146,86 @@ function Explorer() {
     return () => es.close();
   }, [live, q]);
 
+  // Keep the filter in the URL (without clobbering a shared range).
+  useEffect(() => {
+    if (search.q === (q || undefined)) return;
+    void navigate({
+      to: "/",
+      search: { q: q || undefined, from: undefined, to: undefined },
+      replace: true,
+    });
+  }, [q, navigate, search.q]);
+
+  // Keyboard: / focus filter, j/k move, Esc close, l live, f follow.
+  const move = useCallback(
+    (delta: number) => {
+      const idx = cursorId === null ? -1 : events.findIndex((e) => e.id === cursorId);
+      const next = Math.min(events.length - 1, Math.max(0, idx + delta));
+      const event = events[next];
+      if (!event) return;
+      setCursorId(event.id);
+      setSelected(event);
+    },
+    [cursorId, events]
+  );
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const target = e.target as HTMLElement | null;
+      const typing =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement;
+      if (typing) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      switch (e.key) {
+        case "/":
+          e.preventDefault();
+          filterRef.current?.focus();
+          break;
+        case "j":
+        case "ArrowDown":
+          e.preventDefault();
+          move(1);
+          break;
+        case "k":
+        case "ArrowUp":
+          e.preventDefault();
+          move(-1);
+          break;
+        case "Escape":
+          setSelected(null);
+          break;
+        case "l":
+          setLive((v) => !v);
+          break;
+        case "f":
+          setFollow((v) => !v);
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [move]);
+
+  // Apply a full query immediately (chips, saved searches).
+  const applyQuery = useCallback((nextQ: string) => {
+    setQDraft(nextQ);
+    setQ(nextQ);
+  }, []);
+
+  // Freeze the current view into a shareable URL and copy it.
+  const copyLink = useCallback(() => {
+    const now = Date.now();
+    const cur = customRange ?? { from: now - (WINDOWS[rangeKey] ?? 60 * 60_000), to: now };
+    const url = new URL(window.location.origin + "/");
+    if (q) url.searchParams.set("q", q);
+    url.searchParams.set("from", String(cur.from));
+    url.searchParams.set("to", String(cur.to));
+    void navigate({ to: "/", search: { q: q || undefined, from: cur.from, to: cur.to }, replace: true });
+    void navigator.clipboard?.writeText(url.toString());
+  }, [navigate, q, rangeKey, customRange]);
+
   if (authFailed) {
     return (
       <TokenGate
@@ -143,79 +240,91 @@ function Explorer() {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-[#0b0e14] text-[#e6e9ef]">
-      <header className="flex items-center gap-3 border-b border-[#1c2230] px-4 py-2">
-        <Crown className="h-5 w-5" />
-        <div className="leading-tight">
-          <div className="text-sm font-semibold tracking-wide">Kinglet</div>
-          <div className="text-[10px] uppercase tracking-widest text-[#8b93a3]">self-hosted logs</div>
-        </div>
-        <div className="mx-1 h-6 w-px bg-[#1c2230]" />
+    <div className="flex h-screen flex-col bg-ink-950 text-mist">
+      <SiteHeader>
         <select
           value={rangeKey}
-          onChange={(e) => setRangeKey(e.target.value)}
-          className="rounded-md border border-[#1c2230] bg-[#11151f] px-2 py-1 text-xs"
+          onChange={(e) => {
+            setRangeKey(e.target.value);
+            setCustomRange(null);
+          }}
+          className="k-chip-btn cursor-pointer bg-ink-900"
           title="Time window"
         >
           {Object.keys(WINDOWS).map((k) => (
             <option key={k}>{k}</option>
           ))}
         </select>
-        <label className="flex cursor-pointer items-center gap-1.5 text-xs">
-          <input
-            type="checkbox"
-            checked={live}
-            onChange={(e) => setLive(e.target.checked)}
-            className="accent-amber-400"
-          />
-          Live
-        </label>
-        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-[#8b93a3]">
-          <input
-            type="checkbox"
-            checked={follow}
-            disabled={!live}
-            onChange={(e) => setFollow(e.target.checked)}
-            className="accent-amber-400"
-          />
-          Follow
-        </label>
-        <div className="ml-auto flex items-center gap-2">
-          <span className="text-[11px] text-[#8b93a3]">{services.length} services</span>
-          <button
-            onClick={() => {
-              void sprayDemoEvents().catch((err) => setError(err instanceof Error ? err.message : String(err)));
-            }}
-            className="rounded-md border border-[#1c2230] px-2 py-1 text-xs hover:bg-[#11151f]"
-            title="Generate some noisy demo traffic"
-          >
-            Spray demo logs
-          </button>
-          <button
-            onClick={signOut}
-            className="rounded-md px-2 py-1 text-xs text-[#8b93a3] hover:bg-[#11151f] hover:text-[#e6e9ef]"
-          >
-            Sign out
-          </button>
-        </div>
-      </header>
+        <button
+          onClick={() => setLive((v) => !v)}
+          className={`k-btn k-btn-sm border transition-colors ${
+            live
+              ? "border-gold/40 bg-gold/[0.06] text-gold"
+              : "border-white/[0.08] bg-transparent text-mist-dim"
+          }`}
+          title="Toggle live tail (l)"
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${live ? "bg-gold" : "bg-mist-faint"}`} />
+          live
+        </button>
+        <button
+          onClick={() => setFollow((v) => !v)}
+          disabled={!live}
+          className={`k-btn k-btn-sm border transition-colors ${
+            follow
+              ? "border-gold/40 bg-gold/[0.06] text-gold"
+              : "border-white/[0.08] bg-transparent text-mist-dim"
+          } ${!live ? "opacity-40" : ""}`}
+          title="Follow the newest event (f)"
+        >
+          follow
+        </button>
+        <span className="hidden font-mono text-[10px] text-mist-faint sm:inline">
+          {services.length} services
+        </span>
+        <button
+          onClick={() => {
+            void sprayDemoEvents().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+          }}
+          className="k-chip-btn"
+          title="Generate some noisy demo traffic"
+        >
+          spray demo
+        </button>
+        <button onClick={signOut} className="k-chip-btn">
+          sign out
+        </button>
+      </SiteHeader>
 
       <FilterBar
         value={qDraft}
         onChange={setQDraft}
         onEnter={() => setQ(qDraft)}
         onRefresh={loadWindow}
+        onCopyLink={copyLink}
+        appliedQ={q}
+        onApplyQuery={applyQuery}
         count={events.length}
         busy={busy}
         error={error}
+        inputRef={filterRef}
       />
 
       {histogram && (
-        <HistogramChart data={histogram} onSelectRange={(from, to) => void loadRange(from, to)} />
+        <HistogramChart
+          data={histogram}
+          onSelectRange={(from, to) => setCustomRange({ from, to })}
+        />
       )}
 
       <div className="relative flex-1 overflow-hidden">
-        <LogTable events={events} scrollRef={scrollRef} onSelect={setSelected} selectedId={selected?.id ?? null} />
+        <LogTable
+          events={events}
+          scrollRef={scrollRef}
+          onSelect={setSelected}
+          selectedId={selected?.id ?? null}
+          cursorId={cursorId}
+        />
         {selected && <EventDrawer event={selected} onClose={() => setSelected(null)} />}
       </div>
     </div>

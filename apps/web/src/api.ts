@@ -1,4 +1,12 @@
-import type { EventPage, Histogram, KingletEvent, Service } from "./types";
+import type {
+  AlertRecord,
+  ChannelTestResult,
+  EventPage,
+  Histogram,
+  KingletEvent,
+  Monitor,
+  Service,
+} from "./types";
 import { LEVEL_NAMES } from "./types";
 
 const TOKEN_KEY = "kinglet.token";
@@ -23,7 +31,16 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { ...(init?.headers ?? {}), authorization: `Bearer ${getToken() ?? ""}` },
   });
   if (res.status === 401) throw new UnauthorizedError("token rejected");
-  if (!res.ok) throw new Error(`request failed: HTTP ${res.status}`);
+  if (!res.ok) {
+    let message = `request failed: HTTP ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body.error) message = body.error;
+    } catch {
+      // keep the HTTP status message
+    }
+    throw new Error(message);
+  }
   return (await res.json()) as T;
 }
 
@@ -52,6 +69,42 @@ export function openStream(q: string): EventSource {
   if (q) params.set("q", q);
   return new EventSource(`/v1/stream?${params.toString()}`);
 }
+
+// ---------- monitors & alerts ----------
+
+export function fetchMonitors(): Promise<{ monitors: Monitor[] }> {
+  return api<{ monitors: Monitor[] }>("/v1/monitors");
+}
+
+export function createMonitor(input: Partial<Monitor>): Promise<{ monitor: Monitor }> {
+  return api<{ monitor: Monitor }>("/v1/monitors", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateMonitor(id: number, input: Partial<Monitor>): Promise<{ monitor: Monitor }> {
+  return api<{ monitor: Monitor }>(`/v1/monitors/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteMonitor(id: number): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/v1/monitors/${id}`, { method: "DELETE" });
+}
+
+export function testMonitor(id: number): Promise<{ results: ChannelTestResult[] }> {
+  return api<{ results: ChannelTestResult[] }>(`/v1/monitors/${id}/test`, { method: "POST" });
+}
+
+export function fetchAlerts(limit = 100): Promise<{ alerts: AlertRecord[] }> {
+  return api<{ alerts: AlertRecord[] }>(`/v1/alerts?limit=${limit}`);
+}
+
+// ---------- demo traffic ----------
 
 const DEMO_TEMPLATES: { level: number; message: string }[] = [
   { level: 2, message: "user signed in" },

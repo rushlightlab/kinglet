@@ -5,6 +5,17 @@ import { publishEvents, subscribeEvents } from "./bus.js";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
 import type { Normalized } from "./ingest.js";
 import { normalizeEvent } from "./ingest.js";
+import type { MonitorEngine } from "./monitors.js";
+import {
+  createMonitorFromRaw,
+  deleteMonitor,
+  getMonitor,
+  listAlerts,
+  listMonitors,
+  updateMonitorFromRaw,
+} from "./monitors.js";
+import { sendNotice } from "./notify.js";
+import type { AlertNotice } from "./notify.js";
 import type { Storage } from "./storage/index.js";
 import { toClientEvent } from "./types.js";
 
@@ -23,7 +34,12 @@ function clampInt(value: string | undefined, fallback: number, min: number, max:
   return Math.min(max, Math.max(min, n));
 }
 
-export function registerRoutes(app: Hono, storage: Storage): void {
+function parseId(raw: string): number | null {
+  const n = Math.trunc(Number(raw));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export function registerRoutes(app: Hono, storage: Storage, engine: MonitorEngine): void {
   const api = new Hono();
 
   // ---------- ingest: POST /v1/events ----------
@@ -132,6 +148,82 @@ export function registerRoutes(app: Hono, storage: Storage): void {
       // Hold the stream open until the client disconnects.
       await new Promise<void>((resolve) => stream.onAbort(() => resolve()));
     });
+  });
+
+  // ---------- monitors: CRUD + test ----------
+  api.get("/monitors", async (c) => c.json({ monitors: await listMonitors(storage) }));
+
+  api.post("/monitors", async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const result = await createMonitorFromRaw(storage, body);
+    if (!result.ok) return c.json({ error: result.error }, 400);
+    await engine.refresh();
+    return c.json({ monitor: result.monitor }, 201);
+  });
+
+  api.patch("/monitors/:id", async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return c.json({ error: "invalid monitor id" }, 400);
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const result = await updateMonitorFromRaw(storage, id, body);
+    if (!result.ok) {
+      const notFound = "notFound" in result && result.notFound === true;
+      return c.json({ error: result.error }, notFound ? 404 : 400);
+    }
+    await engine.refresh();
+    return c.json({ monitor: result.monitor });
+  });
+
+  api.delete("/monitors/:id", async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return c.json({ error: "invalid monitor id" }, 400);
+    const deleted = await deleteMonitor(storage, id);
+    if (!deleted) return c.json({ error: "monitor not found" }, 404);
+    await engine.refresh();
+    return c.json({ ok: true });
+  });
+
+  // Send a test notification through every channel — wiring you can verify
+  // in one click. Nothing is recorded in the alert history.
+  api.post("/monitors/:id/test", async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return c.json({ error: "invalid monitor id" }, 400);
+    const monitor = await getMonitor(storage, id);
+    if (!monitor) return c.json({ error: "monitor not found" }, 404);
+    const notice: AlertNotice = {
+      monitorId: monitor.id,
+      monitorName: monitor.name,
+      query: monitor.query,
+      state: "test",
+      summary: "Test notification from Kinglet — your channel works.",
+      firedAt: Date.now(),
+    };
+    const results = [];
+    for (const channel of monitor.channels) {
+      try {
+        await sendNotice(channel, notice);
+        results.push({ type: channel.type, ok: true });
+      } catch (err) {
+        results.push({ type: channel.type, ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return c.json({ results });
+  });
+
+  // ---------- alert history: GET /v1/alerts ----------
+  api.get("/alerts", async (c) => {
+    const limit = clampInt(c.req.query("limit"), 100, 1, 500);
+    return c.json({ alerts: await listAlerts(storage, limit) });
   });
 
   app.route("/v1", api);

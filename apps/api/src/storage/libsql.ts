@@ -17,7 +17,7 @@ import {
   rowToStoredEvent,
   servicesFromRows,
 } from "./queries.js";
-import type { HistogramPointRow, QueryOptions, ServiceRow, Storage } from "./types.js";
+import type { HistogramPointRow, QueryOptions, ServiceRow, SqlExecutor, Storage } from "./types.js";
 
 /**
  * The libSQL driver: local `file:` databases or a hosted Turso instance
@@ -61,6 +61,22 @@ export async function createLibsqlStorage(opts: {
   const storage: Storage = {
     kind: "libsql",
     description: opts.description ?? `libsql · ${opts.url}`,
+    sql: {
+      async exec(statements) {
+        await client.executeMultiple(statements);
+      },
+      async run(sqlText, args = []) {
+        const result = await client.execute({ sql: sqlText, args });
+        return {
+          rowsAffected: result.rowsAffected,
+          lastInsertRowid: result.lastInsertRowid == null ? null : Number(result.lastInsertRowid),
+        };
+      },
+      async all(sqlText, args = []) {
+        const result = await client.execute({ sql: sqlText, args });
+        return result.rows as unknown as Record<string, unknown>[];
+      },
+    },
 
     async insertEvents(events: Normalized[]): Promise<StoredEvent[]> {
       if (events.length === 0) return [];

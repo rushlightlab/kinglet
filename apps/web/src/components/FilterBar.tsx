@@ -1,39 +1,157 @@
+import { useState } from "react";
+import type { RefObject } from "react";
+import { LEVEL_COLORS, LEVEL_NAMES } from "../types";
+
+const SAVED_KEY = "kinglet.saved";
+
+interface SavedSearch {
+  name: string;
+  q: string;
+}
+
+function loadSaved(): SavedSearch[] {
+  try {
+    const raw = localStorage.getItem(SAVED_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? (parsed as SavedSearch[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function toggleTerm(q: string, term: string): string {
+  const parts = q.split(/\s+/).filter(Boolean);
+  const idx = parts.indexOf(term);
+  if (idx >= 0) parts.splice(idx, 1);
+  else parts.push(term);
+  return parts.join(" ");
+}
+
 interface FilterBarProps {
   value: string;
   onChange: (value: string) => void;
   onEnter: () => void;
   onRefresh: () => void;
+  onCopyLink: () => void;
+  appliedQ: string;
+  onApplyQuery: (q: string) => void;
   count: number;
   busy: boolean;
   error: string | null;
+  inputRef: RefObject<HTMLInputElement | null>;
 }
 
-export default function FilterBar({ value, onChange, onEnter, onRefresh, count, busy, error }: FilterBarProps) {
+export default function FilterBar(props: FilterBarProps) {
+  const [saved, setSaved] = useState<SavedSearch[]>(loadSaved);
+  const [copied, setCopied] = useState(false);
+
+  const saveCurrent = (): void => {
+    const q = props.appliedQ.trim();
+    if (!q) return;
+    const name = q.length > 28 ? `${q.slice(0, 25)}…` : q;
+    setSaved((prev) => {
+      const next = [{ name, q }, ...prev.filter((s) => s.q !== q)].slice(0, 8);
+      try {
+        localStorage.setItem(SAVED_KEY, JSON.stringify(next));
+      } catch {
+        // storage full or unavailable — chips stay for this session
+      }
+      return next;
+    });
+  };
+
+  const removeSaved = (q: string): void => {
+    setSaved((prev) => {
+      const next = prev.filter((s) => s.q !== q);
+      try {
+        localStorage.setItem(SAVED_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const copyLink = (): void => {
+    props.onCopyLink();
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
   return (
-    <div className="flex items-center gap-3 border-b border-[#1c2230] px-4 py-2">
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") onEnter();
-        }}
-        spellCheck={false}
-        placeholder={`level:error service:api "timeout" -healthcheck`}
-        className="min-w-0 max-w-2xl flex-1 rounded-md border border-[#1c2230] bg-[#11151f] px-3 py-1.5 font-mono text-xs outline-none focus:border-amber-500/50"
-      />
-      {error ? (
-        <span className="truncate text-xs text-red-400">{error}</span>
-      ) : (
-        <span className="shrink-0 text-xs text-[#8b93a3]">
-          {busy ? "…" : `${count.toLocaleString()} events`}
+    <div className="border-b border-white/[0.08] px-4 py-2">
+      <div className="flex items-center gap-2.5 rounded-[5px] border border-white/[0.08] bg-ink-900/90 px-3 py-1.5 transition-colors focus-within:border-gold/30">
+        <span aria-hidden="true" className="text-gold">⌕</span>
+        <input
+          ref={props.inputRef}
+          value={props.value}
+          onChange={(e) => props.onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") props.onEnter();
+          }}
+          spellCheck={false}
+          placeholder={`level:error service:api "timeout" -healthcheck`}
+          className="min-w-0 flex-1 bg-transparent font-mono text-xs text-mist outline-none placeholder:text-mist-faint"
+        />
+        {props.appliedQ.trim() && (
+          <button onClick={saveCurrent} className="k-chip-btn" title="Save this search">
+            ☆ save
+          </button>
+        )}
+        <button onClick={copyLink} className="k-chip-btn" title="Copy a link to this view">
+          {copied ? "✓ linked" : "link"}
+        </button>
+        <button onClick={props.onRefresh} className="k-chip-btn" title="Refresh (or press l)">
+          ↻
+        </button>
+      </div>
+
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        {LEVEL_NAMES.map((name, i) => {
+          const color = LEVEL_COLORS[i] ?? "#6b756c";
+          const term = `level:${name}`;
+          const active = props.appliedQ.split(/\s+/).includes(term);
+          return (
+            <button
+              key={name}
+              onClick={() => props.onApplyQuery(toggleTerm(props.appliedQ, term))}
+              className="rounded-[3px] border px-1.5 py-0.5 font-mono text-[10px] transition-colors"
+              style={{
+                color: active ? "#07080a" : color,
+                borderColor: `${color}44`,
+                background: active ? color : `${color}0d`,
+              }}
+              title={`Toggle ${term}`}
+            >
+              {name}
+            </button>
+          );
+        })}
+        {saved.length > 0 && <span className="mx-1 h-4 w-px bg-white/[0.08]" aria-hidden="true" />}
+        {saved.map((s) => (
+          <button
+            key={s.q}
+            onClick={() => props.onApplyQuery(s.q)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              removeSaved(s.q);
+            }}
+            className="rounded-[3px] border border-gold/25 bg-gold/[0.06] px-1.5 py-0.5 font-mono text-[10px] text-gold transition-colors hover:bg-gold/10"
+            title={`${s.q}\n(right-click to remove)`}
+          >
+            {s.name}
+          </button>
+        ))}
+        <span className="ml-auto font-mono text-[10px] text-mist-faint">
+          {props.error ? (
+            <span className="text-coral">{props.error}</span>
+          ) : props.busy ? (
+            "…"
+          ) : (
+            `${props.count.toLocaleString()} events`
+          )}
         </span>
-      )}
-      <button
-        onClick={onRefresh}
-        className="shrink-0 rounded-md border border-[#1c2230] px-2 py-1 text-xs hover:bg-[#11151f]"
-      >
-        Refresh
-      </button>
+      </div>
     </div>
   );
 }

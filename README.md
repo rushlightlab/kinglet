@@ -11,6 +11,7 @@ Named after the tiny bird with the golden crown (genus *Regulus* — "little kin
 - **Full-text search** — SQLite FTS5 with a trigram tokenizer, so substring
   matches (`"timeout"`) just work
 - **Filter grammar** — `level>=warn service:api "connection refused" -healthcheck`
+- **Monitors & alerts** — instant match, rate spikes, silence detection → webhook/Discord/Slack
 - **Volume histogram** by level, drag across it to zoom into a time range
 - **Retention built in** — drop events older than N days, automatically
 - **Zero external services** — no Postgres, no Redis, no Kafka. One process.
@@ -97,6 +98,10 @@ All `/v1` routes require `Authorization: Bearer <token>`.
 | `GET /v1/histogram` | Counts per level per bucket. Params: `from`, `to`, `buckets` |
 | `GET /v1/services` | Your known services and their event counts |
 | `GET /v1/stream` | SSE live tail. Params: `q`, plus `token` (EventSource can't send headers) |
+| `GET/POST /v1/monitors` | List monitors / create one |
+| `PATCH/DELETE /v1/monitors/:id` | Update / delete a monitor |
+| `POST /v1/monitors/:id/test` | Send a test notification through every channel |
+| `GET /v1/alerts` | Alert history, latest first |
 | `GET /healthz` | Health check (no auth) |
 
 ### Filter grammar
@@ -111,6 +116,33 @@ service:api env:prod   exact field matches
 
 Combine freely: `level>=warn service:api -healthcheck`
 
+## Alerts & monitors
+
+Monitors are standing queries evaluated against your stream:
+
+| Kind | Fires when | Example |
+| --- | --- | --- |
+| `match` | any event matches — instantly | `level:fatal` |
+| `count_above` | more than N matches within a window | `level>=error service:api` > 10 in 5m |
+| `count_below` | fewer than N matches within a window (silence) | `service:cron-backup` < 1 in 30m |
+
+Create one over HTTP, or in the UI at `/monitors`:
+
+```bash
+curl -X POST http://localhost:8080/v1/monitors \
+  -H "Authorization: Bearer $KINGLET_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary '{ "name": "payment errors", "query": "level>=error service:billing", "kind": "count_above", "threshold": 10, "windowMs": 300000, "channels": [ { "type": "discord", "url": "https://discord.com/api/webhooks/…" } ] }'
+```
+
+Channels are plain HTTP POSTs — **webhook** (JSON payload; n8n, Zapier, scripts),
+**discord**, and **slack**. Each monitor has a cooldown; count monitors
+auto-resolve when the condition clears and say so. `POST /v1/monitors/:id/test`
+sends a test notification, so wiring a channel is verifiable in one click.
+
+Set `KINGLET_BASE_URL` and every notification carries a deep link back into
+your UI with the query and time range pre-filled.
+
 ## Configuration
 
 | Env var | Default | What it does |
@@ -120,6 +152,7 @@ Combine freely: `level>=warn service:api -healthcheck`
 | `KINGLET_DB_PATH` | `data/kinglet.db` | Plain path → SQLite; `libsql://`/`https://`/`file:` → libSQL |
 | `KINGLET_DB_AUTH_TOKEN` | — | Auth token for remote libSQL/Turso databases |
 | `KINGLET_TOKENS` | *(auto-generate)* | Comma-separated ingest tokens |
+| `KINGLET_BASE_URL` | — | Public URL, used for deep links in alert notifications |
 | `KINGLET_RETENTION_DAYS` | `14` | Delete events older than this |
 
 When `KINGLET_TOKENS` is unset, a token is generated on first boot, printed to
@@ -185,10 +218,12 @@ The dev API writes to `apps/api/data/` and prints a fresh token on first boot.
 ## Roadmap
 
 - [x] v0.1 — HTTP ingest, live tail, filter grammar, histogram, retention, Docker
-- [ ] Docs + landing page — Astro/Starlight site in a separate `kinglet-site` repo (HTTP API reference, self-hosting guide, SDK docs)
+- [x] Monitors & alerts — instant match, spike, silence → webhook/Discord/Slack with cooldown + auto-resolve
+- [x] UI polish — URL-synced views, shareable permalinks, saved searches, keyboard navigation, Kinglet design language
+- [x] Docs + landing page — Astro/Starlight site in a separate `kinglet-site` repo (HTTP API reference, self-hosting guide, SDK docs)
 - [ ] v0.2 — pino transport + zero-code Node preload, PHP Monolog handler, Fluent Bit/Vector guides
-- [ ] v0.3 — OTLP + syslog receivers, saved searches, shareable permalinks
-- [ ] v1.0 — monitors/alerts (webhooks), ClickHouse storage profile, teams
+- [ ] v0.3 — OTLP + syslog receivers
+- [ ] v1.0 — ClickHouse storage profile, teams
 
 ## License
 

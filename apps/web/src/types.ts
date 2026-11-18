@@ -1,11 +1,13 @@
 export const LEVEL_NAMES = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
+/* Kinglet palette: faint greys for quiet levels, crown gold for warn,
+   coral for error/fatal. */
 export const LEVEL_COLORS = [
-  "#475569",
-  "#64748b",
-  "#38bdf8",
-  "#fbbf24",
-  "#f87171",
-  "#ef4444",
+  "#4d5650",
+  "#6b756c",
+  "#b8c2c9",
+  "#fcd34d",
+  "#ff7a59",
+  "#ff5c33",
 ] as const;
 
 export interface KingletEvent {
@@ -38,4 +40,46 @@ export interface Histogram {
 export interface EventPage {
   events: KingletEvent[];
   nextCursor: number | null;
+}
+
+export type MonitorKind = "match" | "count_above" | "count_below";
+
+export type ChannelType = "webhook" | "discord" | "slack";
+
+export interface NotifyChannel {
+  type: ChannelType;
+  url: string;
+}
+
+export interface Monitor {
+  id: number;
+  name: string;
+  query: string;
+  kind: MonitorKind;
+  threshold: number;
+  windowMs: number;
+  intervalMs: number;
+  cooldownMs: number;
+  enabled: boolean;
+  channels: NotifyChannel[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AlertRecord {
+  id: number;
+  monitorId: number;
+  monitorName: string | null;
+  state: "fired" | "resolved";
+  summary: string;
+  count: number | null;
+  sampleMessage: string | null;
+  firedAt: number;
+  resolvedAt: number | null;
+}
+
+export interface ChannelTestResult {
+  type: string;
+  ok: boolean;
+  error?: string;
 }

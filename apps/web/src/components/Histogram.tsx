@@ -45,7 +45,7 @@ export default function HistogramChart({ data, onSelectRange }: {
       ref={ref}
       onMouseDown={onMouseDown}
       onMouseUp={onMouseUp}
-      className="flex h-20 cursor-col-resize items-stretch gap-px border-b border-[#1c2230] px-2 py-1"
+      className="flex h-20 cursor-col-resize items-stretch gap-px border-b border-white/[0.08] px-2 py-1"
       title="Drag across the histogram to zoom into that time range"
     >
       {data.points.map((point, i) => {
@@ -56,8 +56,8 @@ export default function HistogramChart({ data, onSelectRange }: {
           <div
             key={point.ts}
             title={tooltip}
-            className="flex h-full w-full flex-col-reverse justify-start rounded-[1px]"
-            style={{ opacity: total === 0 ? 0.12 : 1 }}
+            className="flex h-full w-full flex-col-reverse justify-start rounded-t-[2px]"
+            style={{ opacity: total === 0 ? 0.1 : 1 }}
           >
             {point.counts.map((count, level) => {
               if (count === 0) return null;
@@ -65,7 +65,7 @@ export default function HistogramChart({ data, onSelectRange }: {
               return (
                 <div
                   key={level}
-                  style={{ height: `${share}%`, backgroundColor: LEVEL_COLORS[level] ?? "#64748b" }}
+                  style={{ height: `${share}%`, backgroundColor: LEVEL_COLORS[level] ?? "#6b756c" }}
                 />
               );
             })}

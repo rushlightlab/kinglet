@@ -9,6 +9,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "^5.2.0",
+    "@fontsource/chakra-petch": "^5.1.0",
     "@tanstack/react-router": "^1.95.0",
     "@tanstack/react-virtual": "^3.13.0",
     "react": "^19.2.0",

@@ -20,6 +20,31 @@ export const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts);
   CREATE INDEX IF NOT EXISTS idx_events_service_ts ON events (service, ts);
   CREATE INDEX IF NOT EXISTS idx_events_env_ts ON events (env, ts);
+  CREATE TABLE IF NOT EXISTS monitors (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    query TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'count_above',
+    threshold INTEGER NOT NULL DEFAULT 1,
+    window_ms INTEGER NOT NULL DEFAULT 300000,
+    interval_ms INTEGER NOT NULL DEFAULT 60000,
+    cooldown_ms INTEGER NOT NULL DEFAULT 600000,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    channels TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY,
+    monitor_id INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    count INTEGER,
+    sample_message TEXT,
+    fired_at INTEGER NOT NULL,
+    resolved_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_alerts_monitor ON alerts (monitor_id, fired_at DESC);
 `;
 
 /**

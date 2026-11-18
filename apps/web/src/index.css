@@ -1,5 +1,26 @@
 @import "tailwindcss";
 
+/*
+  Kinglet design tokens — ink dark, crown gold, mist text.
+  Display: Chakra Petch (angular, technical). Everything else: JetBrains Mono.
+*/
+@theme {
+  --color-ink-950: #07080a;
+  --color-ink-900: #0a0c0e;
+  --color-ink-850: #0e1013;
+  --color-ink-800: #13161a;
+  --color-gold: #fbbf24;
+  --color-gold-bright: #fcd34d;
+  --color-gold-dim: #a17c1c;
+  --color-coral: #ff7a59;
+  --color-coral-bright: #ff9d85;
+  --color-mist: #e4e8e3;
+  --color-mist-dim: #949d94;
+  --color-mist-faint: #5c665e;
+  --font-display: "Chakra Petch", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
 html,
 body,
 #root {
@@ -7,11 +28,185 @@ body,
 }
 
 body {
-  background-color: #0b0e14;
-  color: #e6e9ef;
+  background-color: var(--color-ink-950);
+  color: var(--color-mist);
+  font-family: var(--font-mono);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-gold);
+  color: var(--color-ink-950);
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #2a3244 transparent;
+  scrollbar-color: #232a2e transparent;
+}
+
+/* ---------- live dot ---------- */
+.k-live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-gold);
+  box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.5);
+  animation: k-pulse 2s infinite;
+}
+@keyframes k-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.5); }
+  70% { box-shadow: 0 0 0 7px rgba(251, 191, 36, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0); }
+}
+
+/* ---------- nav ---------- */
+.nav-link {
+  font-size: 12px;
+  color: var(--color-mist-dim);
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+.nav-link:hover {
+  color: var(--color-gold);
+  background: rgba(251, 191, 36, 0.05);
+  border-color: rgba(251, 191, 36, 0.18);
+}
+.nav-link-active {
+  font-size: 12px;
+  color: var(--color-gold);
+  padding: 6px 10px;
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: 4px;
+  background: rgba(251, 191, 36, 0.05);
+}
+
+/* ---------- buttons ---------- */
+.k-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 9px 14px;
+  border-radius: 4px;
+  transition: all 0.22s ease;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.k-btn-primary {
+  background: var(--color-gold);
+  color: var(--color-ink-950);
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.3), 0 6px 26px rgba(251, 191, 36, 0.16);
+}
+.k-btn-primary:hover {
+  background: var(--color-gold-bright);
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 1px var(--color-gold-bright), 0 10px 36px rgba(251, 191, 36, 0.32);
+}
+.k-btn-ghost {
+  color: var(--color-mist);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.015);
+}
+.k-btn-ghost:hover {
+  border-color: rgba(251, 191, 36, 0.4);
+  color: var(--color-gold);
+  background: rgba(251, 191, 36, 0.04);
+}
+.k-btn-sm {
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+/* small chip action (cmd bar + header) */
+.k-chip-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-mist-dim);
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  background: transparent;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.k-chip-btn:hover {
+  color: var(--color-gold);
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.05);
+}
+
+/* ---------- cards (bento) ---------- */
+.k-card {
+  position: relative;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0.008));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  transition: border-color 0.3s ease, transform 0.3s ease, box-shadow 0.3s ease;
+}
+.k-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(251, 191, 36, 0.4), transparent);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.k-card:hover {
+  border-color: rgba(251, 191, 36, 0.28);
+  transform: translateY(-2px);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+}
+.k-card:hover::before {
+  opacity: 1;
+}
+
+/* ---------- section kicker ---------- */
+.k-kicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-mist-dim);
+}
+
+/* ---------- atmosphere ---------- */
+.k-bg-grid {
+  background-image:
+    linear-gradient(rgba(251, 191, 36, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(251, 191, 36, 0.04) 1px, transparent 1px);
+  background-size: 56px 56px;
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 0%, transparent 75%);
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 0%, transparent 75%);
+  pointer-events: none;
+}
+
+/* ---------- window chrome ---------- */
+.k-window {
+  background: linear-gradient(160deg, #0f1114, #090a0c);
+  border: 1px solid rgba(251, 191, 36, 0.18);
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5), 0 40px 80px rgba(0, 0, 0, 0.7), 0 0 90px rgba(251, 191, 36, 0.05);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .k-live-dot {
+    animation: none;
+  }
+  .k-btn-primary:hover {
+    transform: none;
+  }
+  .k-card:hover {
+    transform: none;
+  }
 }

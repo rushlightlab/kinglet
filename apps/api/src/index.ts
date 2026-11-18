@@ -6,6 +6,8 @@ import { serve } from "@hono/node-server";
 import { authMiddleware, sha256hex } from "./auth.js";
 import { loadConfig } from "./env.js";
 import type { Config } from "./env.js";
+import { startMonitorEngine } from "./monitors.js";
+import type { MonitorEngine } from "./monitors.js";
 import { startRetentionJob } from "./retention.js";
 import { registerRoutes } from "./routes.js";
 import { createStorage } from "./storage/index.js";
@@ -45,7 +47,9 @@ app.onError((err, c) => {
 
 app.get("/healthz", (c) => c.json({ ok: true, name: "kinglet", version: "0.1.0" }));
 app.use("/v1/*", authMiddleware(tokenHashes));
-registerRoutes(app, storage);
+
+const engine: MonitorEngine = startMonitorEngine(storage, { baseUrl: config.baseUrl });
+registerRoutes(app, storage, engine);
 registerStaticUi(app);
 
 const server = serve({ fetch: app.fetch, port: config.port }, () => printBanner(config, storage));

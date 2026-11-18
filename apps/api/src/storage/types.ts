@@ -20,6 +20,19 @@ export interface HistogramPointRow {
   counts: number[];
 }
 
+export type SqlValue = string | number | null;
+
+/**
+ * Minimal SQL escape hatch for Kinglet's own meta tables (monitors, alert
+ * history). Both drivers expose the same tiny surface so meta logic is
+ * written once. Not for event queries — those go through Storage methods.
+ */
+export interface SqlExecutor {
+  exec(statements: string): Promise<void>;
+  run(sql: string, args?: SqlValue[]): Promise<{ rowsAffected: number; lastInsertRowid: number | null }>;
+  all(sql: string, args?: SqlValue[]): Promise<Record<string, unknown>[]>;
+}
+
 /**
  * The seam that makes Kinglet's storage pluggable.
  *
@@ -32,6 +45,8 @@ export interface Storage {
   readonly kind: StorageKind;
   /** Human-readable target for the boot banner. */
   readonly description: string;
+  /** Shared surface for Kinglet's meta tables (monitors, alerts). */
+  readonly sql: SqlExecutor;
   insertEvents(events: Normalized[]): Promise<StoredEvent[]>;
   queryEvents(opts: QueryOptions): Promise<StoredEvent[]>;
   histogramPoints(from: number, to: number, bucketMs: number): Promise<HistogramPointRow[]>;
