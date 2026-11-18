@@ -3,6 +3,7 @@ export const LEVEL_NAMES = ["trace", "debug", "info", "warn", "error", "fatal"] 
 /** Row shape as stored in a Kinglet store (fields is a JSON string). */
 export interface StoredEvent {
   id: number;
+  projectId: number;
   ts: number;
   level: number;
   service: string | null;
@@ -14,6 +15,7 @@ export interface StoredEvent {
 /** Event shape as sent to clients (fields is a parsed object). */
 export interface ClientEvent {
   id: number;
+  projectId: number;
   ts: number;
   level: number;
   service: string | null;
@@ -31,5 +33,14 @@ export function toClientEvent(row: StoredEvent): ClientEvent {
       fields = null;
     }
   }
-  return { id: row.id, ts: row.ts, level: row.level, service: row.service, env: row.env, message: row.message, fields };
+  return {
+    id: row.id,
+    projectId: row.projectId,
+    ts: row.ts,
+    level: row.level,
+    service: row.service,
+    env: row.env,
+    message: row.message,
+    fields,
+  };
 }

@@ -7,7 +7,7 @@ import type { Storage } from "./storage/index.js";
 import type { StoredEvent } from "./types.js";
 
 /**
- * Monitors: standing queries that watch your event stream.
+ * Monitors: standing queries that watch a project's event stream.
  *
  *   match        — any event matching the query fires immediately
  *                  (rides the in-process ingest bus — zero queries)
@@ -24,6 +24,7 @@ export const MONITOR_KINDS: readonly MonitorKind[] = ["match", "count_above", "c
 
 export interface Monitor {
   id: number;
+  projectId: number;
   name: string;
   query: string;
   kind: MonitorKind;
@@ -124,6 +125,7 @@ function rowToMonitor(row: Record<string, unknown>): Monitor {
   }
   return {
     id: Number(row.id),
+    projectId: Number(row.project_id ?? 1),
     name: String(row.name ?? ""),
     query: String(row.query ?? ""),
     kind: (MONITOR_KINDS as readonly string[]).includes(String(row.kind))
@@ -155,61 +157,104 @@ function rowToAlert(row: Record<string, unknown>): AlertRecord {
   };
 }
 
-export async function listMonitors(storage: Storage): Promise<Monitor[]> {
-  const rows = await storage.sql.all("SELECT * FROM monitors ORDER BY id ASC");
+/** All monitors when projectId is omitted (the alert engine); one project otherwise. */
+export async function listMonitors(storage: Storage, projectId?: number): Promise<Monitor[]> {
+  const rows =
+    projectId === undefined
+      ? await storage.sql.all("SELECT * FROM monitors ORDER BY id ASC")
+      : await storage.sql.all("SELECT * FROM monitors WHERE project_id = ? ORDER BY id ASC", [projectId]);
   return rows.map(rowToMonitor);
 }
 
-export async function getMonitor(storage: Storage, id: number): Promise<Monitor | null> {
-  const rows = await storage.sql.all("SELECT * FROM monitors WHERE id = ?", [id]);
+export async function getMonitor(
+  storage: Storage,
+  id: number,
+  projectId?: number
+): Promise<Monitor | null> {
+  const rows =
+    projectId === undefined
+      ? await storage.sql.all("SELECT * FROM monitors WHERE id = ?", [id])
+      : await storage.sql.all("SELECT * FROM monitors WHERE id = ? AND project_id = ?", [id, projectId]);
   const row = rows[0];
   return row ? rowToMonitor(row) : null;
 }
 
 export type MonitorResult = { ok: true; monitor: Monitor } | { ok: false; error: string };
 
-export async function createMonitorFromRaw(storage: Storage, raw: unknown): Promise<MonitorResult> {
+export async function createMonitorFromRaw(
+  storage: Storage,
+  projectId: number,
+  raw: unknown
+): Promise<MonitorResult> {
   const input = parseMonitorInput(raw);
   if (!input.ok) return input;
   const v = input.value;
   const now = Date.now();
   const info = await storage.sql.run(
-    "INSERT INTO monitors (name, query, kind, threshold, window_ms, interval_ms, cooldown_ms, enabled, channels, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [v.name, v.query, v.kind, v.threshold, v.windowMs, v.intervalMs, v.cooldownMs, v.enabled ? 1 : 0, JSON.stringify(v.channels), now, now]
+    "INSERT INTO monitors (project_id, name, query, kind, threshold, window_ms, interval_ms, cooldown_ms, enabled, channels, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [
+      projectId,
+      v.name,
+      v.query,
+      v.kind,
+      v.threshold,
+      v.windowMs,
+      v.intervalMs,
+      v.cooldownMs,
+      v.enabled ? 1 : 0,
+      JSON.stringify(v.channels),
+      now,
+      now,
+    ]
   );
-  return { ok: true, monitor: { id: info.lastInsertRowid ?? 0, ...v, createdAt: now, updatedAt: now } };
+  return { ok: true, monitor: { id: info.lastInsertRowid ?? 0, projectId, ...v, createdAt: now, updatedAt: now } };
 }
 
 export async function updateMonitorFromRaw(
   storage: Storage,
   id: number,
+  projectId: number,
   raw: unknown
 ): Promise<MonitorResult | { ok: false; error: string; notFound: true }> {
   const input = parseMonitorInput(raw);
   if (!input.ok) return input;
   const v = input.value;
   const info = await storage.sql.run(
-    "UPDATE monitors SET name = ?, query = ?, kind = ?, threshold = ?, window_ms = ?, interval_ms = ?, cooldown_ms = ?, enabled = ?, channels = ?, updated_at = ? WHERE id = ?",
-    [v.name, v.query, v.kind, v.threshold, v.windowMs, v.intervalMs, v.cooldownMs, v.enabled ? 1 : 0, JSON.stringify(v.channels), Date.now(), id]
+    "UPDATE monitors SET name = ?, query = ?, kind = ?, threshold = ?, window_ms = ?, interval_ms = ?, cooldown_ms = ?, enabled = ?, channels = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+    [
+      v.name,
+      v.query,
+      v.kind,
+      v.threshold,
+      v.windowMs,
+      v.intervalMs,
+      v.cooldownMs,
+      v.enabled ? 1 : 0,
+      JSON.stringify(v.channels),
+      Date.now(),
+      id,
+      projectId,
+    ]
   );
   if (info.rowsAffected === 0) return { ok: false, error: "monitor not found", notFound: true };
-  const monitor = await getMonitor(storage, id);
+  const monitor = await getMonitor(storage, id, projectId);
   return monitor ? { ok: true, monitor } : { ok: false, error: "monitor not found", notFound: true };
 }
 
-export async function deleteMonitor(storage: Storage, id: number): Promise<boolean> {
-  const info = await storage.sql.run("DELETE FROM monitors WHERE id = ?", [id]);
+export async function deleteMonitor(storage: Storage, id: number, projectId: number): Promise<boolean> {
+  const info = await storage.sql.run("DELETE FROM monitors WHERE id = ? AND project_id = ?", [id, projectId]);
   if (info.rowsAffected === 0) return false;
   await storage.sql.run("DELETE FROM alerts WHERE monitor_id = ?", [id]);
   return true;
 }
 
-export async function listAlerts(storage: Storage, limit: number): Promise<AlertRecord[]> {
+export async function listAlerts(storage: Storage, limit: number, projectId: number): Promise<AlertRecord[]> {
   const rows = await storage.sql.all(
     `SELECT a.id, a.monitor_id, a.state, a.summary, a.count, a.sample_message, a.fired_at, a.resolved_at, m.name AS monitor_name
-     FROM alerts a LEFT JOIN monitors m ON m.id = a.monitor_id
+     FROM alerts a JOIN monitors m ON m.id = a.monitor_id
+     WHERE m.project_id = ?
      ORDER BY a.fired_at DESC LIMIT ?`,
-    [Math.min(500, Math.max(1, limit))]
+    [projectId, Math.min(500, Math.max(1, limit))]
   );
   return rows.map(rowToAlert);
 }
@@ -262,7 +307,11 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
   function linkFor(m: Monitor, ts: number): string | undefined {
     if (!opts.baseUrl) return undefined;
     const from = ts - (m.windowMs || 3_600_000);
-    const params = new URLSearchParams({ from: String(from), to: String(ts) });
+    const params = new URLSearchParams({
+      project: String(m.projectId),
+      from: String(from),
+      to: String(ts),
+    });
     if (m.query) params.set("q", m.query);
     return `${opts.baseUrl.replace(/\/+$/, "")}/?${params.toString()}`;
   }
@@ -341,7 +390,7 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
     s.lastEvalAt = Date.now();
     try {
       const now = Date.now();
-      const where = buildWhere(parsed(m.query), { from: now - m.windowMs, to: now });
+      const where = buildWhere(parsed(m.query), { from: now - m.windowMs, to: now }, m.projectId);
       const rows = await storage.sql.all(`SELECT COUNT(*) AS n FROM events WHERE ${where.sql}`, where.params);
       const count = Number(rows[0]?.n ?? 0);
       const cond = m.kind === "count_above" ? count > m.threshold : count < m.threshold;
@@ -362,6 +411,7 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
       if (!m.enabled || m.kind !== "match") continue;
       const f = parsed(m.query);
       for (const row of rows) {
+        if (row.projectId !== m.projectId) continue;
         if (!matchesEvent(f, row)) continue;
         const s = getState(m.id);
         const now = Date.now();

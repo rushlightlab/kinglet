@@ -3,6 +3,19 @@ import type { StoredEvent } from "../types.js";
 
 export type StorageKind = "sqlite" | "libsql";
 
+export type SqlValue = string | number | null;
+
+/**
+ * Minimal SQL escape hatch shared by both drivers, used for Kinglet's meta
+ * tables (projects, users, sessions, API keys, monitors) so that logic is
+ * written once. Event queries go through the Storage methods below.
+ */
+export interface SqlExecutor {
+  exec(statements: string): Promise<void>;
+  run(sql: string, args?: SqlValue[]): Promise<{ rowsAffected: number; lastInsertRowid: number | null }>;
+  all(sql: string, args?: SqlValue[]): Promise<Record<string, unknown>[]>;
+}
+
 export interface QueryOptions {
   where: string;
   params: (string | number)[];
@@ -20,37 +33,23 @@ export interface HistogramPointRow {
   counts: number[];
 }
 
-export type SqlValue = string | number | null;
-
-/**
- * Minimal SQL escape hatch for Kinglet's own meta tables (monitors, alert
- * history). Both drivers expose the same tiny surface so meta logic is
- * written once. Not for event queries — those go through Storage methods.
- */
-export interface SqlExecutor {
-  exec(statements: string): Promise<void>;
-  run(sql: string, args?: SqlValue[]): Promise<{ rowsAffected: number; lastInsertRowid: number | null }>;
-  all(sql: string, args?: SqlValue[]): Promise<Record<string, unknown>[]>;
-}
-
 /**
  * The seam that makes Kinglet's storage pluggable.
  *
  * Today: "sqlite" (better-sqlite3, zero-config default) and "libsql"
  * (local `file:` databases or a remote Turso instance). Tomorrow: ClickHouse
- * or Postgres implementations of this same interface — the API, retention,
- * and live tail never know which driver is underneath.
+ * or Postgres implementations of this same interface.
  */
 export interface Storage {
   readonly kind: StorageKind;
   /** Human-readable target for the boot banner. */
   readonly description: string;
-  /** Shared surface for Kinglet's meta tables (monitors, alerts). */
+  /** Shared surface for Kinglet's meta tables. */
   readonly sql: SqlExecutor;
-  insertEvents(events: Normalized[]): Promise<StoredEvent[]>;
+  insertEvents(projectId: number, events: Normalized[]): Promise<StoredEvent[]>;
   queryEvents(opts: QueryOptions): Promise<StoredEvent[]>;
-  histogramPoints(from: number, to: number, bucketMs: number): Promise<HistogramPointRow[]>;
-  listServices(): Promise<ServiceRow[]>;
+  histogramPoints(projectId: number, from: number, to: number, bucketMs: number): Promise<HistogramPointRow[]>;
+  listServices(projectId: number): Promise<ServiceRow[]>;
   /** Chunked delete; returns how many events were dropped. */
   deleteOlderThan(ts: number): Promise<number>;
   /** Housekeeping after big deletes (vacuum etc.). No-op on managed backends. */

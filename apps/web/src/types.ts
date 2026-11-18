@@ -83,3 +83,31 @@ export interface ChannelTestResult {
   ok: boolean;
   error?: string;
 }
+
+export interface Project {
+  id: number;
+  name: string;
+  slug: string;
+  createdAt: number;
+}
+
+export type UserRole = "admin" | "member" | "viewer";
+
+export interface AppUser {
+  id: number;
+  email: string;
+  name: string;
+  role: UserRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ApiKeyInfo {
+  id: number;
+  projectId: number;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  createdAt: number;
+  lastUsedAt: number | null;
+}

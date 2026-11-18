@@ -109,9 +109,9 @@ function textClause(term: string): WhereClause {
   return { sql: "message LIKE ?", params: [`%${term}%`] };
 }
 
-export function buildWhere(f: ParsedFilters, range: EventRange): WhereClause {
-  const parts: string[] = ["ts >= ?", "ts <= ?"];
-  const params: (string | number)[] = [range.from, range.to];
+export function buildWhere(f: ParsedFilters, range: EventRange, projectId: number): WhereClause {
+  const parts: string[] = ["project_id = ?", "ts >= ?", "ts <= ?"];
+  const params: (string | number)[] = [projectId, range.from, range.to];
   if (f.levelOp && f.levelValue !== null) {
     parts.push(`level ${f.levelOp} ?`);
     params.push(f.levelValue);

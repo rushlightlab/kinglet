@@ -8,6 +8,7 @@ import {
   testMonitor,
   updateMonitor,
 } from "../api";
+import { useApp } from "../app-context";
 import type { AlertRecord, Monitor, MonitorKind, NotifyChannel } from "../types";
 import SiteHeader from "../components/SiteHeader";
 
@@ -49,6 +50,7 @@ function describe(m: Monitor): string {
 }
 
 function MonitorsPage() {
+  const { currentProjectId } = useApp();
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [editing, setEditing] = useState<number | "new" | null>(null);
@@ -58,22 +60,23 @@ function MonitorsPage() {
 
   const load = useCallback(async () => {
     try {
-      const [m, a] = await Promise.all([fetchMonitors(), fetchAlerts(50)]);
+      const [m, a] = await Promise.all([fetchMonitors(currentProjectId), fetchAlerts(currentProjectId, 50)]);
       setMonitors(m.monitors);
       setAlerts(a.alerts);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, []);
+  }, [currentProjectId]);
 
   useEffect(() => {
+    setEditing(null);
     void load();
   }, [load]);
 
   const toggleEnabled = async (m: Monitor): Promise<void> => {
     try {
-      await updateMonitor(m.id, { ...m, enabled: !m.enabled });
+      await updateMonitor(currentProjectId, m.id, { ...m, enabled: !m.enabled });
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -82,7 +85,7 @@ function MonitorsPage() {
 
   const remove = async (id: number): Promise<void> => {
     try {
-      await deleteMonitor(id);
+      await deleteMonitor(currentProjectId, id);
       setConfirmDelete(null);
       await load();
     } catch (err) {
@@ -93,7 +96,7 @@ function MonitorsPage() {
   const runTest = async (m: Monitor): Promise<void> => {
     setTestMsg((prev) => ({ ...prev, [m.id]: "testing…" }));
     try {
-      const r = await testMonitor(m.id);
+      const r = await testMonitor(currentProjectId, m.id);
       const ok = r.results.filter((x) => x.ok).length;
       const text =
         r.results.length === 0
@@ -155,6 +158,7 @@ function MonitorsPage() {
             <MonitorForm
               key={editing === "new" ? "new" : `edit-${editing}`}
               initial={editingMonitor}
+              projectId={currentProjectId}
               onDone={async () => {
                 setEditing(null);
                 await load();
@@ -308,10 +312,12 @@ interface FormState {
 
 function MonitorForm({
   initial,
+  projectId,
   onDone,
   onCancel,
 }: {
   initial: Monitor | null;
+  projectId: number;
   onDone: () => Promise<void>;
   onCancel: () => void;
 }) {
@@ -363,8 +369,8 @@ function MonitorForm({
         enabled: true,
         channels,
       };
-      if (initial) await updateMonitor(initial.id, payload);
-      else await createMonitor(payload);
+      if (initial) await updateMonitor(projectId, initial.id, payload);
+      else await createMonitor(projectId, payload);
       await onDone();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));

@@ -1,107 +1,230 @@
 import type {
   AlertRecord,
+  ApiKeyInfo,
+  AppUser,
   ChannelTestResult,
   EventPage,
   Histogram,
   KingletEvent,
   Monitor,
+  Project,
   Service,
 } from "./types";
 import { LEVEL_NAMES } from "./types";
 
-const TOKEN_KEY = "kinglet.token";
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function setToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token.trim());
-}
-
-export function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
-}
-
 export class UnauthorizedError extends Error {}
 
+function withProject(path: string, projectId: number): string {
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}project=${projectId}`;
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: { ...(init?.headers ?? {}), authorization: `Bearer ${getToken() ?? ""}` },
-  });
-  if (res.status === 401) throw new UnauthorizedError("token rejected");
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...init,
+      credentials: "same-origin",
+      headers:
+        init?.body !== undefined
+          ? { "content-type": "application/json", ...(init?.headers ?? {}) }
+          : init?.headers,
+    });
+  } catch {
+    throw new Error("Cannot reach the Kinglet API — is the server running?");
+  }
+  if (res.status === 401) throw new UnauthorizedError("unauthorized");
   if (!res.ok) {
+    const contentType = res.headers.get("content-type") ?? "";
     let message = `request failed: HTTP ${res.status}`;
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (body.error) message = body.error;
-    } catch {
-      // keep the HTTP status message
+    let requestId: string | null = null;
+    if (contentType.includes("application/json")) {
+      try {
+        const body = (await res.json()) as { error?: string; requestId?: string };
+        if (body.error) message = body.error;
+        if (body.requestId) requestId = body.requestId;
+      } catch {
+        // body wasn't valid JSON — keep the status message
+      }
+    } else if (res.status >= 500) {
+      message =
+        "the Kinglet API returned an internal error — the server likely crashed at boot or hit a bug. Check its terminal output";
+    } else if (res.status >= 500) {
+      message = `the Kinglet API failed (HTTP ${res.status})`;
     }
-    throw new Error(message);
+    throw new Error(requestId ? `${message} (request ${requestId})` : message);
   }
   return (await res.json()) as T;
 }
 
-export function fetchEvents(opts: { q?: string; from?: number; to?: number; limit?: number }): Promise<EventPage> {
+// ---------- auth ----------
+
+export function login(email: string, password: string): Promise<{ user: AppUser; permissions: string[] }> {
+  return api<{ user: AppUser; permissions: string[] }>("/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function logout(): Promise<{ ok: true }> {
+  return api<{ ok: true }>("/v1/auth/logout", { method: "POST" });
+}
+
+export function fetchMe(): Promise<{ user: AppUser; permissions: string[] }> {
+  return api<{ user: AppUser; permissions: string[] }>("/v1/me");
+}
+
+export function changePassword(currentPassword: string, newPassword: string): Promise<{ ok: true }> {
+  return api<{ ok: true }>("/v1/me/password", {
+    method: "PATCH",
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+}
+
+// ---------- projects ----------
+
+export function fetchProjects(): Promise<{ projects: Project[] }> {
+  return api<{ projects: Project[] }>("/v1/projects");
+}
+
+export function createProject(name: string): Promise<{ project: Project }> {
+  return api<{ project: Project }>("/v1/projects", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteProject(id: number): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/v1/projects/${id}`, { method: "DELETE" });
+}
+
+// ---------- users (admin) ----------
+
+export function fetchUsers(): Promise<{ users: AppUser[] }> {
+  return api<{ users: AppUser[] }>("/v1/users");
+}
+
+export function createUser(input: {
+  email: string;
+  name: string;
+  role: string;
+  password?: string;
+}): Promise<{ user: AppUser; password?: string }> {
+  return api<{ user: AppUser; password?: string }>("/v1/users", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateUser(
+  id: number,
+  patch: { name?: string; role?: string; password?: string }
+): Promise<{ user: AppUser }> {
+  return api<{ user: AppUser }>(`/v1/users/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteUser(id: number): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/v1/users/${id}`, { method: "DELETE" });
+}
+
+// ---------- API keys ----------
+
+export function fetchKeys(projectId: number): Promise<{ keys: ApiKeyInfo[] }> {
+  return api<{ keys: ApiKeyInfo[] }>(`/v1/projects/${projectId}/keys`);
+}
+
+export function createKey(
+  projectId: number,
+  input: { name: string; scopes: string[] }
+): Promise<{ key: ApiKeyInfo; plaintext: string }> {
+  return api<{ key: ApiKeyInfo; plaintext: string }>(`/v1/projects/${projectId}/keys`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteKey(id: number, projectId: number): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/v1/keys/${id}?project=${projectId}`, { method: "DELETE" });
+}
+
+// ---------- events ----------
+
+export function fetchEvents(opts: {
+  projectId: number;
+  q?: string;
+  from?: number;
+  to?: number;
+  limit?: number;
+}): Promise<EventPage> {
   const params = new URLSearchParams();
   if (opts.q) params.set("q", opts.q);
   if (opts.from) params.set("from", String(opts.from));
   if (opts.to) params.set("to", String(opts.to));
   if (opts.limit) params.set("limit", String(opts.limit));
-  return api<EventPage>(`/v1/events?${params.toString()}`);
+  return api<EventPage>(withProject(`/v1/events?${params.toString()}`, opts.projectId));
 }
 
-export function fetchHistogram(opts: { from: number; to: number; buckets?: number }): Promise<Histogram> {
+export function fetchHistogram(opts: {
+  projectId: number;
+  from: number;
+  to: number;
+  buckets?: number;
+}): Promise<Histogram> {
   const params = new URLSearchParams({ from: String(opts.from), to: String(opts.to) });
   if (opts.buckets) params.set("buckets", String(opts.buckets));
-  return api<Histogram>(`/v1/histogram?${params.toString()}`);
+  return api<Histogram>(withProject(`/v1/histogram?${params.toString()}`, opts.projectId));
 }
 
-export function fetchServices(): Promise<{ services: Service[] }> {
-  return api<{ services: Service[] }>("/v1/services");
+export function fetchServices(projectId: number): Promise<{ services: Service[] }> {
+  return api<{ services: Service[] }>(withProject("/v1/services", projectId));
 }
 
-/** SSE live tail. EventSource can't send headers, so the token rides as a query param. */
-export function openStream(q: string): EventSource {
-  const params = new URLSearchParams({ token: getToken() ?? "" });
+/** SSE live tail — session cookie auth, so no token in the URL. */
+export function openStream(projectId: number, q: string): EventSource {
+  const params = new URLSearchParams({ project: String(projectId) });
   if (q) params.set("q", q);
   return new EventSource(`/v1/stream?${params.toString()}`);
 }
 
 // ---------- monitors & alerts ----------
 
-export function fetchMonitors(): Promise<{ monitors: Monitor[] }> {
-  return api<{ monitors: Monitor[] }>("/v1/monitors");
+export function fetchMonitors(projectId: number): Promise<{ monitors: Monitor[] }> {
+  return api<{ monitors: Monitor[] }>(withProject("/v1/monitors", projectId));
 }
 
-export function createMonitor(input: Partial<Monitor>): Promise<{ monitor: Monitor }> {
-  return api<{ monitor: Monitor }>("/v1/monitors", {
+export function createMonitor(projectId: number, input: Partial<Monitor>): Promise<{ monitor: Monitor }> {
+  return api<{ monitor: Monitor }>(withProject("/v1/monitors", projectId), {
     method: "POST",
-    headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
 }
 
-export function updateMonitor(id: number, input: Partial<Monitor>): Promise<{ monitor: Monitor }> {
-  return api<{ monitor: Monitor }>(`/v1/monitors/${id}`, {
+export function updateMonitor(
+  projectId: number,
+  id: number,
+  input: Partial<Monitor>
+): Promise<{ monitor: Monitor }> {
+  return api<{ monitor: Monitor }>(withProject(`/v1/monitors/${id}`, projectId), {
     method: "PATCH",
-    headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
 }
 
-export function deleteMonitor(id: number): Promise<{ ok: true }> {
-  return api<{ ok: true }>(`/v1/monitors/${id}`, { method: "DELETE" });
+export function deleteMonitor(projectId: number, id: number): Promise<{ ok: true }> {
+  return api<{ ok: true }>(withProject(`/v1/monitors/${id}`, projectId), { method: "DELETE" });
 }
 
-export function testMonitor(id: number): Promise<{ results: ChannelTestResult[] }> {
-  return api<{ results: ChannelTestResult[] }>(`/v1/monitors/${id}/test`, { method: "POST" });
+export function testMonitor(projectId: number, id: number): Promise<{ results: ChannelTestResult[] }> {
+  return api<{ results: ChannelTestResult[] }>(withProject(`/v1/monitors/${id}/test`, projectId), {
+    method: "POST",
+  });
 }
 
-export function fetchAlerts(limit = 100): Promise<{ alerts: AlertRecord[] }> {
-  return api<{ alerts: AlertRecord[] }>(`/v1/alerts?limit=${limit}`);
+export function fetchAlerts(projectId: number, limit = 100): Promise<{ alerts: AlertRecord[] }> {
+  return api<{ alerts: AlertRecord[] }>(withProject(`/v1/alerts?limit=${limit}`, projectId));
 }
 
 // ---------- demo traffic ----------
@@ -122,7 +245,7 @@ const DEMO_TEMPLATES: { level: number; message: string }[] = [
 ];
 
 /** Generates some noisy demo traffic, spread over the last hour. */
-export async function sprayDemoEvents(count = 80): Promise<void> {
+export async function sprayDemoEvents(projectId: number, count = 80): Promise<void> {
   const services = ["api", "web", "worker", "billing"];
   const now = Date.now();
   const lines: string[] = [];
@@ -143,16 +266,18 @@ export async function sprayDemoEvents(count = 80): Promise<void> {
       })
     );
   }
-  const res = await fetch("/v1/events", {
+  const res = await fetch(withProject("/v1/events", projectId), {
     method: "POST",
-    headers: {
-      authorization: `Bearer ${getToken() ?? ""}`,
-      "content-type": "application/x-ndjson",
-    },
+    credentials: "same-origin",
+    headers: { "content-type": "application/x-ndjson" },
     body: lines.join("\n"),
   });
+  if (res.status === 401) throw new UnauthorizedError("unauthorized");
   if (!res.ok) {
-    if (res.status === 401) throw new UnauthorizedError("token rejected");
-    throw new Error(`spray failed: HTTP ${res.status}`);
+    throw new Error(
+      res.status >= 500
+        ? "the Kinglet API returned an internal error — check the server terminal"
+        : `spray failed: HTTP ${res.status}`
+    );
   }
 }

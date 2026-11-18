@@ -13,12 +13,18 @@ export interface Config {
   baseUrl?: string;
   /** Directory holding the database file (local stores only). */
   dataDir: string;
+  /** Legacy global ingest tokens (KINGLET_TOKENS) — all projects, full access. */
   tokens: string[];
   /** A token newly generated on this boot (no env tokens, no saved token file). */
   generatedToken: string | null;
   /** A token restored from kinglet.token so restarts don't invalidate clients. */
   savedToken: string | null;
   retentionDays: number;
+  /** Session lifetime for the web UI. */
+  sessionDays: number;
+  /** Optional bootstrap administrator identity (first boot only). */
+  adminEmail?: string;
+  adminPassword?: string;
 }
 
 function intEnv(name: string, fallback: number): number {
@@ -74,5 +80,8 @@ export function loadConfig(): Config {
     generatedToken,
     savedToken,
     retentionDays: intEnv("KINGLET_RETENTION_DAYS", 14),
+    sessionDays: intEnv("KINGLET_SESSION_DAYS", 30),
+    adminEmail: process.env.KINGLET_ADMIN_EMAIL?.trim() || undefined,
+    adminPassword: process.env.KINGLET_ADMIN_PASSWORD?.trim() || undefined,
   };
 }

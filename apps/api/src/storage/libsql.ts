@@ -17,12 +17,12 @@ import {
   rowToStoredEvent,
   servicesFromRows,
 } from "./queries.js";
+import { runMigrations } from "./migrations.js";
 import type { HistogramPointRow, QueryOptions, ServiceRow, SqlExecutor, Storage } from "./types.js";
 
 /**
  * The libSQL driver: local `file:` databases or a hosted Turso instance
- * (`libsql://your-db.turso.io` + auth token). The same HTTP ingestion path,
- * the same schema, zero code changes at the API layer.
+ * (`libsql://your-db.turso.io` + auth token).
  */
 export async function createLibsqlStorage(opts: {
   url: string;
@@ -58,37 +58,40 @@ export async function createLibsqlStorage(opts: {
     await client.executeMultiple(SCHEMA_SQL + FTS_SQL_UNICODE61);
   }
 
+  const sql: SqlExecutor = {
+    async exec(statements) {
+      await client.executeMultiple(statements);
+    },
+    async run(sqlText, args = []) {
+      const result = await client.execute({ sql: sqlText, args });
+      return {
+        rowsAffected: result.rowsAffected,
+        lastInsertRowid: result.lastInsertRowid == null ? null : Number(result.lastInsertRowid),
+      };
+    },
+    async all(sqlText, args = []) {
+      const result = await client.execute({ sql: sqlText, args });
+      return result.rows as unknown as Record<string, unknown>[];
+    },
+  };
+
+  // Upgrade older databases before serving project-aware queries.
+  await runMigrations(sql);
+
   const storage: Storage = {
     kind: "libsql",
     description: opts.description ?? `libsql · ${opts.url}`,
-    sql: {
-      async exec(statements) {
-        await client.executeMultiple(statements);
-      },
-      async run(sqlText, args = []) {
-        const result = await client.execute({ sql: sqlText, args });
-        return {
-          rowsAffected: result.rowsAffected,
-          lastInsertRowid: result.lastInsertRowid == null ? null : Number(result.lastInsertRowid),
-        };
-      },
-      async all(sqlText, args = []) {
-        const result = await client.execute({ sql: sqlText, args });
-        return result.rows as unknown as Record<string, unknown>[];
-      },
-    },
+    sql,
 
-    async insertEvents(events: Normalized[]): Promise<StoredEvent[]> {
+    async insertEvents(projectId: number, events: Normalized[]): Promise<StoredEvent[]> {
       if (events.length === 0) return [];
       await client.batch(
         events.map((e) => ({
           sql: INSERT_SQL,
-          args: [e.ts, e.level, e.service, e.env, e.message, e.fields],
+          args: [projectId, e.ts, e.level, e.service, e.env, e.message, e.fields],
         })),
         "write"
       );
-      // Read the freshly assigned ids back (single-writer ingest makes this
-      // reliable; avoids driver differences in lastInsertRowid reporting).
       const idRows = await client.execute({
         sql: "SELECT id FROM events ORDER BY id DESC LIMIT ?",
         args: [events.length],
@@ -98,6 +101,7 @@ export async function createLibsqlStorage(opts: {
         const id = ids[i];
         return {
           id: id === undefined ? -(i + 1) : id,
+          projectId,
           ts: e.ts,
           level: e.level,
           service: e.service,
@@ -120,13 +124,14 @@ export async function createLibsqlStorage(opts: {
     },
 
     async histogramPoints(
+      projectId: number,
       from: number,
       to: number,
       bucketMs: number
     ): Promise<HistogramPointRow[]> {
       const result = await client.execute({
         sql: HISTOGRAM_SQL,
-        args: [bucketMs, bucketMs, from, to],
+        args: [bucketMs, bucketMs, from, to, projectId],
       });
       return histogramFromRows(
         result.rows as unknown as { bucket: unknown; level: unknown; n: unknown }[],
@@ -136,11 +141,9 @@ export async function createLibsqlStorage(opts: {
       );
     },
 
-    async listServices(): Promise<ServiceRow[]> {
-      const result = await client.execute(SERVICES_SQL);
-      return servicesFromRows(
-        result.rows as unknown as { name: unknown; count: unknown }[]
-      );
+    async listServices(projectId: number): Promise<ServiceRow[]> {
+      const result = await client.execute({ sql: SERVICES_SQL, args: [projectId] });
+      return servicesFromRows(result.rows as unknown as { name: unknown; count: unknown }[]);
     },
 
     async deleteOlderThan(ts: number): Promise<number> {

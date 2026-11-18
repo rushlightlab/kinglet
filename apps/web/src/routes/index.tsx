@@ -1,7 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  clearToken,
   fetchEvents,
   fetchHistogram,
   fetchServices,
@@ -9,13 +8,13 @@ import {
   sprayDemoEvents,
   UnauthorizedError,
 } from "../api";
+import { useApp } from "../app-context";
 import type { Histogram, KingletEvent, Service } from "../types";
 import EventDrawer from "../components/EventDrawer";
 import FilterBar from "../components/FilterBar";
 import HistogramChart from "../components/Histogram";
 import LogTable from "../components/LogTable";
 import SiteHeader from "../components/SiteHeader";
-import TokenGate from "../components/TokenGate";
 
 const WINDOWS: Record<string, number> = {
   "15m": 15 * 60_000,
@@ -37,6 +36,7 @@ export const Route = createFileRoute("/")({
 function Explorer() {
   const search = Route.useSearch();
   const navigate = useNavigate();
+  const { currentProjectId } = useApp();
 
   const [qDraft, setQDraft] = useState(() => search.q ?? "");
   const [q, setQ] = useState(() => search.q ?? "");
@@ -53,16 +53,10 @@ function Explorer() {
   const [follow, setFollow] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [authFailed, setAuthFailed] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
   const followRef = useRef(true);
-
-  const signOut = (): void => {
-    clearToken();
-    window.location.reload();
-  };
 
   // Debounce the filter bar into the applied query.
   useEffect(() => {
@@ -75,23 +69,20 @@ function Explorer() {
       setBusy(true);
       try {
         const [page, hist] = await Promise.all([
-          fetchEvents({ q, from, to, limit: 500 }),
-          fetchHistogram({ from, to, buckets: 90 }),
+          fetchEvents({ projectId: currentProjectId, q, from, to, limit: 500 }),
+          fetchHistogram({ projectId: currentProjectId, from, to, buckets: 90 }),
         ]);
         setEvents(page.events);
         setHistogram(hist);
         setError(null);
       } catch (err) {
-        if (err instanceof UnauthorizedError) {
-          setAuthFailed(true);
-          return;
-        }
+        if (err instanceof UnauthorizedError) return;
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }
     },
-    [q]
+    [q, currentProjectId]
   );
 
   const loadWindow = useCallback(() => {
@@ -104,17 +95,17 @@ function Explorer() {
     void loadRange(to - width, to);
   }, [customRange, rangeKey, loadRange]);
 
-  // Reload when the query or time window changes.
+  // Reload when the query, time window, or project changes.
   useEffect(() => {
     loadWindow();
   }, [loadWindow]);
 
   // Services list for the header.
   useEffect(() => {
-    fetchServices()
+    fetchServices(currentProjectId)
       .then((r) => setServices(r.services))
       .catch(() => undefined);
-  }, []);
+  }, [currentProjectId]);
 
   // Keep a ref for the SSE closure.
   useEffect(() => {
@@ -128,10 +119,10 @@ function Explorer() {
     return () => clearInterval(id);
   }, [live, loadWindow]);
 
-  // Live tail over SSE.
+  // Live tail over SSE (session cookie auth).
   useEffect(() => {
     if (!live) return;
-    const es = openStream(q);
+    const es = openStream(currentProjectId, q);
     es.onmessage = (msg) => {
       try {
         const event = JSON.parse(msg.data) as KingletEvent;
@@ -144,7 +135,7 @@ function Explorer() {
       }
     };
     return () => es.close();
-  }, [live, q]);
+  }, [live, q, currentProjectId]);
 
   // Keep the filter in the URL (without clobbering a shared range).
   useEffect(() => {
@@ -219,25 +210,17 @@ function Explorer() {
     const now = Date.now();
     const cur = customRange ?? { from: now - (WINDOWS[rangeKey] ?? 60 * 60_000), to: now };
     const url = new URL(window.location.origin + "/");
+    url.searchParams.set("project", String(currentProjectId));
     if (q) url.searchParams.set("q", q);
     url.searchParams.set("from", String(cur.from));
     url.searchParams.set("to", String(cur.to));
-    void navigate({ to: "/", search: { q: q || undefined, from: cur.from, to: cur.to }, replace: true });
+    void navigate({
+      to: "/",
+      search: { q: q || undefined, from: cur.from, to: cur.to },
+      replace: true,
+    });
     void navigator.clipboard?.writeText(url.toString());
-  }, [navigate, q, rangeKey, customRange]);
-
-  if (authFailed) {
-    return (
-      <TokenGate
-        error="That token was rejected."
-        onSave={() => {
-          // Root re-checks localStorage; just reload the view state.
-          setAuthFailed(false);
-          loadWindow();
-        }}
-      />
-    );
-  }
+  }, [navigate, q, rangeKey, customRange, currentProjectId]);
 
   return (
     <div className="flex h-screen flex-col bg-ink-950 text-mist">
@@ -284,15 +267,14 @@ function Explorer() {
         </span>
         <button
           onClick={() => {
-            void sprayDemoEvents().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+            void sprayDemoEvents(currentProjectId).catch((err) =>
+              setError(err instanceof Error ? err.message : String(err))
+            );
           }}
           className="k-chip-btn"
           title="Generate some noisy demo traffic"
         >
           spray demo
-        </button>
-        <button onClick={signOut} className="k-chip-btn">
-          sign out
         </button>
       </SiteHeader>
 
