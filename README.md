@@ -30,6 +30,14 @@ open http://localhost:8080
 
 Paste the token into the UI, hit **Spray demo logs**, and watch them stream in.
 
+No clone needed? Run the published multi-arch image (replace `your-org` with
+the repository owner):
+
+```bash
+docker run -d --name kinglet -p 8080:3000 -v kinglet-data:/data \
+  ghcr.io/your-org/kinglet:latest
+```
+
 Prefer fixed tokens? Set `KINGLET_TOKENS=tok_a,tok_b` in `.env` (copy from
 `.env.example`) or the compose environment.
 
@@ -204,7 +212,7 @@ you need to satisfy.
 
 ## Development
 
-Requires Node 22+ and [pnpm](https://pnpm.io) 10+.
+Requires Node 26+ and [pnpm](https://pnpm.io) 10+.
 
 ```bash
 pnpm install
@@ -214,6 +222,20 @@ pnpm typecheck
 ```
 
 The dev API writes to `apps/api/data/` and prints a fresh token on first boot.
+
+### Releasing images
+
+`.github/workflows/docker.yml` publishes multi-arch images (amd64 + arm64) to
+GHCR: pushes to `main` publish `:latest` / `:main` / `:sha-…`, and `v*` tags
+publish `:X.Y.Z` and `:X.Y`.
+
+```bash
+git tag v0.1.0 -m "Kinglet v0.1.0"
+git push origin v0.1.0
+```
+
+After the first publish, make the package public (GitHub → Packages → kinglet
+→ Package settings → Change visibility) if you want anonymous pulls.
 
 ## Roadmap
 

@@ -1,6 +1,8 @@
 services:
   kinglet:
     build: .
+    # Prefer the published image? Comment out `build:` and use:
+    # image: ghcr.io/your-org/kinglet:latest   (or pin a version, e.g. :0.1.0)
     image: kinglet:latest
     ports:
       - "8080:3000"
