@@ -123,6 +123,9 @@ function printBanner(config: Config, storage: Storage): void {
     if (!isRemoteDbPath(config.dbPath)) {
       console.log(`                  also written to ${path.join(config.dataDir, "kinglet.token")}`);
     }
+  } else if (config.savedToken) {
+    console.log(`  Token         → ${config.savedToken}`);
+    console.log(`                  restored from ${path.join(config.dataDir, "kinglet.token")}`);
   } else {
     console.log(`  Tokens        → from KINGLET_TOKENS env`);
   }

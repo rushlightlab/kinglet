@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 
 export type StorageKindSetting = "auto" | "sqlite" | "libsql";
@@ -13,8 +14,10 @@ export interface Config {
   /** Directory holding the database file (local stores only). */
   dataDir: string;
   tokens: string[];
-  /** Set when no KINGLET_TOKENS were provided: a token generated on first boot. */
+  /** A token newly generated on this boot (no env tokens, no saved token file). */
   generatedToken: string | null;
+  /** A token restored from kinglet.token so restarts don't invalidate clients. */
+  savedToken: string | null;
   retentionDays: number;
 }
 
@@ -41,8 +44,25 @@ export function loadConfig(): Config {
     .split(",")
     .map((t) => t.trim())
     .filter(Boolean);
-  const generatedToken = tokens.length === 0 ? `tok_${randomBytes(24).toString("base64url")}` : null;
-  if (generatedToken) tokens.push(generatedToken);
+  let generatedToken: string | null = null;
+  let savedToken: string | null = null;
+  if (tokens.length === 0) {
+    // Reuse the token from a previous boot so restarts (dev or Docker) don't
+    // invalidate clients that already saved it.
+    const tokenFile = path.join(dataDir, "kinglet.token");
+    try {
+      const raw = fs.readFileSync(tokenFile, "utf8").trim();
+      if (raw) savedToken = raw;
+    } catch {
+      // no saved token yet — generate below
+    }
+    if (savedToken) {
+      tokens.push(savedToken);
+    } else {
+      generatedToken = `tok_${randomBytes(24).toString("base64url")}`;
+      tokens.push(generatedToken);
+    }
+  }
   return {
     port,
     dbPath,
@@ -52,6 +72,7 @@ export function loadConfig(): Config {
     dataDir,
     tokens,
     generatedToken,
+    savedToken,
     retentionDays: intEnv("KINGLET_RETENTION_DAYS", 14),
   };
 }
