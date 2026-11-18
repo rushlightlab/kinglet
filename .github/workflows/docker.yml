@@ -17,6 +17,12 @@ on:
 env:
   REGISTRY: ghcr.io
 
+# Publish runs strictly in order (one global group), so a slower older build
+# can never overwrite :latest with an older commit.
+concurrency:
+  group: docker-publish
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
