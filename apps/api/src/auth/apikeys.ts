@@ -1,8 +1,9 @@
+import { and, eq, inArray } from "drizzle-orm";
 import type { Storage } from "../storage/index.js";
-import { randomToken } from "./passwords.js";
-import { isKeyScope } from "./roles.js";
+import * as schema from "../storage/schema.js";
 import type { KeyScope } from "./roles.js";
-import { sha256hex } from "./users.js";
+import { isKeyScope } from "./roles.js";
+import { randomToken, sha256hex } from "./tokens.js";
 
 /** Kinglet API keys: kl_… — machine credentials scoped per project. */
 export const KEY_PREFIX = "kl_";
@@ -25,49 +26,54 @@ export interface VerifiedKey {
   scopes: Set<KeyScope>;
 }
 
-function parseScopes(raw: unknown): KeyScope[] {
+function parseScopes(raw: string | null): KeyScope[] {
   try {
-    const parsed: unknown = JSON.parse(String(raw ?? "[]"));
+    const parsed: unknown = JSON.parse(raw ?? "[]");
     return Array.isArray(parsed) ? parsed.filter(isKeyScope) : [];
   } catch {
     return [];
   }
 }
 
-function rowToApiKey(row: Record<string, unknown>): ApiKey {
-  return {
-    id: Number(row.id),
-    projectId: Number(row.project_id),
-    name: String(row.name ?? ""),
-    prefix: String(row.prefix ?? ""),
-    scopes: parseScopes(row.scopes),
-    createdAt: Number(row.created_at ?? 0),
-    lastUsedAt: row.last_used_at === null || row.last_used_at === undefined ? null : Number(row.last_used_at),
-  };
-}
-
 export async function listApiKeys(storage: Storage, projectId: number): Promise<ApiKey[]> {
-  const rows = await storage.sql.all(
-    "SELECT * FROM api_keys WHERE project_id = ? ORDER BY id ASC",
-    [projectId]
-  );
-  return rows.map(rowToApiKey);
+  const rows = await storage.db
+    .select()
+    .from(schema.apiKeys)
+    .where(eq(schema.apiKeys.projectId, projectId))
+    .orderBy(schema.apiKeys.id);
+  return rows.map((row) => ({
+    id: Number(row.id),
+    projectId: Number(row.projectId),
+    name: row.name,
+    prefix: row.prefix,
+    scopes: parseScopes(row.scopes),
+    createdAt: Number(row.createdAt),
+    lastUsedAt: row.lastUsedAt === null ? null : Number(row.lastUsedAt),
+  }));
 }
 
 export async function createApiKey(
   storage: Storage,
-  input: { projectId: number; name: string; scopes: KeyScope[]; createdBy: number | null }
+  input: { projectId: number; name: string; scopes: KeyScope[]; createdBy: string | null }
 ): Promise<{ key: ApiKey; plaintext: string }> {
   const plaintext = KEY_PREFIX + randomToken();
   const prefix = `${plaintext.slice(0, 11)}…${plaintext.slice(-4)}`;
   const now = Date.now();
-  const info = await storage.sql.run(
-    "INSERT INTO api_keys (project_id, name, prefix, key_hash, scopes, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    [input.projectId, input.name, prefix, sha256hex(plaintext), JSON.stringify(input.scopes), input.createdBy, now]
-  );
+  const inserted = await storage.db
+    .insert(schema.apiKeys)
+    .values({
+      projectId: input.projectId,
+      name: input.name,
+      prefix,
+      keyHash: sha256hex(plaintext),
+      scopes: JSON.stringify(input.scopes),
+      createdBy: input.createdBy,
+      createdAt: now,
+    })
+    .returning({ id: schema.apiKeys.id });
   return {
     key: {
-      id: info.lastInsertRowid ?? 0,
+      id: Number(inserted[0]?.id ?? 0),
       projectId: input.projectId,
       name: input.name,
       prefix,
@@ -80,11 +86,14 @@ export async function createApiKey(
 }
 
 export async function deleteApiKey(storage: Storage, id: number, projectId: number): Promise<boolean> {
-  const info = await storage.sql.run("DELETE FROM api_keys WHERE id = ? AND project_id = ?", [
-    id,
-    projectId,
-  ]);
-  return info.rowsAffected > 0;
+  const result = await storage.db
+    .delete(schema.apiKeys)
+    .where(and(eq(schema.apiKeys.id, id), eq(schema.apiKeys.projectId, projectId)));
+  return Number(result.rowsAffected ?? 0) > 0;
+}
+
+export async function deleteProjectApiKeys(storage: Storage, projectId: number): Promise<void> {
+  await storage.db.delete(schema.apiKeys).where(eq(schema.apiKeys.projectId, projectId));
 }
 
 /** In-memory throttle so hot ingest batches don't UPDATE last_used_at constantly. */
@@ -92,19 +101,29 @@ const lastTouch = new Map<number, number>();
 
 export async function verifyApiKey(storage: Storage, plaintext: string): Promise<VerifiedKey | null> {
   if (!plaintext.startsWith(KEY_PREFIX)) return null;
-  const rows = await storage.sql.all("SELECT * FROM api_keys WHERE key_hash = ?", [sha256hex(plaintext)]);
+  const rows = await storage.db
+    .select()
+    .from(schema.apiKeys)
+    .where(eq(schema.apiKeys.keyHash, sha256hex(plaintext)))
+    .limit(1);
   const row = rows[0];
   if (!row) return null;
   const id = Number(row.id);
   const now = Date.now();
   if (now - (lastTouch.get(id) ?? 0) > 60_000) {
     lastTouch.set(id, now);
-    void storage.sql.run("UPDATE api_keys SET last_used_at = ? WHERE id = ?", [now, id]).catch(() => undefined);
+    void storage.db
+      .update(schema.apiKeys)
+      .set({ lastUsedAt: now })
+      .where(eq(schema.apiKeys.id, id))
+      .catch(() => undefined);
   }
   return {
     id,
-    projectId: Number(row.project_id),
-    name: String(row.name ?? ""),
+    projectId: Number(row.projectId),
+    name: row.name,
     scopes: new Set(parseScopes(row.scopes)),
   };
 }
+
+void inArray;

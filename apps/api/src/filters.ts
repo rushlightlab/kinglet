@@ -1,5 +1,6 @@
+import { sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { LEVEL_NAMES } from "./types.js";
-import type { StoredEvent } from "./types.js";
 
 /**
  * The filter grammar:
@@ -10,9 +11,8 @@ import type { StoredEvent } from "./types.js";
  *   "conn refused"     message contains phrase
  *   -healthcheck       message must NOT contain this
  *
- * Examples:
- *   level>=warn service:api -healthcheck
- *   "connection refused" env:prod
+ * buildWhere returns a Drizzle SQL condition (project-scoped) that both the
+ * query route and the monitor engine use.
  */
 export interface ParsedFilters {
   levelOp: "=" | ">" | ">=" | "<" | "<=" | null;
@@ -26,11 +26,6 @@ export interface ParsedFilters {
 export interface EventRange {
   from: number;
   to: number;
-}
-
-export interface WhereClause {
-  sql: string;
-  params: (string | number)[];
 }
 
 function tokenize(input: string): string[] {
@@ -98,43 +93,29 @@ export function parseFilters(q: string): ParsedFilters {
  * Free-text terms: >= 3 chars go through FTS5 trigram phrase search
  * (substring semantics), shorter ones fall back to LIKE.
  */
-function textClause(term: string): WhereClause {
+function textClause(term: string): SQL {
   if (term.length >= 3) {
     const phrase = `"${term.replace(/"/g, '""')}"`;
-    return {
-      sql: "id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ?)",
-      params: [phrase],
-    };
+    return sql`id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ${phrase})`;
   }
-  return { sql: "message LIKE ?", params: [`%${term}%`] };
+  return sql`message LIKE ${`%${term}%`}`;
 }
 
-export function buildWhere(f: ParsedFilters, range: EventRange, projectId: number): WhereClause {
-  const parts: string[] = ["project_id = ?", "ts >= ?", "ts <= ?"];
-  const params: (string | number)[] = [projectId, range.from, range.to];
+export function buildWhere(f: ParsedFilters, range: EventRange, projectId: number): SQL {
+  const parts: SQL[] = [
+    sql`project_id = ${projectId}`,
+    sql`ts >= ${range.from}`,
+    sql`ts <= ${range.to}`,
+  ];
   if (f.levelOp && f.levelValue !== null) {
-    parts.push(`level ${f.levelOp} ?`);
-    params.push(f.levelValue);
+    // Operator is a whitelisted literal; the value stays parameterized.
+    parts.push(sql`level ${sql.raw(f.levelOp)} ${f.levelValue}`);
   }
-  if (f.service !== null) {
-    parts.push("service = ?");
-    params.push(f.service);
-  }
-  if (f.env !== null) {
-    parts.push("env = ?");
-    params.push(f.env);
-  }
-  for (const term of f.includes) {
-    const clause = textClause(term);
-    parts.push(clause.sql);
-    params.push(...clause.params);
-  }
-  for (const term of f.excludes) {
-    const clause = textClause(term);
-    parts.push(`NOT (${clause.sql})`);
-    params.push(...clause.params);
-  }
-  return { sql: parts.join(" AND "), params };
+  if (f.service !== null) parts.push(sql`service = ${f.service}`);
+  if (f.env !== null) parts.push(sql`env = ${f.env}`);
+  for (const term of f.includes) parts.push(textClause(term));
+  for (const term of f.excludes) parts.push(sql`NOT (${textClause(term)})`);
+  return sql.join(parts, sql` AND `);
 }
 
 function compare(a: number, op: string, b: number): boolean {
@@ -149,7 +130,7 @@ function compare(a: number, op: string, b: number): boolean {
 }
 
 /** In-memory equivalent of buildWhere, used to filter the SSE live tail. */
-export function matchesEvent(f: ParsedFilters, row: StoredEvent): boolean {
+export function matchesEvent(f: ParsedFilters, row: { level: number; service: string | null; env: string | null; message: string }): boolean {
   if (f.levelOp && f.levelValue !== null && !compare(row.level, f.levelOp, f.levelValue)) return false;
   if (f.service !== null && (row.service ?? "").toLowerCase() !== f.service) return false;
   if (f.env !== null && (row.env ?? "").toLowerCase() !== f.env) return false;

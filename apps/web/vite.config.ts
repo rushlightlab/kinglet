@@ -11,9 +11,10 @@ export default defineConfig({
   // The router plugin must run before the react plugin.
   plugins: [tanstackRouter({ target: "react", autoCodeSplitting: true }), react(), tailwindcss()],
   server: {
-    // In dev the UI runs on its own port; /v1 is proxied to the Kinglet API.
+    // In dev the UI runs on its own port; /v1 and Better Auth are proxied.
     proxy: {
       "/v1": apiUrl,
+      "/api/auth": apiUrl,
     },
   },
 });

@@ -1,12 +1,13 @@
+import { and, count, eq, inArray } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { bodyLimit } from "hono/body-limit";
 import { Hono } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { streamSSE } from "hono/streaming";
 import type { Context } from "hono";
 import type { Config } from "./env.js";
 import { createApiKey, deleteApiKey, listApiKeys } from "./auth/apikeys.js";
+import type { KingletAuth } from "./auth/auth.js";
 import {
-  SESSION_COOKIE,
   can,
   getAuth,
   projectExists,
@@ -15,20 +16,17 @@ import {
   resolveProjectId,
 } from "./auth/middleware.js";
 import type { AppEnv } from "./auth/middleware.js";
-import { generatePassword, hashPassword, verifyPassword } from "./auth/passwords.js";
 import { KEY_SCOPES, isKeyScope, isRole, permissionsForRole } from "./auth/roles.js";
 import type { KeyScope, Role } from "./auth/roles.js";
 import {
-  createSession,
-  createUser,
-  deleteExpiredSessions,
-  deleteSession,
-  deleteUser,
-  getUser,
-  getUserWithHash,
+  countAdmins,
+  createManagedUser,
+  getUserById,
   listUsers,
-  updateUser,
-} from "./auth/users.js";
+  removeManagedUser,
+  setUserRole,
+  updateUserName,
+} from "./auth/user-admin.js";
 import { publishEvents, subscribeEvents } from "./bus.js";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
 import type { Normalized } from "./ingest.js";
@@ -44,12 +42,11 @@ import {
 } from "./monitors.js";
 import { sendNotice } from "./notify.js";
 import type { AlertNotice } from "./notify.js";
+import * as schema from "./storage/schema.js";
 import type { Storage } from "./storage/index.js";
 import { toClientEvent } from "./types.js";
 
 const MAX_BATCH = 10000;
-
-// ---------- small helpers ----------
 
 function parseTimestamp(value: string | undefined, fallback: number): number {
   if (value === undefined) return fallback;
@@ -69,43 +66,6 @@ function parseId(raw: string): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function isHttps(c: Context<AppEnv>): boolean {
-  if (c.req.header("x-forwarded-proto") === "https") return true;
-  try {
-    return new URL(c.req.url).protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function setSessionCookie(c: Context<AppEnv>, token: string, sessionDays: number): void {
-  setCookie(c, SESSION_COOKIE, token, {
-    httpOnly: true,
-    sameSite: "Lax",
-    path: "/",
-    maxAge: sessionDays * 86_400,
-    secure: isHttps(c),
-  });
-}
-
-/** Simple in-memory login throttle: 10 attempts / 5 minutes per IP. */
-const loginAttempts = new Map<string, { count: number; resetAt: number }>();
-function allowLogin(ip: string): boolean {
-  const now = Date.now();
-  const entry = loginAttempts.get(ip);
-  if (!entry || now > entry.resetAt) {
-    loginAttempts.set(ip, { count: 1, resetAt: now + 5 * 60_000 });
-    return true;
-  }
-  if (entry.count >= 10) return false;
-  entry.count++;
-  return true;
-}
-
-function clientIp(c: Context<AppEnv>): string {
-  return c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || "local";
-}
-
 async function readJson(c: Context<AppEnv>): Promise<Record<string, unknown> | null> {
   try {
     const body: unknown = await c.req.json();
@@ -115,6 +75,15 @@ async function readJson(c: Context<AppEnv>): Promise<Record<string, unknown> | n
   } catch {
     return null;
   }
+}
+
+/** Strict body parser for mutations: distinguishes malformed JSON from bad fields. */
+async function readJsonStrict(
+  c: Context<AppEnv>
+): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; error: string }> {
+  const body = await readJson(c);
+  if (!body) return { ok: false, error: "invalid JSON body" };
+  return { ok: true, body };
 }
 
 function uniqueSlug(name: string): string {
@@ -127,76 +96,37 @@ function uniqueSlug(name: string): string {
   );
 }
 
-// ---------- routes ----------
-
 export function registerRoutes(
   app: Hono<AppEnv>,
   storage: Storage,
   engine: MonitorEngine,
-  config: Config
+  config: Config,
+  auth: KingletAuth
 ): void {
-  // ================= auth =================
+  void config;
 
-  app.post("/v1/auth/login", async (c) => {
-    if (!allowLogin(clientIp(c))) return c.json({ error: "too many attempts, try again later" }, 429);
-    const body = await readJson(c);
-    const email = typeof body?.email === "string" ? body.email.trim() : "";
-    const password = typeof body?.password === "string" ? body.password : "";
-    if (!email || !password) return c.json({ error: "email and password are required" }, 400);
+  // ================= current user =================
 
-    const found = await getUserWithHash(storage, email);
-    if (!found || !verifyPassword(password, found.passwordHash)) {
-      return c.json({ error: "invalid email or password" }, 401);
-    }
-    if (Math.random() < 0.05) void deleteExpiredSessions(storage);
-    const token = await createSession(storage, found.user.id, config.sessionDays);
-    setSessionCookie(c, token, config.sessionDays);
-    return c.json({
-      user: found.user,
-      permissions: permissionsForRole(found.user.role as Role),
-    });
-  });
-
-  app.post("/v1/auth/logout", async (c) => {
-    const token = getCookie(c, SESSION_COOKIE);
-    if (token) await deleteSession(storage, token);
-    deleteCookie(c, SESSION_COOKIE, { path: "/" });
-    return c.json({ ok: true });
-  });
-
-  app.get("/v1/me", (c) => {
-    const user = requireUser(c);
-    if (user instanceof Response) return user;
-    return c.json({ user, permissions: permissionsForRole(user.role as Role) });
-  });
-
-  app.patch("/v1/me/password", async (c) => {
-    const user = requireUser(c);
-    if (user instanceof Response) return user;
-    const body = await readJson(c);
-    const current = typeof body?.currentPassword === "string" ? body.currentPassword : "";
-    const next = typeof body?.newPassword === "string" ? body.newPassword : "";
-    if (next.length < 8) return c.json({ error: "new password must be at least 8 characters" }, 400);
-    const found = await getUserWithHash(storage, user.email);
-    if (!found || !verifyPassword(current, found.passwordHash)) {
-      return c.json({ error: "current password is incorrect" }, 401);
-    }
-    await updateUser(storage, user.id, { passwordHash: hashPassword(next) });
-    return c.json({ ok: true });
+  app.get("/v1/me", async (c) => {
+    const authInfo = getAuth(c);
+    if (authInfo.kind !== "user") return c.json({ error: "user session required" }, 403);
+    const user = await getUserById(storage, authInfo.user.id);
+    if (!user) return c.json({ error: "user not found" }, 404);
+    return c.json({ user, permissions: permissionsForRole(user.role) });
   });
 
   // ================= projects =================
 
   app.get("/v1/projects", async (c) => {
-    const auth = getAuth(c);
-    if (auth.kind === "key") return c.json({ error: "user session required" }, 403);
-    const rows = await storage.sql.all("SELECT id, name, slug, created_at FROM projects ORDER BY id ASC");
+    const authInfo = getAuth(c);
+    if (authInfo.kind === "key") return c.json({ error: "user session required" }, 403);
+    const rows = await storage.db.select().from(schema.projects).orderBy(schema.projects.id);
     return c.json({
       projects: rows.map((r) => ({
         id: Number(r.id),
-        name: String(r.name),
-        slug: String(r.slug),
-        createdAt: Number(r.created_at ?? 0),
+        name: r.name,
+        slug: r.slug,
+        createdAt: Number(r.createdAt),
       })),
     });
   });
@@ -204,23 +134,32 @@ export function registerRoutes(
   app.post("/v1/projects", async (c) => {
     const denied = requirePermission(c, "projects.write");
     if (denied) return denied;
-    const body = await readJson(c);
+    const parsedBody = await readJsonStrict(c);
+    if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
+    const body = parsedBody.body;
     const name = typeof body?.name === "string" ? body.name.trim().slice(0, 64) : "";
     if (!name) return c.json({ error: "name is required" }, 400);
     const base = uniqueSlug(name);
     let slug = base;
     for (let i = 2; ; i++) {
-      const clash = await storage.sql.all("SELECT id FROM projects WHERE slug = ?", [slug]);
+      const clash = await storage.db
+        .select({ id: schema.projects.id })
+        .from(schema.projects)
+        .where(eq(schema.projects.slug, slug))
+        .limit(1);
       if (clash.length === 0) break;
       slug = `${base}-${i}`;
     }
     const now = Date.now();
-    const info = await storage.sql.run("INSERT INTO projects (name, slug, created_at) VALUES (?, ?, ?)", [
-      name,
-      slug,
-      now,
-    ]);
-    return c.json({ project: { id: info.lastInsertRowid ?? 0, name, slug, createdAt: now } }, 201);
+    const rows = await storage.db
+      .insert(schema.projects)
+      .values({ name, slug, createdAt: now })
+      .returning();
+    const row = rows[0];
+    return c.json(
+      { project: { id: Number(row?.id ?? 0), name, slug, createdAt: now } },
+      201
+    );
   });
 
   app.delete("/v1/projects/:id", async (c) => {
@@ -228,17 +167,21 @@ export function registerRoutes(
     if (denied) return denied;
     const id = parseId(c.req.param("id"));
     if (id === null) return c.json({ error: "invalid project id" }, 400);
-    const rows = await storage.sql.all("SELECT COUNT(*) AS n FROM projects");
-    if (Number(rows[0]?.n ?? 0) <= 1) return c.json({ error: "cannot delete the last project" }, 400);
+    const totals = await storage.db.select({ n: count() }).from(schema.projects);
+    if (Number(totals[0]?.n ?? 0) <= 1) return c.json({ error: "cannot delete the last project" }, 400);
     if (!(await projectExists(storage, id))) return c.json({ error: "project not found" }, 404);
-    await storage.sql.run(
-      "DELETE FROM alerts WHERE monitor_id IN (SELECT id FROM monitors WHERE project_id = ?)",
-      [id]
-    );
-    await storage.sql.run("DELETE FROM monitors WHERE project_id = ?", [id]);
-    await storage.sql.run("DELETE FROM events WHERE project_id = ?", [id]);
-    await storage.sql.run("DELETE FROM api_keys WHERE project_id = ?", [id]);
-    await storage.sql.run("DELETE FROM projects WHERE id = ?", [id]);
+
+    const monitorIds = storage.db
+      .select({ id: schema.monitors.id })
+      .from(schema.monitors)
+      .where(eq(schema.monitors.projectId, id));
+    await storage.db.transaction(async (tx) => {
+      await tx.delete(schema.alerts).where(inArray(schema.alerts.monitorId, monitorIds));
+      await tx.delete(schema.monitors).where(eq(schema.monitors.projectId, id));
+      await tx.delete(schema.events).where(eq(schema.events.projectId, id));
+      await tx.delete(schema.apiKeys).where(eq(schema.apiKeys.projectId, id));
+      await tx.delete(schema.projects).where(eq(schema.projects.id, id));
+    });
     await engine.refresh();
     return c.json({ ok: true });
   });
@@ -254,29 +197,42 @@ export function registerRoutes(
   app.post("/v1/users", async (c) => {
     const denied = requirePermission(c, "users.write");
     if (denied) return denied;
-    const body = await readJson(c);
+    const parsedBody = await readJsonStrict(c);
+    if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
+    const body = parsedBody.body;
     const email = typeof body?.email === "string" ? body.email.trim() : "";
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return c.json({ error: "a valid email is required" }, 400);
-    if (await getUserWithHash(storage, email)) return c.json({ error: "a user with that email already exists" }, 409);
     const role: Role = isRole(body?.role) ? body.role : "member";
     const name = typeof body?.name === "string" ? body.name.trim().slice(0, 80) : "";
-    const provided = typeof body?.password === "string" && body.password.length > 0 ? body.password : null;
-    if (provided !== null && provided.length < 8) {
+    const password = typeof body?.password === "string" && body.password.length > 0 ? body.password : undefined;
+    if (password !== undefined && password.length < 8) {
       return c.json({ error: "password must be at least 8 characters" }, 400);
     }
-    const password = provided ?? generatePassword();
-    const user = await createUser(storage, { email, name, role, passwordHash: hashPassword(password) });
-    return c.json({ user, ...(provided === null ? { password } : {}) }, 201);
+    try {
+      const result = await createManagedUser(storage, auth, c.req.raw.headers, {
+        email,
+        name: name || email,
+        role,
+        password,
+      });
+      return c.json(result, 201);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : "could not create user" }, 400);
+    }
   });
 
   app.patch("/v1/users/:id", async (c) => {
     const denied = requirePermission(c, "users.write");
     if (denied) return denied;
-    const id = parseId(c.req.param("id"));
-    if (id === null) return c.json({ error: "invalid user id" }, 400);
-    const target = await getUser(storage, id);
+    const me = requireUser(c);
+    if (me instanceof Response) return me;
+    const userId = c.req.param("id");
+    if (!userId) return c.json({ error: "invalid user id" }, 400);
+    const target = await getUserById(storage, userId);
     if (!target) return c.json({ error: "user not found" }, 404);
-    const body = await readJson(c);
+    const parsedBody = await readJsonStrict(c);
+    if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
+    const body = parsedBody.body;
 
     let role: Role | undefined;
     if (body?.role !== undefined) {
@@ -284,17 +240,21 @@ export function registerRoutes(
       role = body.role;
     }
     if (target.role === "admin" && role !== undefined && role !== "admin") {
-      const rows = await storage.sql.all("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'");
-      if (Number(rows[0]?.n ?? 0) <= 1) return c.json({ error: "cannot demote the last administrator" }, 400);
+      if ((await countAdmins(storage)) <= 1) {
+        return c.json({ error: "cannot demote the last administrator" }, 400);
+      }
     }
     const name = typeof body?.name === "string" ? body.name.trim().slice(0, 80) : undefined;
-    let passwordHash: string | undefined;
-    if (typeof body?.password === "string" && body.password.length > 0) {
-      if (body.password.length < 8) return c.json({ error: "password must be at least 8 characters" }, 400);
-      passwordHash = hashPassword(body.password);
+    if (name !== undefined) await updateUserName(storage, userId, name);
+    if (role !== undefined) {
+      try {
+        await setUserRole(storage, auth, c.req.raw.headers, userId, role);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : "could not change role" }, 400);
+      }
     }
-    const user = await updateUser(storage, id, { name, role, passwordHash });
-    return c.json({ user });
+    const updated = await getUserById(storage, userId);
+    return c.json({ user: updated });
   });
 
   app.delete("/v1/users/:id", async (c) => {
@@ -302,13 +262,17 @@ export function registerRoutes(
     if (denied) return denied;
     const me = requireUser(c);
     if (me instanceof Response) return me;
-    const id = parseId(c.req.param("id"));
-    if (id === null) return c.json({ error: "invalid user id" }, 400);
-    if (id === me.id) return c.json({ error: "you cannot delete your own account" }, 400);
-    const target = await getUser(storage, id);
+    const userId = c.req.param("id");
+    if (!userId) return c.json({ error: "invalid user id" }, 400);
+    if (userId === me.id) return c.json({ error: "you cannot delete your own account" }, 400);
+    const target = await getUserById(storage, userId);
     if (!target) return c.json({ error: "user not found" }, 404);
     if (target.role === "admin") return c.json({ error: "administrators cannot be deleted" }, 400);
-    await deleteUser(storage, id);
+    try {
+      await removeManagedUser(auth, c.req.raw.headers, userId);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : "could not delete user" }, 400);
+    }
     return c.json({ ok: true });
   });
 
@@ -329,7 +293,9 @@ export function registerRoutes(
     const projectId = parseId(c.req.param("id"));
     if (projectId === null) return c.json({ error: "invalid project id" }, 400);
     if (!(await projectExists(storage, projectId))) return c.json({ error: "project not found" }, 404);
-    const body = await readJson(c);
+    const parsedBody = await readJsonStrict(c);
+    if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
+    const body = parsedBody.body;
     const name = typeof body?.name === "string" ? body.name.trim().slice(0, 80) : "";
     if (!name) return c.json({ error: "name is required" }, 400);
     const rawScopes = Array.isArray(body?.scopes) ? body.scopes.filter(isKeyScope) : [];
@@ -356,11 +322,11 @@ export function registerRoutes(
   // ================= events =================
 
   app.post("/v1/events", bodyLimit({ maxSize: 8 * 1024 * 1024 }), async (c) => {
-    const auth = getAuth(c);
-    if (auth.kind === "key" && !auth.scopes.has("ingest")) {
+    const authInfo = getAuth(c);
+    if (authInfo.kind === "key" && !authInfo.scopes.has("ingest")) {
       return c.json({ error: "this key cannot ingest (missing ingest scope)" }, 403);
     }
-    if (auth.kind === "user" && !can(auth, "logs.write")) return c.json({ error: "forbidden" }, 403);
+    if (authInfo.kind === "user" && !can(authInfo, "logs.write")) return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
 
@@ -406,6 +372,13 @@ export function registerRoutes(
     const rows = await storage.insertEvents(projectId, normalized);
     publishEvents(rows);
 
+    if (rows.length === 0 && errors.length + parseErrors > 0) {
+      return c.json(
+        { accepted: 0, rejected: errors.length + parseErrors, errors: errors.slice(0, 3) },
+        422
+      );
+    }
+
     return c.json({
       accepted: rows.length,
       rejected: errors.length + parseErrors,
@@ -415,11 +388,11 @@ export function registerRoutes(
   });
 
   app.get("/v1/events", async (c) => {
-    const auth = getAuth(c);
-    if (auth.kind === "key" && !auth.scopes.has("query")) {
+    const authInfo = getAuth(c);
+    if (authInfo.kind === "key" && !authInfo.scopes.has("query")) {
       return c.json({ error: "this key cannot query (missing query scope)" }, 403);
     }
-    if (auth.kind === "user" && !can(auth, "logs.read")) return c.json({ error: "forbidden" }, 403);
+    if (authInfo.kind === "user" && !can(authInfo, "logs.read")) return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
 
@@ -430,8 +403,8 @@ export function registerRoutes(
     const limit = clampInt(c.req.query("limit"), 200, 1, 1000);
     const cursorRaw = Number(c.req.query("cursor"));
     const cursor = Number.isFinite(cursorRaw) && cursorRaw > 0 ? cursorRaw : null;
-    const where = buildWhere(parseFilters(q), { from, to }, projectId);
-    const rows = await storage.queryEvents({ where: where.sql, params: where.params, limit, cursor });
+    const filter = buildWhere(parseFilters(q), { from, to }, projectId);
+    const rows = await storage.queryEvents({ filter, limit, cursor });
     return c.json({
       events: rows.map(toClientEvent),
       nextCursor: rows.length === limit ? rows[rows.length - 1]?.id ?? null : null,
@@ -439,9 +412,9 @@ export function registerRoutes(
   });
 
   app.get("/v1/histogram", async (c) => {
-    const auth = getAuth(c);
-    if (auth.kind === "key" && !auth.scopes.has("query")) return c.json({ error: "forbidden" }, 403);
-    if (auth.kind === "user" && !can(auth, "logs.read")) return c.json({ error: "forbidden" }, 403);
+    const authInfo = getAuth(c);
+    if (authInfo.kind === "key" && !authInfo.scopes.has("query")) return c.json({ error: "forbidden" }, 403);
+    if (authInfo.kind === "user" && !can(authInfo, "logs.read")) return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
     const now = Date.now();
@@ -453,40 +426,52 @@ export function registerRoutes(
   });
 
   app.get("/v1/services", async (c) => {
-    const auth = getAuth(c);
-    if (auth.kind === "key" && !auth.scopes.has("query")) return c.json({ error: "forbidden" }, 403);
-    if (auth.kind === "user" && !can(auth, "logs.read")) return c.json({ error: "forbidden" }, 403);
+    const authInfo = getAuth(c);
+    if (authInfo.kind === "key" && !authInfo.scopes.has("query")) return c.json({ error: "forbidden" }, 403);
+    if (authInfo.kind === "user" && !can(authInfo, "logs.read")) return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
     return c.json({ services: await storage.listServices(projectId) });
   });
 
   app.get("/v1/stream", async (c) => {
-    const auth = getAuth(c);
-    if (auth.kind === "key" && !auth.scopes.has("query")) return c.json({ error: "forbidden" }, 403);
-    if (auth.kind === "user" && !can(auth, "logs.read")) return c.json({ error: "forbidden" }, 403);
+    const authInfo = getAuth(c);
+    if (authInfo.kind === "key" && !authInfo.scopes.has("query")) return c.json({ error: "forbidden" }, 403);
+    if (authInfo.kind === "user" && !can(authInfo, "logs.read")) return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
 
     const q = c.req.query("q") ?? "";
     const f = parseFilters(q);
     return streamSSE(c, async (stream) => {
+      let closed = false;
+      const cleanup = (): void => {
+        closed = true;
+        clearInterval(heartbeat);
+        unsubscribe();
+      };
+      const fail = (err: unknown): void => {
+        console.warn("[kinglet] SSE write failed:", err instanceof Error ? err.message : err);
+        cleanup();
+        void stream.close().catch(() => undefined);
+      };
       const unsubscribe = subscribeEvents((rows) => {
+        if (closed) return;
         for (const row of rows) {
           if (row.projectId !== projectId) continue;
           if (!matchesEvent(f, row)) continue;
           void stream
             .writeSSE({ data: JSON.stringify(toClientEvent(row)) })
-            .catch(() => undefined);
+            .catch(fail);
         }
       });
       const heartbeat = setInterval(() => {
-        void stream.write(": ping\n").catch(() => undefined);
+        if (closed) return;
+        void stream.write(": ping\n").catch(fail);
       }, 15000);
-      stream.onAbort(() => {
-        clearInterval(heartbeat);
-        unsubscribe();
-      });
+      stream.onAbort(cleanup);
+      // Flush headers immediately so the client sees the stream open.
+      await stream.write(": connected\n\n");
       await new Promise<void>((resolve) => stream.onAbort(() => resolve()));
     });
   });
@@ -494,10 +479,10 @@ export function registerRoutes(
   // ================= monitors =================
 
   const monitorGuard = (c: Context<AppEnv>, write: boolean): Response | null => {
-    const auth = getAuth(c);
-    if (auth.kind === "legacy") return null;
-    if (auth.kind === "key") return c.json({ error: "keys cannot manage monitors" }, 403);
-    return can(auth, write ? "monitors.write" : "monitors.read") ? null : c.json({ error: "forbidden" }, 403);
+    const authInfo = getAuth(c);
+    if (authInfo.kind === "legacy") return null;
+    if (authInfo.kind === "key") return c.json({ error: "keys cannot manage monitors" }, 403);
+    return can(authInfo, write ? "monitors.write" : "monitors.read") ? null : c.json({ error: "forbidden" }, 403);
   };
 
   app.get("/v1/monitors", async (c) => {
@@ -513,7 +498,9 @@ export function registerRoutes(
     if (denied) return denied;
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
-    const body = await readJson(c);
+    const parsedBody = await readJsonStrict(c);
+    if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
+    const body = parsedBody.body;
     const result = await createMonitorFromRaw(storage, projectId, body);
     if (!result.ok) return c.json({ error: result.error }, 400);
     await engine.refresh();
@@ -527,7 +514,9 @@ export function registerRoutes(
     if (projectId instanceof Response) return projectId;
     const id = parseId(c.req.param("id"));
     if (id === null) return c.json({ error: "invalid monitor id" }, 400);
-    const body = await readJson(c);
+    const parsedBody = await readJsonStrict(c);
+    if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
+    const body = parsedBody.body;
     const result = await updateMonitorFromRaw(storage, id, projectId, body);
     if (!result.ok) {
       const notFound = "notFound" in result && result.notFound === true;

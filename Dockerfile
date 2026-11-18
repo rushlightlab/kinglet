@@ -7,6 +7,7 @@ RUN npm install -g pnpm@10.15.0
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps ./apps
 COPY packages ./packages
+COPY drizzle ./drizzle
 RUN pnpm install --frozen-lockfile || pnpm install
 COPY turbo.json ./
 RUN pnpm exec turbo run build --filter=@kinglet/api --filter=@kinglet/web

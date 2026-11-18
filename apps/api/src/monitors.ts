@@ -1,8 +1,11 @@
+import { and, asc, count, desc, eq } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { subscribeEvents } from "./bus.js";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
 import type { ParsedFilters } from "./filters.js";
 import { sendNotice } from "./notify.js";
 import type { AlertNotice, NotifyChannel } from "./notify.js";
+import * as schema from "./storage/schema.js";
 import type { Storage } from "./storage/index.js";
 import type { StoredEvent } from "./types.js";
 
@@ -89,14 +92,20 @@ export function parseMonitorInput(raw: unknown): { ok: true; value: MonitorInput
 
   const channels: NotifyChannel[] = [];
   const rawChannels = Array.isArray(o.channels) ? o.channels.slice(0, 8) : [];
-  for (const c of rawChannels) {
-    if (c === null || typeof c !== "object") continue;
+  for (const [index, c] of rawChannels.entries()) {
+    if (c === null || typeof c !== "object") {
+      return { ok: false, error: `channel ${index + 1} must be an object` };
+    }
     const cc = c as Record<string, unknown>;
     const type = cc.type;
     const url = typeof cc.url === "string" ? cc.url.trim() : "";
-    if (typeof type === "string" && CHANNEL_TYPES.includes(type) && /^https?:\/\//i.test(url) && url.length <= 2048) {
-      channels.push({ type: type as NotifyChannel["type"], url });
+    if (typeof type !== "string" || !CHANNEL_TYPES.includes(type)) {
+      return { ok: false, error: `channel ${index + 1}: type must be webhook, discord, or slack` };
     }
+    if (!/^https?:\/\//i.test(url) || url.length > 2048) {
+      return { ok: false, error: `channel ${index + 1}: url must start with http:// or https://` };
+    }
+    channels.push({ type: type as NotifyChannel["type"], url });
   }
 
   return {
@@ -115,54 +124,40 @@ export function parseMonitorInput(raw: unknown): { ok: true; value: MonitorInput
   };
 }
 
-function rowToMonitor(row: Record<string, unknown>): Monitor {
-  let channels: NotifyChannel[] = [];
+function parseChannels(raw: string): NotifyChannel[] {
   try {
-    const parsed = JSON.parse(String(row.channels ?? "[]")) as unknown;
-    if (Array.isArray(parsed)) channels = parsed as NotifyChannel[];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as NotifyChannel[]) : [];
   } catch {
-    // fall back to no channels rather than breaking the monitor list
+    return [];
   }
-  return {
-    id: Number(row.id),
-    projectId: Number(row.project_id ?? 1),
-    name: String(row.name ?? ""),
-    query: String(row.query ?? ""),
-    kind: (MONITOR_KINDS as readonly string[]).includes(String(row.kind))
-      ? (String(row.kind) as MonitorKind)
-      : "count_above",
-    threshold: Number(row.threshold ?? 1),
-    windowMs: Number(row.window_ms ?? 300_000),
-    intervalMs: Number(row.interval_ms ?? 60_000),
-    cooldownMs: Number(row.cooldown_ms ?? 600_000),
-    enabled: Number(row.enabled ?? 1) === 1,
-    channels,
-    createdAt: Number(row.created_at ?? 0),
-    updatedAt: Number(row.updated_at ?? 0),
-  };
 }
 
-function rowToAlert(row: Record<string, unknown>): AlertRecord {
+function rowToMonitor(row: typeof schema.monitors.$inferSelect): Monitor {
   return {
     id: Number(row.id),
-    monitorId: Number(row.monitor_id),
-    monitorName: row.monitor_name === null || row.monitor_name === undefined ? null : String(row.monitor_name),
-    state: String(row.state) === "resolved" ? "resolved" : "fired",
-    summary: String(row.summary ?? ""),
-    count: row.count === null || row.count === undefined ? null : Number(row.count),
-    sampleMessage:
-      row.sample_message === null || row.sample_message === undefined ? null : String(row.sample_message),
-    firedAt: Number(row.fired_at ?? 0),
-    resolvedAt: row.resolved_at === null || row.resolved_at === undefined ? null : Number(row.resolved_at),
+    projectId: Number(row.projectId),
+    name: row.name,
+    query: row.query,
+    kind: (MONITOR_KINDS as readonly string[]).includes(row.kind) ? (row.kind as MonitorKind) : "count_above",
+    threshold: Number(row.threshold),
+    windowMs: Number(row.windowMs),
+    intervalMs: Number(row.intervalMs),
+    cooldownMs: Number(row.cooldownMs),
+    enabled: Number(row.enabled) === 1,
+    channels: parseChannels(row.channels),
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
   };
 }
 
 /** All monitors when projectId is omitted (the alert engine); one project otherwise. */
 export async function listMonitors(storage: Storage, projectId?: number): Promise<Monitor[]> {
-  const rows =
-    projectId === undefined
-      ? await storage.sql.all("SELECT * FROM monitors ORDER BY id ASC")
-      : await storage.sql.all("SELECT * FROM monitors WHERE project_id = ? ORDER BY id ASC", [projectId]);
+  const rows = await storage.db
+    .select()
+    .from(schema.monitors)
+    .where(projectId === undefined ? undefined : eq(schema.monitors.projectId, projectId))
+    .orderBy(asc(schema.monitors.id));
   return rows.map(rowToMonitor);
 }
 
@@ -171,10 +166,10 @@ export async function getMonitor(
   id: number,
   projectId?: number
 ): Promise<Monitor | null> {
-  const rows =
-    projectId === undefined
-      ? await storage.sql.all("SELECT * FROM monitors WHERE id = ?", [id])
-      : await storage.sql.all("SELECT * FROM monitors WHERE id = ? AND project_id = ?", [id, projectId]);
+  const condition = projectId === undefined
+    ? eq(schema.monitors.id, id)
+    : and(eq(schema.monitors.id, id), eq(schema.monitors.projectId, projectId));
+  const rows = await storage.db.select().from(schema.monitors).where(condition).limit(1);
   const row = rows[0];
   return row ? rowToMonitor(row) : null;
 }
@@ -190,24 +185,25 @@ export async function createMonitorFromRaw(
   if (!input.ok) return input;
   const v = input.value;
   const now = Date.now();
-  const info = await storage.sql.run(
-    "INSERT INTO monitors (project_id, name, query, kind, threshold, window_ms, interval_ms, cooldown_ms, enabled, channels, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [
+  const rows = await storage.db
+    .insert(schema.monitors)
+    .values({
       projectId,
-      v.name,
-      v.query,
-      v.kind,
-      v.threshold,
-      v.windowMs,
-      v.intervalMs,
-      v.cooldownMs,
-      v.enabled ? 1 : 0,
-      JSON.stringify(v.channels),
-      now,
-      now,
-    ]
-  );
-  return { ok: true, monitor: { id: info.lastInsertRowid ?? 0, projectId, ...v, createdAt: now, updatedAt: now } };
+      name: v.name,
+      query: v.query,
+      kind: v.kind,
+      threshold: v.threshold,
+      windowMs: v.windowMs,
+      intervalMs: v.intervalMs,
+      cooldownMs: v.cooldownMs,
+      enabled: v.enabled ? 1 : 0,
+      channels: JSON.stringify(v.channels),
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+  const row = rows[0];
+  return row ? { ok: true, monitor: rowToMonitor(row) } : { ok: false, error: "insert failed" };
 }
 
 export async function updateMonitorFromRaw(
@@ -219,44 +215,66 @@ export async function updateMonitorFromRaw(
   const input = parseMonitorInput(raw);
   if (!input.ok) return input;
   const v = input.value;
-  const info = await storage.sql.run(
-    "UPDATE monitors SET name = ?, query = ?, kind = ?, threshold = ?, window_ms = ?, interval_ms = ?, cooldown_ms = ?, enabled = ?, channels = ?, updated_at = ? WHERE id = ? AND project_id = ?",
-    [
-      v.name,
-      v.query,
-      v.kind,
-      v.threshold,
-      v.windowMs,
-      v.intervalMs,
-      v.cooldownMs,
-      v.enabled ? 1 : 0,
-      JSON.stringify(v.channels),
-      Date.now(),
-      id,
-      projectId,
-    ]
-  );
-  if (info.rowsAffected === 0) return { ok: false, error: "monitor not found", notFound: true };
-  const monitor = await getMonitor(storage, id, projectId);
-  return monitor ? { ok: true, monitor } : { ok: false, error: "monitor not found", notFound: true };
+  const rows = await storage.db
+    .update(schema.monitors)
+    .set({
+      name: v.name,
+      query: v.query,
+      kind: v.kind,
+      threshold: v.threshold,
+      windowMs: v.windowMs,
+      intervalMs: v.intervalMs,
+      cooldownMs: v.cooldownMs,
+      enabled: v.enabled ? 1 : 0,
+      channels: JSON.stringify(v.channels),
+      updatedAt: Date.now(),
+    })
+    .where(and(eq(schema.monitors.id, id), eq(schema.monitors.projectId, projectId)))
+    .returning();
+  const row = rows[0];
+  return row ? { ok: true, monitor: rowToMonitor(row) } : { ok: false, error: "monitor not found", notFound: true };
 }
 
 export async function deleteMonitor(storage: Storage, id: number, projectId: number): Promise<boolean> {
-  const info = await storage.sql.run("DELETE FROM monitors WHERE id = ? AND project_id = ?", [id, projectId]);
-  if (info.rowsAffected === 0) return false;
-  await storage.sql.run("DELETE FROM alerts WHERE monitor_id = ?", [id]);
-  return true;
+  return storage.db.transaction(async (tx) => {
+    const result = await tx
+      .delete(schema.monitors)
+      .where(and(eq(schema.monitors.id, id), eq(schema.monitors.projectId, projectId)));
+    if (Number(result.rowsAffected ?? 0) === 0) return false;
+    await tx.delete(schema.alerts).where(eq(schema.alerts.monitorId, id));
+    return true;
+  });
 }
 
 export async function listAlerts(storage: Storage, limit: number, projectId: number): Promise<AlertRecord[]> {
-  const rows = await storage.sql.all(
-    `SELECT a.id, a.monitor_id, a.state, a.summary, a.count, a.sample_message, a.fired_at, a.resolved_at, m.name AS monitor_name
-     FROM alerts a JOIN monitors m ON m.id = a.monitor_id
-     WHERE m.project_id = ?
-     ORDER BY a.fired_at DESC LIMIT ?`,
-    [projectId, Math.min(500, Math.max(1, limit))]
-  );
-  return rows.map(rowToAlert);
+  const rows = await storage.db
+    .select({
+      id: schema.alerts.id,
+      monitorId: schema.alerts.monitorId,
+      state: schema.alerts.state,
+      summary: schema.alerts.summary,
+      count: schema.alerts.count,
+      sampleMessage: schema.alerts.sampleMessage,
+      firedAt: schema.alerts.firedAt,
+      resolvedAt: schema.alerts.resolvedAt,
+      monitorName: schema.monitors.name,
+    })
+    .from(schema.alerts)
+    .innerJoin(schema.monitors, eq(schema.monitors.id, schema.alerts.monitorId))
+    .where(eq(schema.monitors.projectId, projectId))
+    .orderBy(desc(schema.alerts.firedAt))
+    .limit(Math.min(500, Math.max(1, limit)));
+  return rows.map((row) => ({
+    id: Number(row.id),
+    monitorId: Number(row.monitorId),
+    monitorName: row.monitorName ?? null,
+    state: row.state === "resolved" ? "resolved" : "fired",
+    summary: row.summary,
+    count: row.count === null ? null : Number(row.count),
+    sampleMessage: row.sampleMessage ?? null,
+    firedAt: Number(row.firedAt),
+    resolvedAt: row.resolvedAt === null ? null : Number(row.resolvedAt),
+  }));
 }
 
 export interface MonitorEngine {
@@ -335,13 +353,20 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
   ): Promise<void> {
     const now = Date.now();
     const summary = summaryFor(m, detail);
-    const info = await storage.sql.run(
-      "INSERT INTO alerts (monitor_id, state, summary, count, sample_message, fired_at) VALUES (?, 'fired', ?, ?, ?, ?)",
-      [m.id, summary, detail.count ?? null, detail.sampleMessage ?? null, now]
-    );
+    const inserted = await storage.db
+      .insert(schema.alerts)
+      .values({
+        monitorId: m.id,
+        state: "fired",
+        summary,
+        count: detail.count ?? null,
+        sampleMessage: detail.sampleMessage ?? null,
+        firedAt: now,
+      })
+      .returning({ id: schema.alerts.id });
     s.active = true;
     s.lastFiredAt = now;
-    s.openAlertId = info.lastInsertRowid ?? null;
+    s.openAlertId = Number(inserted[0]?.id ?? 0) || null;
     await notifyAll(m, {
       monitorId: m.id,
       monitorName: m.name,
@@ -360,7 +385,10 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
   async function resolve(m: Monitor, s: MonitorState): Promise<void> {
     const now = Date.now();
     if (s.openAlertId !== null) {
-      await storage.sql.run("UPDATE alerts SET state = 'resolved', resolved_at = ? WHERE id = ?", [now, s.openAlertId]);
+      await storage.db
+        .update(schema.alerts)
+        .set({ state: "resolved", resolvedAt: now })
+        .where(eq(schema.alerts.id, s.openAlertId));
     }
     s.active = false;
     s.openAlertId = null;
@@ -390,12 +418,12 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
     s.lastEvalAt = Date.now();
     try {
       const now = Date.now();
-      const where = buildWhere(parsed(m.query), { from: now - m.windowMs, to: now }, m.projectId);
-      const rows = await storage.sql.all(`SELECT COUNT(*) AS n FROM events WHERE ${where.sql}`, where.params);
-      const count = Number(rows[0]?.n ?? 0);
-      const cond = m.kind === "count_above" ? count > m.threshold : count < m.threshold;
+      const where: SQL = buildWhere(parsed(m.query), { from: now - m.windowMs, to: now }, m.projectId);
+      const rows = await storage.db.select({ n: count() }).from(schema.events).where(where);
+      const total = Number(rows[0]?.n ?? 0);
+      const cond = m.kind === "count_above" ? total > m.threshold : total < m.threshold;
       if (cond && !s.active && now - s.lastFiredAt >= m.cooldownMs) {
-        await fire(m, s, { count });
+        await fire(m, s, { count: total });
       } else if (!cond && s.active) {
         await resolve(m, s);
       }
@@ -409,21 +437,31 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
   async function onEvents(rows: StoredEvent[]): Promise<void> {
     for (const m of monitors) {
       if (!m.enabled || m.kind !== "match") continue;
-      const f = parsed(m.query);
-      for (const row of rows) {
-        if (row.projectId !== m.projectId) continue;
-        if (!matchesEvent(f, row)) continue;
-        const s = getState(m.id);
-        const now = Date.now();
-        if (now - s.lastFiredAt < m.cooldownMs) break;
-        await fire(m, s, { sampleMessage: row.message });
-        break; // one fire per batch per monitor
+      try {
+        const f = parsed(m.query);
+        for (const row of rows) {
+          if (row.projectId !== m.projectId) continue;
+          if (!matchesEvent(f, row)) continue;
+          const s = getState(m.id);
+          const now = Date.now();
+          if (now - s.lastFiredAt < m.cooldownMs) break;
+          await fire(m, s, { sampleMessage: row.message });
+          break; // one fire per batch per monitor
+        }
+      } catch (err) {
+        // A failed alert insert must never take down ingest or the process.
+        console.error(
+          `[kinglet] monitor "${m.name}" event processing failed:`,
+          err instanceof Error ? err.message : err
+        );
       }
     }
   }
 
   const unsubscribe = subscribeEvents((rows) => {
-    void onEvents(rows);
+    void onEvents(rows).catch((err) => {
+      console.error("[kinglet] monitor batch processing failed:", err);
+    });
   });
 
   const tick = setInterval(() => {

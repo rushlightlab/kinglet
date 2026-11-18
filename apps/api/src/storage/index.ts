@@ -1,14 +1,37 @@
-import { createLibsqlStorage } from "./libsql.js";
-import { createSqliteStorage } from "./sqlite.js";
+import path from "node:path";
+import { openDatabase, toLibsqlUrl } from "./db.js";
+import * as eventsRepo from "./events.js";
 import { resolveStorageKind } from "./types.js";
 import type { Storage, StorageSettings } from "./types.js";
 
 export async function createStorage(settings: StorageSettings): Promise<Storage> {
   const kind = resolveStorageKind(settings);
-  if (kind === "libsql") {
-    return createLibsqlStorage({ url: settings.dbPath, authToken: settings.authToken });
-  }
-  return createSqliteStorage(settings.dbPath);
+  const url = toLibsqlUrl(settings.dbPath);
+  const { db, client } = await openDatabase({ url, authToken: settings.authToken });
+
+  const description =
+    kind === "libsql"
+      ? `libsql · ${settings.dbPath}`
+      : `sqlite · ${path.resolve(url.toLowerCase().startsWith("file:") ? url.slice(5) : url)}`;
+
+  return {
+    kind,
+    description,
+    db,
+    insertEvents: (projectId, events) => eventsRepo.insertEvents(db, projectId, events),
+    queryEvents: (opts) => eventsRepo.queryEvents(db, opts),
+    histogramPoints: (projectId, from, to, bucketMs) =>
+      eventsRepo.histogramPoints(db, projectId, from, to, bucketMs),
+    listServices: (projectId) => eventsRepo.listServices(db, projectId),
+    deleteOlderThan: (ts) => eventsRepo.deleteOlderThan(db, ts),
+    runMaintenance: async () => {
+      // Local WAL files grow; SQLite reuses pages automatically. A full
+      // VACUUM on a live log store costs more than it frees — skip.
+    },
+    close: async () => {
+      client.close();
+    },
+  };
 }
 
 export type { Storage, StorageKind } from "./types.js";

@@ -1,14 +1,16 @@
+import { count, eq } from "drizzle-orm";
 import fs from "node:fs";
 import path from "node:path";
 import type { Config } from "../env.js";
 import type { Storage } from "../storage/index.js";
-import { generatePassword, hashPassword } from "./passwords.js";
-import { countUsers, createUser } from "./users.js";
+import * as schema from "../storage/schema.js";
+import type { KingletAuth } from "./auth.js";
+import { generatePassword } from "./tokens.js";
 
 /**
- * Boot-time setup that the shared schema can't express: the default project
- * and the bootstrap administrator. Project columns/indexes are handled by the
- * storage drivers (ensureProjectColumns) before statements are prepared.
+ * Boot-time setup: the default project and the bootstrap administrator.
+ * Better Auth owns users/sessions/passwords; we only promote the first login
+ * to the admin role.
  */
 
 export interface BootstrapInfo {
@@ -18,31 +20,33 @@ export interface BootstrapInfo {
 }
 
 export async function ensureSchemaExtras(storage: Storage): Promise<void> {
-  const rows = await storage.sql.all("SELECT COUNT(*) AS n FROM projects");
+  const rows = await storage.db.select({ n: count() }).from(schema.projects);
   if (Number(rows[0]?.n ?? 0) === 0) {
-    await storage.sql.run("INSERT INTO projects (name, slug, created_at) VALUES (?, ?, ?)", [
-      "default",
-      "default",
-      Date.now(),
-    ]);
+    await storage.db
+      .insert(schema.projects)
+      .values({ name: "default", slug: "default", createdAt: Date.now() });
   }
 }
 
 export async function ensureBootstrapAdmin(
   storage: Storage,
-  config: Config
+  config: Config,
+  auth: KingletAuth
 ): Promise<BootstrapInfo | null> {
-  if ((await countUsers(storage)) > 0) return null;
+  const rows = await storage.db.select({ n: count() }).from(schema.user);
+  if (Number(rows[0]?.n ?? 0) > 0) return null;
 
-  const email = config.adminEmail ?? "admin@kinglet.local";
+  const email = (config.adminEmail ?? "admin@kinglet.local").toLowerCase();
   const generated = config.adminPassword ? null : generatePassword();
   const password = config.adminPassword ?? generated ?? "";
-  await createUser(storage, {
-    email,
-    name: "Administrator",
-    role: "admin",
-    passwordHash: hashPassword(password),
+
+  const result = await auth.api.signUpEmail({
+    body: { email, password, name: "Administrator" },
   });
+  const userId = (result as { user?: { id?: string } }).user?.id;
+  if (userId) {
+    await storage.db.update(schema.user).set({ role: "admin" }).where(eq(schema.user.id, userId));
+  }
 
   if (generated) {
     try {

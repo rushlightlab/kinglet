@@ -12,7 +12,7 @@ Named after the tiny bird with the golden crown (genus *Regulus* — "little kin
   matches (`"timeout"`) just work
 - **Filter grammar** — `level>=warn service:api "connection refused" -healthcheck`
 - **Monitors & alerts** — instant match, rate spikes, silence detection → webhook/Discord/Slack
-- **Team-ready auth** — email/password login with admin / member / viewer roles
+- **Team-ready auth** — Better Auth email/password login with admin / member / viewer roles and cached sessions
 - **Multi-project** — every project owns its logs, monitors, and `kl_…` API keys with `ingest`/`query` scopes
 - **Volume histogram** by level, drag across it to zoom into a time range
 - **Retention built in** — drop events older than N days, automatically
@@ -118,10 +118,8 @@ Auth accepts either the `kinglet_session` cookie (the web UI) or
 
 | Route | What it does |
 | --- | --- |
-| `POST /v1/auth/login` | Sign in — sets the session cookie |
-| `POST /v1/auth/logout` | Sign out |
+| `/api/auth/*` | Better Auth endpoints (sign-in, sign-out, session, password) |
 | `GET /v1/me` | Current user + permissions |
-| `PATCH /v1/me/password` | Change your password |
 | `GET/POST /v1/projects` | List / create projects |
 | `DELETE /v1/projects/:id` | Delete a project and all its data |
 | `GET/POST /v1/users` | List / create users (admin) |
@@ -202,36 +200,36 @@ created in **/settings**, not the legacy token:
 
 ## Storage backends
 
-Storage is pluggable behind a small interface (`apps/api/src/storage/types.ts`).
-The API, retention job, and live tail never know which driver is underneath.
+One engine for both modes: the **libSQL client** opens a local SQLite file by
+default or connects to a hosted [Turso](https://turso.tech) database with the
+same code. Schema and queries are defined with **Drizzle ORM**; migrations live
+in `apps/api/drizzle` and run automatically on boot.
 
-**sqlite** *(default)* — better-sqlite3, one file, WAL mode, FTS5 trigram search.
-Zero services, zero config.
-
-**libsql** — the [libSQL](https://turso.tech) driver, for local `file:`
-databases or a hosted [Turso](https://turso.tech) instance. Same container,
-same API — just point it at your database:
+**sqlite** *(default)* — one local file, WAL mode, FTS5 trigram search:
 
 ```bash
-# local libSQL file
-KINGLET_STORAGE=libsql
-KINGLET_DB_PATH=file:/data/kinglet.db
+KINGLET_DB_PATH=/data/kinglet.db
+```
 
-# Turso
+**Turso** — same code, remote transport:
+
+```bash
 KINGLET_DB_PATH=libsql://your-db.turso.io
 KINGLET_DB_AUTH_TOKEN=eyJ…
 ```
 
 With `KINGLET_STORAGE=auto` (the default), the driver is picked from the db
-path scheme: plain paths use sqlite; `libsql://`, `https://`, `wss://`, and
-`file:` URLs use libSQL. One caveat: some hosted libSQL builds lack the FTS5
-trigram tokenizer — Kinglet detects that and falls back to word-prefix search
-with a console warning instead of refusing to boot.
+path scheme: plain paths use the local file; `libsql://`, `https://`, `wss://`,
+and `file:` URLs use the libSQL transport. One caveat: some hosted libSQL
+builds lack the FTS5 trigram tokenizer — Kinglet detects that and falls back to
+word-prefix search with a console warning. Schema edits:
 
-**ClickHouse** is the planned scale-out backend. It will implement the same
-`Storage` interface, so the API and UI stay untouched — and if you want to
-wire up Postgres or anything else in the meantime, that's the whole contract
-you need to satisfy.
+```bash
+pnpm --filter @kinglet/api db:generate   # drizzle-kit migration from schema.ts
+```
+
+**ClickHouse** is the planned scale-out backend for the event path. It will
+implement the same `Storage` interface, so the API and UI stay untouched.
 
 ## Self-hosting notes
 
@@ -312,6 +310,7 @@ After the first publish, make the package public (GitHub → Packages → kingle
 
 - [x] v0.1 — HTTP ingest, live tail, filter grammar, histogram, retention, Docker
 - [x] Auth & multi-project — email login, admin/member/viewer roles, per-project `kl_` keys with scopes
+- [x] Drizzle ORM + Better Auth — typed schema, generated migrations, cached sessions, JSON error contract
 - [x] Monitors & alerts — instant match, spike, silence → webhook/Discord/Slack with cooldown + auto-resolve
 - [x] UI polish — URL-synced views, shareable permalinks, saved searches, keyboard navigation, Kinglet design language
 - [x] Docs + landing page — Astro/Starlight site in a separate `kinglet-site` repo (HTTP API reference, self-hosting guide, SDK docs)

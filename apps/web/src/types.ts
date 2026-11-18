@@ -94,7 +94,7 @@ export interface Project {
 export type UserRole = "admin" | "member" | "viewer";
 
 export interface AppUser {
-  id: number;
+  id: string;
   email: string;
   name: string;
   role: UserRole;

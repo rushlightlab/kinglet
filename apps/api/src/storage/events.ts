@@ -1,0 +1,140 @@
+import { and, count, desc, eq, gte, isNotNull, lt, lte, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
+import type { Normalized } from "../ingest.js";
+import type { StoredEvent } from "../types.js";
+import type { KingletDb } from "./db.js";
+import * as schema from "./schema.js";
+import type { HistogramPointRow, QueryOptions, ServiceRow } from "./types.js";
+
+/** SQLite caps the number of bound variables per statement. */
+const INSERT_CHUNK = 500;
+
+function mapEventRow(row: typeof schema.events.$inferSelect): StoredEvent {
+  return {
+    id: Number(row.id),
+    projectId: Number(row.projectId),
+    ts: Number(row.ts),
+    level: Number(row.level),
+    service: row.service,
+    env: row.env,
+    message: row.message,
+    fields: row.fields ?? null,
+  };
+}
+
+export async function insertEvents(
+  db: KingletDb,
+  projectId: number,
+  events: Normalized[]
+): Promise<StoredEvent[]> {
+  if (events.length === 0) return [];
+  const rows: StoredEvent[] = [];
+  await db.transaction(async (tx) => {
+    for (let i = 0; i < events.length; i += INSERT_CHUNK) {
+      const chunk = events.slice(i, i + INSERT_CHUNK);
+      const inserted = await tx
+        .insert(schema.events)
+        .values(
+          chunk.map((e) => ({
+            projectId,
+            ts: e.ts,
+            level: e.level,
+            service: e.service,
+            env: e.env,
+            message: e.message,
+            fields: e.fields,
+          }))
+        )
+        .returning({ id: schema.events.id });
+      inserted.forEach((insertedRow, index) => {
+        const event = chunk[index];
+        if (!event) return;
+        rows.push({
+          id: Number(insertedRow.id),
+          projectId,
+          ts: event.ts,
+          level: event.level,
+          service: event.service,
+          env: event.env,
+          message: event.message,
+          fields: event.fields,
+        });
+      });
+    }
+  });
+  return rows;
+}
+
+export async function queryEvents(db: KingletDb, opts: QueryOptions): Promise<StoredEvent[]> {
+  const conditions: SQL[] = [opts.filter];
+  if (opts.cursor !== null) conditions.push(lt(schema.events.id, opts.cursor));
+  const rows = await db
+    .select()
+    .from(schema.events)
+    .where(and(...conditions))
+    .orderBy(desc(schema.events.id))
+    .limit(opts.limit);
+  return rows.map(mapEventRow);
+}
+
+export async function histogramPoints(
+  db: KingletDb,
+  projectId: number,
+  from: number,
+  to: number,
+  bucketMs: number
+): Promise<HistogramPointRow[]> {
+  const bucket = sql<number>`(CAST(${schema.events.ts} / ${bucketMs} AS INTEGER) * ${bucketMs})`;
+  const rows = await db
+    .select({ bucket, level: schema.events.level, n: count() })
+    .from(schema.events)
+    .where(
+      and(
+        gte(schema.events.ts, from),
+        lte(schema.events.ts, to),
+        eq(schema.events.projectId, projectId)
+      )
+    )
+    .groupBy(bucket, schema.events.level)
+    .orderBy(bucket);
+
+  const map = new Map<number, number[]>();
+  for (const row of rows) {
+    const bucketTs = Number(row.bucket);
+    const level = Number(row.level);
+    const n = Number(row.n);
+    if (!Number.isFinite(bucketTs) || !Number.isFinite(level)) continue;
+    const counts = map.get(bucketTs) ?? [0, 0, 0, 0, 0, 0];
+    if (level >= 0 && level <= 5) counts[level] = n;
+    map.set(bucketTs, counts);
+  }
+  const points: HistogramPointRow[] = [];
+  for (let t = Math.floor(from / bucketMs) * bucketMs; t <= to; t += bucketMs) {
+    points.push({ ts: t, counts: map.get(t) ?? [0, 0, 0, 0, 0, 0] });
+  }
+  return points;
+}
+
+export async function listServices(db: KingletDb, projectId: number): Promise<ServiceRow[]> {
+  const rows = await db
+    .select({ name: schema.events.service, n: count() })
+    .from(schema.events)
+    .where(and(eq(schema.events.projectId, projectId), isNotNull(schema.events.service)))
+    .groupBy(schema.events.service)
+    .orderBy(desc(count()))
+    .limit(200);
+  return rows.map((row) => ({ name: String(row.name), count: Number(row.n) }));
+}
+
+/** Chunked delete so a big backlog never blocks ingest for long. */
+export async function deleteOlderThan(db: KingletDb, ts: number): Promise<number> {
+  let total = 0;
+  for (;;) {
+    const result = await db.run(
+      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ts < ${ts} ORDER BY id LIMIT 10000)`
+    );
+    const changed = Number(result.rowsAffected ?? 0);
+    total += changed;
+    if (changed === 0) return total;
+  }
+}

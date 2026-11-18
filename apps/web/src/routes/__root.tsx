@@ -62,6 +62,15 @@ function RootComponent() {
     void load();
   }, [load]);
 
+  // Session expiry detected mid-session by any /v1 call.
+  useEffect(() => {
+    const onUnauthorized = (): void => {
+      setState({ phase: "login", error: "Your session expired — sign in again." });
+    };
+    window.addEventListener("kinglet:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("kinglet:unauthorized", onUnauthorized);
+  }, []);
+
   if (state.phase === "loading") {
     return (
       <div className="relative flex h-screen items-center justify-center bg-ink-950">

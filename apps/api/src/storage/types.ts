@@ -1,24 +1,13 @@
+import type { SQL } from "drizzle-orm";
 import type { Normalized } from "../ingest.js";
 import type { StoredEvent } from "../types.js";
+import type { KingletDb } from "./db.js";
 
 export type StorageKind = "sqlite" | "libsql";
 
-export type SqlValue = string | number | null;
-
-/**
- * Minimal SQL escape hatch shared by both drivers, used for Kinglet's meta
- * tables (projects, users, sessions, API keys, monitors) so that logic is
- * written once. Event queries go through the Storage methods below.
- */
-export interface SqlExecutor {
-  exec(statements: string): Promise<void>;
-  run(sql: string, args?: SqlValue[]): Promise<{ rowsAffected: number; lastInsertRowid: number | null }>;
-  all(sql: string, args?: SqlValue[]): Promise<Record<string, unknown>[]>;
-}
-
 export interface QueryOptions {
-  where: string;
-  params: (string | number)[];
+  /** Drizzle condition from buildWhere() — includes the project filter. */
+  filter: SQL;
   limit: number;
   cursor: number | null;
 }
@@ -34,21 +23,27 @@ export interface HistogramPointRow {
 }
 
 /**
- * The seam that makes Kinglet's storage pluggable.
+ * The high-level storage seam. Today there is a single implementation (the
+ * libSQL client: local file or hosted Turso) and it also exposes the typed
+ * Drizzle database that auth, monitors, and projects use directly.
  *
- * Today: "sqlite" (better-sqlite3, zero-config default) and "libsql"
- * (local `file:` databases or a remote Turso instance). Tomorrow: ClickHouse
- * or Postgres implementations of this same interface.
+ * A future ClickHouse backend would replace the event methods below while a
+ * small SQLite-compatible meta store keeps users/sessions/keys/monitors.
  */
 export interface Storage {
   readonly kind: StorageKind;
   /** Human-readable target for the boot banner. */
   readonly description: string;
-  /** Shared surface for Kinglet's meta tables. */
-  readonly sql: SqlExecutor;
+  /** Typed Drizzle database for meta tables and ad-hoc queries. */
+  readonly db: KingletDb;
   insertEvents(projectId: number, events: Normalized[]): Promise<StoredEvent[]>;
   queryEvents(opts: QueryOptions): Promise<StoredEvent[]>;
-  histogramPoints(projectId: number, from: number, to: number, bucketMs: number): Promise<HistogramPointRow[]>;
+  histogramPoints(
+    projectId: number,
+    from: number,
+    to: number,
+    bucketMs: number
+  ): Promise<HistogramPointRow[]>;
   listServices(projectId: number): Promise<ServiceRow[]>;
   /** Chunked delete; returns how many events were dropped. */
   deleteOlderThan(ts: number): Promise<number>;
@@ -70,7 +65,6 @@ export function resolveStorageKind(settings: StorageSettings): StorageKind {
   const p = settings.dbPath.toLowerCase();
   if (
     p.startsWith("libsql") ||
-    p.startsWith("file:") ||
     p.startsWith("http://") ||
     p.startsWith("https://") ||
     p.startsWith("ws://") ||

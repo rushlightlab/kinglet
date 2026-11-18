@@ -3,7 +3,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { serve } from "@hono/node-server";
+import { createAuth } from "./auth/auth.js";
 import { authMiddleware } from "./auth/middleware.js";
 import type { AppEnv } from "./auth/middleware.js";
 import { ensureBootstrapAdmin, ensureSchemaExtras } from "./auth/setup.js";
@@ -18,6 +20,11 @@ import type { Storage } from "./storage/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// A stray rejected promise must never take the log platform down.
+process.on("unhandledRejection", (reason) => {
+  console.error("[kinglet] unhandled promise rejection:", reason);
+});
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const storage = await createStorage({
@@ -26,7 +33,9 @@ async function main(): Promise<void> {
     authToken: config.dbAuthToken,
   });
   await ensureSchemaExtras(storage);
-  const bootstrap = await ensureBootstrapAdmin(storage, config);
+
+  const auth = createAuth(storage.db, { baseUrl: config.baseUrl, port: config.port });
+  const bootstrap = await ensureBootstrapAdmin(storage, config, auth);
 
   // First boot with no KINGLET_TOKENS: keep a copy of the generated legacy
   // token next to a local database so `cat kinglet.token` always works.
@@ -41,6 +50,12 @@ async function main(): Promise<void> {
   const app = new Hono<AppEnv>();
 
   app.onError((err, c) => {
+    if (err instanceof HTTPException) {
+      if (err.status >= 500) {
+        console.error(`[kinglet] ${c.req.method} ${c.req.path} failed:`, err);
+      }
+      return c.json({ error: err.message || "request failed" }, err.status);
+    }
     const requestId = randomUUID();
     console.error(
       `[kinglet] ${c.req.method} ${c.req.path} failed (request ${requestId}):`,
@@ -52,16 +67,31 @@ async function main(): Promise<void> {
 
   app.notFound((c) => c.json({ error: "not found", path: c.req.path }, 404));
 
-  app.get("/healthz", (c) => c.json({ ok: true, name: "kinglet", version: "0.2.0" }));
-  app.use("/v1/*", authMiddleware(storage, config));
+  app.get("/healthz", (c) => c.json({ ok: true, name: "kinglet", version: "0.3.0" }));
+
+  // Better Auth owns /api/auth/* (sign-in, sign-out, session, password).
+  // Public self-signup is closed: accounts are created by administrators.
+  app.post("/api/auth/sign-up/*", (c) =>
+    c.json({ error: "sign-up is disabled — an administrator creates accounts" }, 403)
+  );
+  app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
+
+  app.use("/v1/*", authMiddleware(storage, config, auth));
 
   const engine: MonitorEngine = startMonitorEngine(storage, { baseUrl: config.baseUrl });
-  registerRoutes(app, storage, engine, config);
+  registerRoutes(app, storage, engine, config, auth);
   registerStaticUi(app);
 
   const server = serve({ fetch: app.fetch, port: config.port }, () =>
     printBanner(config, storage, bootstrap)
   );
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    console.error("");
+    console.error(`  ✖ Kinglet could not listen on port ${config.port}: ${err.message}`);
+    console.error("    Is another process using that port? Set KINGLET_PORT to change it.");
+    console.error("");
+    void storage.close().finally(() => process.exit(1));
+  });
   startRetentionJob(storage, config.retentionDays);
 
   const shutdown = (): void => {
@@ -91,13 +121,18 @@ function isRemoteDbPath(dbPath: string): boolean {
 /** Serves the built web UI from ../web/dist (single-container deploy). */
 function registerStaticUi(app: Hono<AppEnv>): void {
   const webDist = path.resolve(__dirname, "../../web/dist");
+  const apiNotFound = (c: { json: (body: unknown, status: 404) => Response }, pathname: string): Response =>
+    c.json({ error: "not found", path: pathname }, 404);
+
   if (!fs.existsSync(webDist)) {
-    app.get("*", (c) =>
-      c.json({
+    app.get("*", (c) => {
+      const pathname = new URL(c.req.url).pathname;
+      if (pathname === "/v1" || pathname.startsWith("/v1/")) return apiNotFound(c, pathname);
+      return c.json({
         name: "kinglet",
         message: 'UI not built. Run "pnpm --filter @kinglet/web dev" for the dev UI, or build with "pnpm run build".',
-      })
-    );
+      });
+    });
     return;
   }
   const mimeTypes: Record<string, string> = {
@@ -120,6 +155,8 @@ function registerStaticUi(app: Hono<AppEnv>): void {
     } catch {
       return c.notFound();
     }
+    // Never let SPA fallback shadow API routes with HTML.
+    if (pathname === "/v1" || pathname.startsWith("/v1/")) return apiNotFound(c, pathname);
     if (pathname.includes("..")) return c.notFound();
     let filePath = path.join(webDist, pathname.replace(/^\/+/, ""));
     if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {

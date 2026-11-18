@@ -337,7 +337,7 @@ function UsersPanel() {
   const [role, setRole] = useState("member");
   const [password, setPassword] = useState("");
   const [createdPassword, setCreatedPassword] = useState<{ email: string; password: string } | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -380,7 +380,7 @@ function UsersPanel() {
     }
   };
 
-  const remove = async (id: number): Promise<void> => {
+  const remove = async (id: string): Promise<void> => {
     try {
       await deleteUser(id);
       setConfirmDelete(null);

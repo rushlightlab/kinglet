@@ -11,8 +11,13 @@ import type {
   Service,
 } from "./types";
 import { LEVEL_NAMES } from "./types";
+import { createAuthClient } from "better-auth/react";
 
 export class UnauthorizedError extends Error {}
+
+const authClient = createAuthClient({
+  baseURL: typeof window === "undefined" ? "" : window.location.origin,
+});
 
 function withProject(path: string, projectId: number): string {
   const separator = path.includes("?") ? "&" : "?";
@@ -25,15 +30,21 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     res = await fetch(path, {
       ...init,
       credentials: "same-origin",
+      signal: AbortSignal.timeout(15_000),
       headers:
         init?.body !== undefined
           ? { "content-type": "application/json", ...(init?.headers ?? {}) }
           : init?.headers,
     });
-  } catch {
-    throw new Error("Cannot reach the Kinglet API — is the server running?");
+  } catch (err) {
+    throw new Error("Cannot reach the Kinglet API — is the server running?", { cause: err });
   }
-  if (res.status === 401) throw new UnauthorizedError("unauthorized");
+  if (res.status === 401) {
+    if (path !== "/v1/me") {
+      window.dispatchEvent(new CustomEvent("kinglet:unauthorized"));
+    }
+    throw new UnauthorizedError("unauthorized");
+  }
   if (!res.ok) {
     const contentType = res.headers.get("content-type") ?? "";
     let message = `request failed: HTTP ${res.status}`;
@@ -48,37 +59,38 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
       }
     } else if (res.status >= 500) {
       message =
-        "the Kinglet API returned an internal error — the server likely crashed at boot or hit a bug. Check its terminal output";
-    } else if (res.status >= 500) {
-      message = `the Kinglet API failed (HTTP ${res.status})`;
+        "the Kinglet API returned an internal error — the server likely crashed or hit a bug. Check its terminal output";
     }
     throw new Error(requestId ? `${message} (request ${requestId})` : message);
+  }
+  if (!(res.headers.get("content-type") ?? "").includes("application/json")) {
+    throw new Error("the Kinglet API returned a non-JSON response (likely a proxy error page)");
   }
   return (await res.json()) as T;
 }
 
-// ---------- auth ----------
+// ---------- auth (Better Auth) ----------
 
-export function login(email: string, password: string): Promise<{ user: AppUser; permissions: string[] }> {
-  return api<{ user: AppUser; permissions: string[] }>("/v1/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ email, password }),
-  });
+export async function login(email: string, password: string): Promise<void> {
+  const { error } = await authClient.signIn.email({ email, password });
+  if (error) throw new Error(error.message ?? "invalid email or password");
 }
 
-export function logout(): Promise<{ ok: true }> {
-  return api<{ ok: true }>("/v1/auth/logout", { method: "POST" });
+export async function logout(): Promise<void> {
+  await authClient.signOut().catch(() => undefined);
 }
 
-export function fetchMe(): Promise<{ user: AppUser; permissions: string[] }> {
+export async function fetchMe(): Promise<{ user: AppUser; permissions: string[] }> {
   return api<{ user: AppUser; permissions: string[] }>("/v1/me");
 }
 
-export function changePassword(currentPassword: string, newPassword: string): Promise<{ ok: true }> {
-  return api<{ ok: true }>("/v1/me/password", {
-    method: "PATCH",
-    body: JSON.stringify({ currentPassword, newPassword }),
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const { error } = await authClient.changePassword({
+    currentPassword,
+    newPassword,
+    revokeOtherSessions: true,
   });
+  if (error) throw new Error(error.message ?? "could not change password");
 }
 
 // ---------- projects ----------
@@ -117,7 +129,7 @@ export function createUser(input: {
 }
 
 export function updateUser(
-  id: number,
+  id: string,
   patch: { name?: string; role?: string; password?: string }
 ): Promise<{ user: AppUser }> {
   return api<{ user: AppUser }>(`/v1/users/${id}`, {
@@ -126,7 +138,7 @@ export function updateUser(
   });
 }
 
-export function deleteUser(id: number): Promise<{ ok: true }> {
+export function deleteUser(id: string): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/users/${id}`, { method: "DELETE" });
 }
 

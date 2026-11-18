@@ -13,6 +13,7 @@
     "@fontsource/chakra-petch": "^5.1.0",
     "@tanstack/react-router": "^1.95.0",
     "@tanstack/react-virtual": "^3.13.0",
+    "better-auth": "^1.7.25",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
