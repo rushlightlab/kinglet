@@ -6,6 +6,8 @@ fast dark UI with a live tail.
 
 Named after the tiny bird with the golden crown (genus *Regulus* — "little king").
 
+Docs and landing page: **https://kinglet.rushlightlab.com**
+
 - **Ingest anything over HTTP** — NDJSON or JSON batches, from any language
 - **Live tail** over SSE, with follow mode
 - **Full-text search** — SQLite FTS5 with a trigram tokenizer, so substring
