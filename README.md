@@ -49,7 +49,7 @@ No clone needed? Run the published multi-arch image:
 
 ```bash
 docker run -d --name kinglet -p 8080:3000 -v kinglet-data:/data \
-  ghcr.io/kinglet-labs/kinglet:latest
+  ghcr.io/rushlightlab/kinglet:latest
 ```
 
 Legacy `tok_…` tokens (`KINGLET_TOKENS`) still work as workspace-wide
