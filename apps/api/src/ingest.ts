@@ -32,8 +32,14 @@ const LEVEL_MAP: Record<string, number> = {
   critical: 5,
 };
 
+function levelFromName(name: string): number | null {
+  return Object.hasOwn(LEVEL_MAP, name) ? (LEVEL_MAP[name] ?? null) : null;
+}
+
 const MAX_MESSAGE = 8000;
 const MAX_FIELDS = 32_768;
+const MAX_FUTURE_SKEW_MS = 5 * 60_000;
+const MAX_PAST_MS = 31 * 24 * 3_600_000;
 
 export type NormalizedResult = { ok: true; value: Normalized } | { ok: false; error: string };
 
@@ -54,8 +60,9 @@ export function normalizeEvent(raw: unknown): NormalizedResult {
   if (typeof rawLevel === "number" && Number.isFinite(rawLevel)) {
     level = Math.min(5, Math.max(0, Math.trunc(rawLevel)));
   } else if (typeof rawLevel === "string") {
-    level = LEVEL_MAP[rawLevel.trim().toLowerCase()] ?? 2;
+    level = levelFromName(rawLevel.trim().toLowerCase()) ?? 2;
   }
+  if (!Number.isInteger(level)) level = 2;
 
   let ts = Date.now();
   const rawTs = obj.ts ?? obj.time ?? obj.timestamp;
@@ -66,6 +73,10 @@ export function normalizeEvent(raw: unknown): NormalizedResult {
     const parsed = Date.parse(rawTs);
     if (!Number.isNaN(parsed)) ts = parsed;
   }
+  // Clamp timestamps: future-dated events would otherwise evade retention,
+  // and ancient ones pollute the index.
+  const now = Date.now();
+  ts = Math.min(now + MAX_FUTURE_SKEW_MS, Math.max(now - MAX_PAST_MS, ts));
 
   const service =
     typeof obj.service === "string" && obj.service.trim()

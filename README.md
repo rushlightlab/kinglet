@@ -173,6 +173,8 @@ Channels are plain HTTP POSTs — **webhook** (JSON payload; n8n, Zapier, script
 **discord**, and **slack**. Each monitor has a cooldown; count monitors
 auto-resolve when the condition clears and say so. `POST /v1/monitors/:id/test`
 sends a test notification, so wiring a channel is verifiable in one click.
+Webhook targets are SSRF-checked: loopback/private/metadata addresses are
+blocked unless `KINGLET_ALLOW_PRIVATE_WEBHOOKS=1` is set.
 
 Set `KINGLET_BASE_URL` and every notification carries a deep link back into
 your UI with the query and time range pre-filled.
@@ -187,6 +189,9 @@ your UI with the query and time range pre-filled.
 | `KINGLET_DB_AUTH_TOKEN` | — | Auth token for remote libSQL/Turso databases |
 | `KINGLET_ADMIN_EMAIL` | `admin@kinglet.local` | Bootstrap administrator email (first boot only) |
 | `KINGLET_ADMIN_PASSWORD` | *(generated)* | Bootstrap administrator password (first boot only) |
+| `BETTER_AUTH_SECRET` | *(generated, persisted)* | Session signing secret; set explicitly for multi-instance installs |
+| `KINGLET_TRUSTED_PROXIES` | — | CIDRs allowed to set `X-Forwarded-For` |
+| `KINGLET_ALLOW_PRIVATE_WEBHOOKS` | — | Allow private/internal webhook targets (SSRF escape hatch) |
 | `KINGLET_SESSION_DAYS` | `30` | Web session lifetime |
 | `KINGLET_TOKENS` | *(auto-generate)* | **Legacy** global tokens — all projects, full access |
 | `KINGLET_BASE_URL` | — | Public URL, used for deep links in alert notifications |

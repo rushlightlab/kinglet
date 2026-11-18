@@ -53,8 +53,11 @@ async function resolveAuth(
   let bearer: string | undefined;
   if (header?.toLowerCase().startsWith("bearer ")) bearer = header.slice(7).trim();
 
-  // EventSource can't set headers; allow ?key=/?token= as fallbacks.
-  if (!bearer) bearer = c.req.query("key") ?? c.req.query("token");
+  // EventSource can't set headers; query credentials are accepted ONLY for
+  // the SSE route so tokens don't leak into access logs elsewhere.
+  if (!bearer && c.req.path === "/v1/stream") {
+    bearer = c.req.query("key") ?? c.req.query("token");
+  }
 
   if (bearer) {
     const key = await verifyApiKey(storage, bearer);

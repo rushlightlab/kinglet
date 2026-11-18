@@ -109,7 +109,10 @@ export async function histogramPoints(
     map.set(bucketTs, counts);
   }
   const points: HistogramPointRow[] = [];
-  for (let t = Math.floor(from / bucketMs) * bucketMs; t <= to; t += bucketMs) {
+  const start = Math.floor(from / bucketMs) * bucketMs;
+  const pointCount = Math.min(500, Math.ceil((to - start) / bucketMs) + 1);
+  for (let i = 0; i < pointCount; i++) {
+    const t = start + i * bucketMs;
     points.push({ ts: t, counts: map.get(t) ?? [0, 0, 0, 0, 0, 0] });
   }
   return points;

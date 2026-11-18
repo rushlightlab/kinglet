@@ -75,6 +75,10 @@ export const monitors = sqliteTable(
     channels: text("channels").notNull().default("[]"),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
+    // runtime observability (written by the alert engine)
+    lastEvalAt: integer("last_eval_at"),
+    lastError: text("last_error"),
+    lastErrorAt: integer("last_error_at"),
   },
   (table) => [index("idx_monitors_project").on(table.projectId)]
 );
@@ -90,6 +94,9 @@ export const alerts = sqliteTable(
     sampleMessage: text("sample_message"),
     firedAt: integer("fired_at").notNull(),
     resolvedAt: integer("resolved_at"),
+    // delivery outcome of the "fired" notification
+    notifyStatus: text("notify_status"),
+    notifyError: text("notify_error"),
   },
   (table) => [index("idx_alerts_monitor").on(table.monitorId, table.firedAt)]
 );

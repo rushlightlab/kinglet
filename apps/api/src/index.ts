@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
+import { bodyLimit } from "hono/body-limit";
 import { serve } from "@hono/node-server";
 import { createAuth } from "./auth/auth.js";
 import { authMiddleware } from "./auth/middleware.js";
@@ -15,10 +16,16 @@ import { startMonitorEngine } from "./monitors.js";
 import type { MonitorEngine } from "./monitors.js";
 import { startRetentionJob } from "./retention.js";
 import { registerRoutes } from "./routes.js";
+import * as schema from "./storage/schema.js";
+import { systemStatus } from "./status.js";
 import { createStorage } from "./storage/index.js";
 import type { Storage } from "./storage/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Secret files (token, admin password, auth secret) and the database should
+// not be world-readable by default.
+process.umask(0o077);
 
 // A stray rejected promise must never take the log platform down.
 process.on("unhandledRejection", (reason) => {
@@ -34,14 +41,21 @@ async function main(): Promise<void> {
   });
   await ensureSchemaExtras(storage);
 
-  const auth = createAuth(storage.db, { baseUrl: config.baseUrl, port: config.port });
+  const auth = createAuth(storage.db, {
+    baseUrl: config.baseUrl,
+    port: config.port,
+    secret: config.authSecret,
+    trustedProxies: config.trustedProxies,
+  });
   const bootstrap = await ensureBootstrapAdmin(storage, config, auth);
 
   // First boot with no KINGLET_TOKENS: keep a copy of the generated legacy
   // token next to a local database so `cat kinglet.token` always works.
   if (config.generatedToken && !isRemoteDbPath(config.dbPath)) {
     try {
-      fs.writeFileSync(path.join(config.dataDir, "kinglet.token"), config.generatedToken + "\n");
+      fs.writeFileSync(path.join(config.dataDir, "kinglet.token"), config.generatedToken + "\n", {
+        mode: 0o600,
+      });
     } catch (err) {
       console.warn("[kinglet] could not write kinglet.token:", err);
     }
@@ -67,7 +81,53 @@ async function main(): Promise<void> {
 
   app.notFound((c) => c.json({ error: "not found", path: c.req.path }, 404));
 
-  app.get("/healthz", (c) => c.json({ ok: true, name: "kinglet", version: "0.3.0" }));
+  // Small JSON bodies everywhere except ingest; auth endpoints are public.
+  const smallJsonLimit = bodyLimit({
+    maxSize: 256 * 1024,
+    onError: (c) => c.json({ error: "payload too large (max 256 KiB)" }, 413),
+  });
+  app.use("/api/auth/*", smallJsonLimit);
+  app.use("/v1/monitors/*", smallJsonLimit);
+  app.use("/v1/users/*", smallJsonLimit);
+  app.use("/v1/projects/*", smallJsonLimit);
+  app.use("/v1/keys/*", smallJsonLimit);
+  app.use("*", async (c, next) => {
+    await next();
+    c.header("x-content-type-options", "nosniff");
+    c.header("referrer-policy", "no-referrer");
+    c.header("x-frame-options", "DENY");
+    const path = c.req.path;
+    if (path.startsWith("/v1/") || path.startsWith("/api/auth/")) {
+      c.header("cache-control", "no-store");
+    }
+  });
+
+  app.get("/healthz", async (c) => {
+    let databaseOk = true;
+    try {
+      await storage.db.select({ id: schema.projects.id }).from(schema.projects).limit(1);
+    } catch {
+      databaseOk = false;
+    }
+    return c.json(
+      {
+        ok: databaseOk,
+        name: "kinglet",
+        version: "0.3.0",
+        uptimeMs: Date.now() - systemStatus.startedAt,
+        database: databaseOk ? "ok" : "error",
+        retention: {
+          lastRunAt: systemStatus.retentionLastRunAt,
+          lastError: systemStatus.retentionLastError,
+        },
+        monitors: {
+          refreshedAt: systemStatus.monitorRefreshAt,
+          refreshError: systemStatus.monitorRefreshError,
+        },
+      },
+      databaseOk ? 200 : 503
+    );
+  });
 
   // Better Auth owns /api/auth/* (sign-in, sign-out, session, password).
   // Public self-signup is closed: accounts are created by administrators.
@@ -200,8 +260,7 @@ function printBanner(
       console.log(`                  also written to ${path.join(config.dataDir, "kinglet.token")}`);
     }
   } else if (config.savedToken) {
-    console.log(`  Token (legacy)→ ${config.savedToken}`);
-    console.log(`                  restored from ${path.join(config.dataDir, "kinglet.token")}`);
+    console.log(`  Token (legacy)→ stored at ${path.join(config.dataDir, "kinglet.token")} (not printed)`);
   } else {
     console.log(`  Tokens        → from KINGLET_TOKENS env (legacy)`);
   }

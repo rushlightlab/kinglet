@@ -91,14 +91,16 @@ export function parseFilters(q: string): ParsedFilters {
 
 /**
  * Free-text terms: >= 3 chars go through FTS5 trigram phrase search
- * (substring semantics), shorter ones fall back to LIKE.
+ * (substring semantics), shorter ones fall back to LIKE with escaped
+ * wildcards.
  */
 function textClause(term: string): SQL {
   if (term.length >= 3) {
     const phrase = `"${term.replace(/"/g, '""')}"`;
     return sql`id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ${phrase})`;
   }
-  return sql`message LIKE ${`%${term}%`}`;
+  const escaped = term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+  return sql`message LIKE ${`%${escaped}%`} ESCAPE '\\'`;
 }
 
 export function buildWhere(f: ParsedFilters, range: EventRange, projectId: number): SQL {

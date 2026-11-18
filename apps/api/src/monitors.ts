@@ -3,8 +3,9 @@ import type { SQL } from "drizzle-orm";
 import { subscribeEvents } from "./bus.js";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
 import type { ParsedFilters } from "./filters.js";
-import { sendNotice } from "./notify.js";
+import { sendNotice, validateWebhookUrl } from "./notify.js";
 import type { AlertNotice, NotifyChannel } from "./notify.js";
+import { systemStatus } from "./status.js";
 import * as schema from "./storage/schema.js";
 import type { Storage } from "./storage/index.js";
 import type { StoredEvent } from "./types.js";
@@ -39,6 +40,10 @@ export interface Monitor {
   channels: NotifyChannel[];
   createdAt: number;
   updatedAt: number;
+  /** Runtime observability, written by the alert engine. */
+  lastEvalAt: number | null;
+  lastError: string | null;
+  lastErrorAt: number | null;
 }
 
 export interface AlertRecord {
@@ -51,6 +56,9 @@ export interface AlertRecord {
   sampleMessage: string | null;
   firedAt: number;
   resolvedAt: number | null;
+  /** Delivery outcome of the "fired" notification. */
+  notifyStatus: "sent" | "partial" | "failed" | "none" | null;
+  notifyError: string | null;
 }
 
 interface MonitorInput {
@@ -73,7 +81,10 @@ function clampInt(raw: unknown, fallback: number, min: number, max: number): num
   return Math.min(max, Math.max(min, n));
 }
 
-export function parseMonitorInput(raw: unknown): { ok: true; value: MonitorInput } | { ok: false; error: string } {
+export function parseMonitorInput(
+  raw: unknown,
+  opts: { allowPrivateWebhooks: boolean }
+): { ok: true; value: MonitorInput } | { ok: false; error: string } {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, error: "monitor must be an object" };
   }
@@ -102,8 +113,9 @@ export function parseMonitorInput(raw: unknown): { ok: true; value: MonitorInput
     if (typeof type !== "string" || !CHANNEL_TYPES.includes(type)) {
       return { ok: false, error: `channel ${index + 1}: type must be webhook, discord, or slack` };
     }
-    if (!/^https?:\/\//i.test(url) || url.length > 2048) {
-      return { ok: false, error: `channel ${index + 1}: url must start with http:// or https://` };
+    const urlError = validateWebhookUrl(url, opts.allowPrivateWebhooks);
+    if (urlError) {
+      return { ok: false, error: `channel ${index + 1}: ${urlError}` };
     }
     channels.push({ type: type as NotifyChannel["type"], url });
   }
@@ -148,6 +160,9 @@ function rowToMonitor(row: typeof schema.monitors.$inferSelect): Monitor {
     channels: parseChannels(row.channels),
     createdAt: Number(row.createdAt),
     updatedAt: Number(row.updatedAt),
+    lastEvalAt: row.lastEvalAt === null ? null : Number(row.lastEvalAt),
+    lastError: row.lastError ?? null,
+    lastErrorAt: row.lastErrorAt === null ? null : Number(row.lastErrorAt),
   };
 }
 
@@ -179,9 +194,10 @@ export type MonitorResult = { ok: true; monitor: Monitor } | { ok: false; error:
 export async function createMonitorFromRaw(
   storage: Storage,
   projectId: number,
-  raw: unknown
+  raw: unknown,
+  opts: { allowPrivateWebhooks: boolean }
 ): Promise<MonitorResult> {
-  const input = parseMonitorInput(raw);
+  const input = parseMonitorInput(raw, opts);
   if (!input.ok) return input;
   const v = input.value;
   const now = Date.now();
@@ -210,9 +226,10 @@ export async function updateMonitorFromRaw(
   storage: Storage,
   id: number,
   projectId: number,
-  raw: unknown
+  raw: unknown,
+  opts: { allowPrivateWebhooks: boolean }
 ): Promise<MonitorResult | { ok: false; error: string; notFound: true }> {
-  const input = parseMonitorInput(raw);
+  const input = parseMonitorInput(raw, opts);
   if (!input.ok) return input;
   const v = input.value;
   const rows = await storage.db
@@ -257,6 +274,8 @@ export async function listAlerts(storage: Storage, limit: number, projectId: num
       sampleMessage: schema.alerts.sampleMessage,
       firedAt: schema.alerts.firedAt,
       resolvedAt: schema.alerts.resolvedAt,
+      notifyStatus: schema.alerts.notifyStatus,
+      notifyError: schema.alerts.notifyError,
       monitorName: schema.monitors.name,
     })
     .from(schema.alerts)
@@ -274,6 +293,8 @@ export async function listAlerts(storage: Storage, limit: number, projectId: num
     sampleMessage: row.sampleMessage ?? null,
     firedAt: Number(row.firedAt),
     resolvedAt: row.resolvedAt === null ? null : Number(row.resolvedAt),
+    notifyStatus: (row.notifyStatus as AlertRecord["notifyStatus"]) ?? null,
+    notifyError: row.notifyError ?? null,
   }));
 }
 
@@ -285,13 +306,18 @@ export interface MonitorEngine {
 
 interface MonitorState {
   active: boolean;
+  firing: boolean;
   lastFiredAt: number;
   lastEvalAt: number;
   openAlertId: number | null;
   evaluating: boolean;
 }
 
-export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } = {}): MonitorEngine {
+export function startMonitorEngine(
+  storage: Storage,
+  opts: { baseUrl?: string; allowPrivateWebhooks?: boolean } = {}
+): MonitorEngine {
+  const allowPrivate = opts.allowPrivateWebhooks ?? false;
   let monitors: Monitor[] = [];
   const state = new Map<number, MonitorState>();
   const parsedCache = new Map<string, ParsedFilters>();
@@ -308,7 +334,7 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
   const getState = (id: number): MonitorState => {
     let s = state.get(id);
     if (!s) {
-      s = { active: false, lastFiredAt: 0, lastEvalAt: 0, openAlertId: null, evaluating: false };
+      s = { active: false, firing: false, lastFiredAt: 0, lastEvalAt: 0, openAlertId: null, evaluating: false };
       state.set(id, s);
     }
     return s;
@@ -317,8 +343,32 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
   async function refresh(): Promise<void> {
     try {
       monitors = await listMonitors(storage);
+      const ids = new Set(monitors.map((m) => m.id));
+      for (const id of [...state.keys()]) {
+        if (!ids.has(id)) state.delete(id);
+      }
+      const queries = new Set(monitors.map((m) => m.query));
+      for (const key of [...parsedCache.keys()]) {
+        if (!queries.has(key)) parsedCache.delete(key);
+      }
+      // Disabling a monitor must resolve its open alert instead of leaving
+      // it "fired" forever.
+      for (const m of monitors) {
+        const s = state.get(m.id);
+        if (!m.enabled && s?.active) {
+          try {
+            await resolve(m, s);
+          } catch (err) {
+            console.warn("[kinglet] could not resolve disabled monitor:", err instanceof Error ? err.message : err);
+          }
+        }
+      }
+      systemStatus.monitorRefreshAt = Date.now();
+      systemStatus.monitorRefreshError = null;
     } catch (err) {
-      console.warn("[kinglet] monitor refresh failed:", err instanceof Error ? err.message : err);
+      const message = err instanceof Error ? err.message : String(err);
+      systemStatus.monitorRefreshError = message;
+      console.warn("[kinglet] monitor refresh failed:", message);
     }
   }
 
@@ -334,16 +384,25 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
     return `${opts.baseUrl.replace(/\/+$/, "")}/?${params.toString()}`;
   }
 
-  async function notifyAll(m: Monitor, notice: AlertNotice): Promise<void> {
-    const results = await Promise.allSettled(m.channels.map((ch) => sendNotice(ch, notice)));
+  async function notifyAll(
+    m: Monitor,
+    notice: AlertNotice
+  ): Promise<{ sent: number; failed: number; errors: string[] }> {
+    const results = await Promise.allSettled(
+      m.channels.map((ch) => sendNotice(ch, notice, { allowPrivate }))
+    );
     let failed = 0;
+    const errors: string[] = [];
     for (const r of results) {
       if (r.status === "rejected") {
         failed++;
-        console.warn("[kinglet] notification failed:", r.reason instanceof Error ? r.reason.message : r.reason);
+        const message = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        errors.push(message);
+        console.warn("[kinglet] notification failed:", message);
       }
     }
     if (failed > 0) console.warn(`[kinglet] ${failed}/${m.channels.length} channels failed for "${m.name}"`);
+    return { sent: m.channels.length - failed, failed, errors };
   }
 
   async function fire(
@@ -351,35 +410,66 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
     s: MonitorState,
     detail: { count?: number; sampleMessage?: string }
   ): Promise<void> {
-    const now = Date.now();
-    const summary = summaryFor(m, detail);
-    const inserted = await storage.db
-      .insert(schema.alerts)
-      .values({
+    // Reserve synchronously so concurrent ingest batches cannot double-fire.
+    if (s.firing) return;
+    s.firing = true;
+    try {
+      const now = Date.now();
+      const summary = summaryFor(m, detail);
+      const inserted = await storage.db
+        .insert(schema.alerts)
+        .values({
+          monitorId: m.id,
+          state: "fired",
+          summary,
+          count: detail.count ?? null,
+          sampleMessage: detail.sampleMessage ?? null,
+          firedAt: now,
+        })
+        .returning({ id: schema.alerts.id });
+      s.active = true;
+      s.lastFiredAt = now;
+      const alertId = Number(inserted[0]?.id ?? 0) || null;
+      s.openAlertId = alertId;
+
+      const delivery = await notifyAll(m, {
         monitorId: m.id,
+        monitorName: m.name,
+        query: m.query,
         state: "fired",
         summary,
         count: detail.count ?? null,
+        threshold: m.threshold,
+        windowMs: m.windowMs,
         sampleMessage: detail.sampleMessage ?? null,
         firedAt: now,
-      })
-      .returning({ id: schema.alerts.id });
-    s.active = true;
-    s.lastFiredAt = now;
-    s.openAlertId = Number(inserted[0]?.id ?? 0) || null;
-    await notifyAll(m, {
-      monitorId: m.id,
-      monitorName: m.name,
-      query: m.query,
-      state: "fired",
-      summary,
-      count: detail.count ?? null,
-      threshold: m.threshold,
-      windowMs: m.windowMs,
-      sampleMessage: detail.sampleMessage ?? null,
-      firedAt: now,
-      link: linkFor(m, now),
-    });
+        link: linkFor(m, now),
+      });
+
+      if (alertId !== null) {
+        const notifyStatus =
+          m.channels.length === 0
+            ? "none"
+            : delivery.failed === 0
+              ? "sent"
+              : delivery.sent > 0
+                ? "partial"
+                : "failed";
+        try {
+          await storage.db
+            .update(schema.alerts)
+            .set({
+              notifyStatus,
+              notifyError: delivery.errors.length > 0 ? delivery.errors.slice(0, 3).join("; ").slice(0, 500) : null,
+            })
+            .where(eq(schema.alerts.id, alertId));
+        } catch (err) {
+          console.warn("[kinglet] could not record notify status:", err instanceof Error ? err.message : err);
+        }
+      }
+    } finally {
+      s.firing = false;
+    }
   }
 
   async function resolve(m: Monitor, s: MonitorState): Promise<void> {
@@ -422,13 +512,24 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
       const rows = await storage.db.select({ n: count() }).from(schema.events).where(where);
       const total = Number(rows[0]?.n ?? 0);
       const cond = m.kind === "count_above" ? total > m.threshold : total < m.threshold;
+      void storage.db
+        .update(schema.monitors)
+        .set({ lastEvalAt: now, lastError: null, lastErrorAt: null })
+        .where(eq(schema.monitors.id, m.id))
+        .catch(() => undefined);
       if (cond && !s.active && now - s.lastFiredAt >= m.cooldownMs) {
         await fire(m, s, { count: total });
       } else if (!cond && s.active) {
         await resolve(m, s);
       }
     } catch (err) {
-      console.warn(`[kinglet] monitor "${m.name}" evaluation failed:`, err instanceof Error ? err.message : err);
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[kinglet] monitor "${m.name}" evaluation failed:`, message);
+      void storage.db
+        .update(schema.monitors)
+        .set({ lastError: message.slice(0, 500), lastErrorAt: Date.now() })
+        .where(eq(schema.monitors.id, m.id))
+        .catch(() => undefined);
     } finally {
       s.evaluating = false;
     }
@@ -444,6 +545,7 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
           if (!matchesEvent(f, row)) continue;
           const s = getState(m.id);
           const now = Date.now();
+          if (s.firing) break;
           if (now - s.lastFiredAt < m.cooldownMs) break;
           await fire(m, s, { sampleMessage: row.message });
           break; // one fire per batch per monitor
@@ -454,6 +556,14 @@ export function startMonitorEngine(storage: Storage, opts: { baseUrl?: string } 
           `[kinglet] monitor "${m.name}" event processing failed:`,
           err instanceof Error ? err.message : err
         );
+        void storage.db
+          .update(schema.monitors)
+          .set({
+            lastError: (err instanceof Error ? err.message : String(err)).slice(0, 500),
+            lastErrorAt: Date.now(),
+          })
+          .where(eq(schema.monitors.id, m.id))
+          .catch(() => undefined);
       }
     }
   }

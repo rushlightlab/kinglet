@@ -48,10 +48,52 @@ import { toClientEvent } from "./types.js";
 
 const MAX_BATCH = 10000;
 
-function parseTimestamp(value: string | undefined, fallback: number): number {
-  if (value === undefined) return fallback;
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
+/**
+ * Validates the from/to query parameters. Rejects unsafe/non-integer values,
+ * inverted ranges, and clamps to a sane window. This is also what prevents
+ * the histogram bucket loop from ever seeing an astronomically large value.
+ */
+function parseRange(c: Context<AppEnv>): { from: number; to: number } | Response {
+  const now = Date.now();
+  const fromRaw = c.req.query("from");
+  const toRaw = c.req.query("to");
+  const from = fromRaw === undefined ? now - 3_600_000 : Number(fromRaw);
+  const to = toRaw === undefined ? now : Number(toRaw);
+  if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from <= 0 || to <= 0) {
+    return c.json({ error: "from/to must be epoch milliseconds" }, 400);
+  }
+  if (from > to) return c.json({ error: "from must be before to" }, 400);
+  return { from: Math.max(from, to - 31 * 24 * 3_600_000), to: Math.min(to, now + 5 * 60_000) };
+}
+
+function validateQuery(q: string): string | null {
+  if (q.length > 500) return "filter is too long (max 500 characters)";
+  if (q.split(/\s+/).filter(Boolean).length > 32) return "too many filter terms (max 32)";
+  return null;
+}
+
+/** Per-identity ingest rate limit: 600 batches / minute. */
+const ingestWindows = new Map<string, { count: number; resetAt: number }>();
+function allowIngest(auth: { kind: string; keyId?: number; user?: { id: string } }): boolean {
+  const id =
+    auth.kind === "key" ? `key:${auth.keyId ?? 0}` : auth.kind === "user" ? `user:${auth.user?.id ?? ""}` : "legacy";
+  const now = Date.now();
+  const window = ingestWindows.get(id);
+  if (!window || now > window.resetAt) {
+    ingestWindows.set(id, { count: 1, resetAt: now + 60_000 });
+    return true;
+  }
+  if (window.count >= 600) return false;
+  window.count++;
+  return true;
+}
+
+function safeHost(raw: string): string {
+  try {
+    return new URL(raw).host;
+  } catch {
+    return "hidden";
+  }
 }
 
 function clampInt(value: string | undefined, fallback: number, min: number, max: number): number {
@@ -329,16 +371,29 @@ export function registerRoutes(
     if (authInfo.kind === "user" && !can(authInfo, "logs.write")) return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
+    if (!allowIngest(authInfo)) {
+      return c.json({ error: "ingest rate limit exceeded (600 batches/minute)" }, 429);
+    }
 
     const contentType = (c.req.header("content-type") ?? "").toLowerCase();
     const text = await c.req.text();
     const raws: unknown[] = [];
     let parseErrors = 0;
+    let truncated = false;
+
+    const pushRaw = (value: unknown): void => {
+      if (raws.length < MAX_BATCH) raws.push(value);
+      else truncated = true;
+    };
 
     if (contentType.includes("ndjson")) {
       for (const line of text.split(/\r?\n/)) {
         const trimmed = line.trim();
         if (!trimmed) continue;
+        if (raws.length >= MAX_BATCH) {
+          truncated = true;
+          break;
+        }
         try {
           raws.push(JSON.parse(trimmed));
         } catch {
@@ -352,14 +407,21 @@ export function registerRoutes(
       } catch {
         return c.json({ error: "invalid JSON body" }, 400);
       }
-      if (Array.isArray(parsed)) raws.push(...parsed);
-      else if (parsed !== null && typeof parsed === "object" && Array.isArray((parsed as { events?: unknown }).events))
-        raws.push(...(parsed as { events: unknown[] }).events);
-      else raws.push(parsed);
+      if (Array.isArray(parsed)) {
+        truncated = parsed.length > MAX_BATCH;
+        for (let i = 0; i < Math.min(parsed.length, MAX_BATCH); i++) pushRaw(parsed[i]);
+      } else if (
+        parsed !== null &&
+        typeof parsed === "object" &&
+        Array.isArray((parsed as { events?: unknown }).events)
+      ) {
+        const list = (parsed as { events: unknown[] }).events;
+        truncated = list.length > MAX_BATCH;
+        for (let i = 0; i < Math.min(list.length, MAX_BATCH); i++) pushRaw(list[i]);
+      } else {
+        pushRaw(parsed);
+      }
     }
-
-    const truncated = raws.length > MAX_BATCH;
-    if (truncated) raws.length = MAX_BATCH;
 
     const normalized: Normalized[] = [];
     const errors: string[] = [];
@@ -397,9 +459,11 @@ export function registerRoutes(
     if (projectId instanceof Response) return projectId;
 
     const q = c.req.query("q") ?? "";
-    const now = Date.now();
-    const from = parseTimestamp(c.req.query("from"), now - 3600_000);
-    const to = parseTimestamp(c.req.query("to"), now);
+    const qError = validateQuery(q);
+    if (qError) return c.json({ error: qError }, 400);
+    const range = parseRange(c);
+    if (range instanceof Response) return range;
+    const { from, to } = range;
     const limit = clampInt(c.req.query("limit"), 200, 1, 1000);
     const cursorRaw = Number(c.req.query("cursor"));
     const cursor = Number.isFinite(cursorRaw) && cursorRaw > 0 ? cursorRaw : null;
@@ -417,9 +481,9 @@ export function registerRoutes(
     if (authInfo.kind === "user" && !can(authInfo, "logs.read")) return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
-    const now = Date.now();
-    const from = parseTimestamp(c.req.query("from"), now - 3600_000);
-    const to = parseTimestamp(c.req.query("to"), now);
+    const range = parseRange(c);
+    if (range instanceof Response) return range;
+    const { from, to } = range;
     const buckets = clampInt(c.req.query("buckets"), 60, 1, 240);
     const bucketMs = Math.max(1000, Math.trunc((to - from) / buckets));
     return c.json({ from, to, bucketMs, points: await storage.histogramPoints(projectId, from, to, bucketMs) });
@@ -442,6 +506,8 @@ export function registerRoutes(
     if (projectId instanceof Response) return projectId;
 
     const q = c.req.query("q") ?? "";
+    const qError = validateQuery(q);
+    if (qError) return c.json({ error: qError }, 400);
     const f = parseFilters(q);
     return streamSSE(c, async (stream) => {
       let closed = false;
@@ -490,7 +556,18 @@ export function registerRoutes(
     if (denied) return denied;
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
-    return c.json({ monitors: await listMonitors(storage, projectId) });
+    const monitors = await listMonitors(storage, projectId);
+    const authInfo = getAuth(c);
+    // Webhook URLs are bearer secrets: viewers see only the host.
+    const canSeeChannels = authInfo.kind !== "user" || can(authInfo, "monitors.write");
+    return c.json({
+      monitors: canSeeChannels
+        ? monitors
+        : monitors.map((m) => ({
+            ...m,
+            channels: m.channels.map((ch) => ({ type: ch.type, url: safeHost(ch.url) })),
+          })),
+    });
   });
 
   app.post("/v1/monitors", async (c) => {
@@ -498,10 +575,19 @@ export function registerRoutes(
     if (denied) return denied;
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
+    const totals = await storage.db
+      .select({ n: count() })
+      .from(schema.monitors)
+      .where(eq(schema.monitors.projectId, projectId));
+    if (Number(totals[0]?.n ?? 0) >= 100) {
+      return c.json({ error: "monitor limit reached (100 per project)" }, 400);
+    }
     const parsedBody = await readJsonStrict(c);
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
-    const result = await createMonitorFromRaw(storage, projectId, body);
+    const result = await createMonitorFromRaw(storage, projectId, body, {
+      allowPrivateWebhooks: config.allowPrivateWebhooks,
+    });
     if (!result.ok) return c.json({ error: result.error }, 400);
     await engine.refresh();
     return c.json({ monitor: result.monitor }, 201);
@@ -517,7 +603,9 @@ export function registerRoutes(
     const parsedBody = await readJsonStrict(c);
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
-    const result = await updateMonitorFromRaw(storage, id, projectId, body);
+    const result = await updateMonitorFromRaw(storage, id, projectId, body, {
+      allowPrivateWebhooks: config.allowPrivateWebhooks,
+    });
     if (!result.ok) {
       const notFound = "notFound" in result && result.notFound === true;
       return c.json({ error: result.error }, notFound ? 404 : 400);
@@ -556,15 +644,21 @@ export function registerRoutes(
       summary: "Test notification from Kinglet — your channel works.",
       firedAt: Date.now(),
     };
-    const results = [];
-    for (const channel of monitor.channels) {
-      try {
-        await sendNotice(channel, notice);
-        results.push({ type: channel.type, ok: true });
-      } catch (err) {
-        results.push({ type: channel.type, ok: false, error: err instanceof Error ? err.message : String(err) });
-      }
-    }
+    const authInfo = getAuth(c);
+    const detailed = authInfo.kind !== "user" || authInfo.user.role === "admin";
+    const results = await Promise.all(
+      monitor.channels.map(async (channel) => {
+        try {
+          await sendNotice(channel, notice, { allowPrivate: config.allowPrivateWebhooks });
+          return { type: channel.type, ok: true };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          // Internal reachability details are admin-only.
+          console.warn(`[kinglet] test notification failed (${channel.type}):`, message);
+          return { type: channel.type, ok: false, ...(detailed ? { error: message } : {}) };
+        }
+      })
+    );
     return c.json({ results });
   });
 

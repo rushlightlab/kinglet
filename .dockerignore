@@ -5,3 +5,12 @@ node_modules
 **/dist
 .turbo
 data
+**/data
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/kinglet.token
+**/admin-password.txt
+**/auth-secret.txt
+.env
+**/.env

@@ -47,7 +47,7 @@ export async function openDatabase(opts: {
   if (isFile) {
     const local = opts.url.slice(5);
     if (local !== ":memory:" || local.length > 8) {
-      fs.mkdirSync(path.dirname(path.resolve(local)), { recursive: true });
+      fs.mkdirSync(path.dirname(path.resolve(local)), { recursive: true, mode: 0o700 });
     }
   }
 

@@ -9,8 +9,14 @@ export interface Config {
   dbPath: string;
   storageKind: StorageKindSetting;
   dbAuthToken?: string;
-  /** Public URL, used in alert notification links (e.g. http://logs.example.com). */
+  /** Public URL, used in alert notification links and Better Auth origin checks. */
   baseUrl?: string;
+  /** Allow webhook channels that point at private/loopback addresses. */
+  allowPrivateWebhooks: boolean;
+  /** Secret used to sign sessions/cookies — env override or persisted file. */
+  authSecret: string;
+  /** Reverse-proxy CIDRs allowed to supply X-Forwarded-For. */
+  trustedProxies: string[];
   /** Directory holding the database file (local stores only). */
   dataDir: string;
   /** Legacy global ingest tokens (KINGLET_TOKENS) — all projects, full access. */
@@ -37,6 +43,31 @@ function intEnv(name: string, fallback: number): number {
 function storageKindEnv(): StorageKindSetting {
   const raw = process.env.KINGLET_STORAGE?.trim().toLowerCase();
   return raw === "sqlite" || raw === "libsql" ? raw : "auto";
+}
+
+/**
+ * Better Auth signing secret. Never falls back to a public constant: env
+ * override first, then a persisted random secret next to the database
+ * (created 0600), so cookie-cache sessions stay valid across restarts.
+ */
+function resolveAuthSecret(dataDir: string): string {
+  const explicit = (process.env.BETTER_AUTH_SECRET ?? process.env.KINGLET_AUTH_SECRET ?? "").trim();
+  if (explicit) return explicit;
+  const secretFile = path.join(dataDir, "auth-secret.txt");
+  try {
+    const saved = fs.readFileSync(secretFile, "utf8").trim();
+    if (saved) return saved;
+  } catch {
+    // generate below
+  }
+  const secret = randomBytes(32).toString("base64url");
+  try {
+    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(secretFile, secret + "\n", { mode: 0o600 });
+  } catch {
+    // read-only or remote data dir — env secret is recommended there
+  }
+  return secret;
 }
 
 export function loadConfig(): Config {
@@ -75,6 +106,12 @@ export function loadConfig(): Config {
     storageKind: storageKindEnv(),
     dbAuthToken,
     baseUrl,
+    allowPrivateWebhooks: ["1", "true", "yes"].includes((process.env.KINGLET_ALLOW_PRIVATE_WEBHOOKS ?? "").toLowerCase()),
+    authSecret: resolveAuthSecret(dataDir),
+    trustedProxies: (process.env.KINGLET_TRUSTED_PROXIES ?? "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean),
     dataDir,
     tokens,
     generatedToken,

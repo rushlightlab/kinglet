@@ -12,17 +12,37 @@ import * as schema from "../storage/schema.js";
  *  - indexes — users.email, sessions.userId + token, accounts.userId,
  *    verifications.identifier are created in the Drizzle schema.
  *
+ * Security:
+ *  - a real signing secret is always supplied (env override or a persisted
+ *    0600 random secret — never Better Auth's public default);
+ *  - rate limiting is enabled explicitly (not only when NODE_ENV=production);
+ *  - trustedOrigins covers the configured base URL (normalized) and the
+ *    documented local ports; X-Forwarded-For is trusted only for the CIDRs
+ *    listed in KINGLET_TRUSTED_PROXIES.
+ *
  * Roles: the admin plugin owns the `role` column. Kinglet uses
- * admin / member / viewer and enforces its own permission map in the API;
- * public self-signup is treated as viewer via `defaultRole`.
+ * admin / member / viewer and enforces its own permission map in the API.
  */
-export function createAuth(db: KingletDb, opts: { baseUrl?: string; port: number }) {
-  const baseURL = opts.baseUrl ?? `http://localhost:${opts.port}`;
-  const devOrigins = ["http://localhost:5173", "http://127.0.0.1:5173"];
+export function createAuth(
+  db: KingletDb,
+  opts: { baseUrl?: string; port: number; secret: string; trustedProxies?: string[] }
+) {
+  const rawBase = opts.baseUrl ?? `http://localhost:${opts.port}`;
+  let baseOrigin = rawBase;
+  try {
+    baseOrigin = new URL(rawBase).origin;
+  } catch {
+    // keep the raw value if it isn't a URL
+  }
+  const localOrigins = ["localhost", "127.0.0.1"].flatMap((host) =>
+    [3000, 5173, 8080].map((port) => `http://${host}:${port}`)
+  );
+  const trustedProxies = opts.trustedProxies ?? [];
 
   return betterAuth({
-    baseURL,
-    trustedOrigins: [baseURL, `http://localhost:${opts.port}`, `http://127.0.0.1:${opts.port}`, ...devOrigins],
+    baseURL: baseOrigin,
+    secret: opts.secret,
+    trustedOrigins: [baseOrigin, ...localOrigins],
     database: drizzleAdapter(db, {
       provider: "sqlite",
       schema: {
@@ -44,6 +64,17 @@ export function createAuth(db: KingletDb, opts: { baseUrl?: string; port: number
       },
     },
     plugins: [admin({ defaultRole: "viewer" })],
+    rateLimit: {
+      enabled: true,
+      window: 60,
+      max: 300,
+      customRules: {
+        "/sign-in/email": { window: 60, max: 20 },
+      },
+    },
+    ...(trustedProxies.length > 0
+      ? { advanced: { ipAddress: { trustedProxies } } }
+      : {}),
   });
 }
 

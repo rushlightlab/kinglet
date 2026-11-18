@@ -50,8 +50,10 @@ export async function ensureBootstrapAdmin(
 
   if (generated) {
     try {
-      fs.mkdirSync(config.dataDir, { recursive: true });
-      fs.writeFileSync(path.join(config.dataDir, "admin-password.txt"), generated + "\n");
+      fs.mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(config.dataDir, "admin-password.txt"), generated + "\n", {
+        mode: 0o600,
+      });
     } catch {
       // banner still shows it
     }
