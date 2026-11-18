@@ -228,7 +228,13 @@ The dev API writes to `apps/api/data/` and prints a fresh token on first boot
 Port 3000 already taken by another app? Point both dev servers elsewhere:
 
 ```bash
+# bash / zsh
 KINGLET_PORT=3100 KINGLET_API_URL=http://localhost:3100 pnpm dev
+```
+
+```powershell
+# PowerShell (Windows)
+$env:KINGLET_PORT = "3100"; $env:KINGLET_API_URL = "http://localhost:3100"; pnpm dev
 ```
 
 See logs move — in a second terminal:
@@ -239,7 +245,8 @@ pnpm demo:logs --once   # backfill only, then exit
 ```
 
 (`demo:logs` auto-reads the dev token from `apps/api/data/kinglet.token`; for a
-custom port use `KINGLET_URL=http://localhost:3100 pnpm demo:logs`.)
+custom port run `KINGLET_URL=http://localhost:3100 pnpm demo:logs` — or in
+PowerShell, `$env:KINGLET_URL = "http://localhost:3100"; pnpm demo:logs`.)
 
 Testing alert channels without Discord or Slack:
 
