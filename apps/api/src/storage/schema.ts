@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /**
  * Kinglet's schema in Drizzle.
@@ -182,4 +182,28 @@ export const verification = sqliteTable(
   (table) => [index("verification_identifier_idx").on(table.identifier)]
 );
 
+/**
+ * Per-project access for non-admin users. Admins bypass membership and can
+ * see every project. Existing installations are backfilled to grant every
+ * user access to every project, so upgrading does not silently lock anyone
+ * out; admins can then prune assignments.
+ */
+export const projectMembers = sqliteTable(
+  "project_members",
+  {
+    id: integer("id").primaryKey(),
+    projectId: integer("project_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    index("idx_project_members_project").on(table.projectId),
+    index("idx_project_members_user").on(table.userId),
+    uniqueIndex("uq_project_members").on(table.projectId, table.userId),
+  ]
+);
+
 export type AuthUserRow = typeof user.$inferSelect;
+export type ProjectMemberRow = typeof projectMembers.$inferSelect;

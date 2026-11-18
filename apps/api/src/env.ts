@@ -28,6 +28,10 @@ export interface Config {
   retentionDays: number;
   /** Session lifetime for the web UI. */
   sessionDays: number;
+  /** Hard cap on stored events per project; 0 disables the cap. */
+  maxEventsPerProject: number;
+  /** Hard cap on the local database size in bytes; 0 disables the cap. */
+  maxDbBytes: number;
   /** Optional bootstrap administrator identity (first boot only). */
   adminEmail?: string;
   adminPassword?: string;
@@ -38,6 +42,14 @@ function intEnv(name: string, fallback: number): number {
   if (!raw) return fallback;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/** Like intEnv, but 0 is meaningful (disable the limit). */
+function nonNegativeIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
 function storageKindEnv(): StorageKindSetting {
@@ -129,6 +141,8 @@ export function loadConfig(): Config {
     savedToken,
     retentionDays: intEnv("KINGLET_RETENTION_DAYS", 14),
     sessionDays: intEnv("KINGLET_SESSION_DAYS", 30),
+    maxEventsPerProject: nonNegativeIntEnv("KINGLET_MAX_EVENTS_PER_PROJECT", 1_000_000),
+    maxDbBytes: nonNegativeIntEnv("KINGLET_MAX_DB_MB", 4096) * 1024 * 1024,
     adminEmail: process.env.KINGLET_ADMIN_EMAIL?.trim() || undefined,
     adminPassword: process.env.KINGLET_ADMIN_PASSWORD?.trim() || undefined,
   };

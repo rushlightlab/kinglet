@@ -98,6 +98,14 @@ export interface Project {
   createdAt: number;
 }
 
+export interface ProjectMember {
+  userId: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  addedAt: number;
+}
+
 export type UserRole = "admin" | "member" | "viewer";
 
 export interface AppUser {

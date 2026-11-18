@@ -1,5 +1,7 @@
 import { and, count, eq, inArray } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
+import fs from "node:fs";
+import path from "node:path";
 import { bodyLimit } from "hono/body-limit";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -9,6 +11,7 @@ import { createApiKey, deleteApiKey, deleteApiKeysByOwner, listApiKeys, verifyAp
 import type { KingletAuth } from "./auth/auth.js";
 import {
   can,
+  canAccessProject,
   getAuth,
   projectExists,
   requirePermission,
@@ -91,6 +94,55 @@ function allowIngest(auth: { kind: string; keyId?: number; user?: { id: string }
   return true;
 }
 
+/**
+ * Stored-event counts are cached for 30s so per-batch quota checks do not run
+ * a COUNT on the hot ingest path every time.
+ */
+const projectCountCache = new Map<number, { value: number; expiresAt: number }>();
+async function projectEventCount(storage: Storage, projectId: number): Promise<number> {
+  const now = Date.now();
+  const cached = projectCountCache.get(projectId);
+  if (cached && cached.expiresAt > now) return cached.value;
+  const rows = await storage.db
+    .select({ n: count() })
+    .from(schema.events)
+    .where(eq(schema.events.projectId, projectId));
+  const value = Number(rows[0]?.n ?? 0);
+  projectCountCache.set(projectId, { value, expiresAt: now + 30_000 });
+  return value;
+}
+
+function bumpProjectCount(projectId: number, inserted: number): void {
+  const cached = projectCountCache.get(projectId);
+  if (cached) cached.value += inserted;
+}
+
+let dbSizeCache: { bytes: number | null; checkedAt: number } = { bytes: null, checkedAt: 0 };
+
+/** Size of a local libSQL store, WAL included; null for remote stores. */
+function localDbBytes(dbPath: string): number | null {
+  const local = dbPath.toLowerCase().startsWith("file:") ? dbPath.slice(5) : dbPath;
+  if (/^(libsql:\/\/|https?:\/\/|wss?:\/\/)/i.test(local)) return null;
+  const now = Date.now();
+  if (now - dbSizeCache.checkedAt < 30_000) return dbSizeCache.bytes;
+  let bytes: number | null = null;
+  try {
+    const resolved = path.resolve(local);
+    bytes = fs.statSync(resolved).size;
+    for (const suffix of ["-wal", "-shm"]) {
+      try {
+        bytes += fs.statSync(resolved + suffix).size;
+      } catch {
+        // file may not exist
+      }
+    }
+  } catch {
+    bytes = null;
+  }
+  dbSizeCache = { bytes, checkedAt: now };
+  return bytes;
+}
+
 function clampInt(value: string | undefined, fallback: number, min: number, max: number): number {
   if (value === undefined) return fallback;
   const n = Math.trunc(Number(value));
@@ -157,7 +209,23 @@ export function registerRoutes(
   app.get("/v1/projects", async (c) => {
     const authInfo = getAuth(c);
     if (authInfo.kind === "key") return c.json({ error: "user session required" }, 403);
-    const rows = await storage.db.select().from(schema.projects).orderBy(schema.projects.id);
+    const rows =
+      authInfo.kind === "user" && authInfo.user.role !== "admin"
+        ? await storage.db
+            .select({
+              id: schema.projects.id,
+              name: schema.projects.name,
+              slug: schema.projects.slug,
+              createdAt: schema.projects.createdAt,
+            })
+            .from(schema.projects)
+            .innerJoin(
+              schema.projectMembers,
+              eq(schema.projectMembers.projectId, schema.projects.id)
+            )
+            .where(eq(schema.projectMembers.userId, authInfo.user.id))
+            .orderBy(schema.projects.id)
+        : await storage.db.select().from(schema.projects).orderBy(schema.projects.id);
     return c.json({
       projects: rows.map((r) => ({
         id: Number(r.id),
@@ -193,6 +261,17 @@ export function registerRoutes(
       .values({ name, slug, createdAt: now })
       .returning();
     const row = rows[0];
+    // Give the creator explicit membership too, so a later demotion from
+    // admin does not silently remove access to a project they created.
+    if (row && getAuth(c).kind === "user") {
+      const authInfo = getAuth(c);
+      if (authInfo.kind === "user") {
+        await storage.db
+          .insert(schema.projectMembers)
+          .values({ projectId: Number(row.id), userId: authInfo.user.id, createdAt: now })
+          .onConflictDoNothing();
+      }
+    }
     return c.json(
       { project: { id: Number(row?.id ?? 0), name, slug, createdAt: now } },
       201
@@ -217,6 +296,7 @@ export function registerRoutes(
       await tx.delete(schema.monitors).where(eq(schema.monitors.projectId, id));
       await tx.delete(schema.events).where(eq(schema.events.projectId, id));
       await tx.delete(schema.apiKeys).where(eq(schema.apiKeys.projectId, id));
+      await tx.delete(schema.projectMembers).where(eq(schema.projectMembers.projectId, id));
       await tx.delete(schema.projects).where(eq(schema.projects.id, id));
     });
     await engine.refresh();
@@ -330,6 +410,9 @@ export function registerRoutes(
     const projectId = parseId(c.req.param("id"));
     if (projectId === null) return c.json({ error: "invalid project id" }, 400);
     if (!(await projectExists(storage, projectId))) return c.json({ error: "project not found" }, 404);
+    if (!(await canAccessProject(getAuth(c), storage, projectId))) {
+      return c.json({ error: "project not found" }, 404);
+    }
     return c.json({ keys: await listApiKeys(storage, projectId) });
   });
 
@@ -339,6 +422,9 @@ export function registerRoutes(
     const projectId = parseId(c.req.param("id"));
     if (projectId === null) return c.json({ error: "invalid project id" }, 400);
     if (!(await projectExists(storage, projectId))) return c.json({ error: "project not found" }, 404);
+    if (!(await canAccessProject(getAuth(c), storage, projectId))) {
+      return c.json({ error: "project not found" }, 404);
+    }
     const parsedBody = await readJsonStrict(c);
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
@@ -372,8 +458,82 @@ export function registerRoutes(
     const projectRaw = c.req.query("project");
     const projectId = Math.trunc(Number(projectRaw));
     if (!Number.isFinite(projectId) || projectId <= 0) return c.json({ error: "project is required" }, 400);
+    if (!(await canAccessProject(getAuth(c), storage, projectId))) {
+      return c.json({ error: "project not found" }, 404);
+    }
     const deleted = await deleteApiKey(storage, id, projectId);
     if (!deleted) return c.json({ error: "key not found" }, 404);
+    return c.json({ ok: true });
+  });
+
+  // ================= project members =================
+
+  app.get("/v1/projects/:id/members", async (c) => {
+    const denied = requirePermission(c, "projects.write");
+    if (denied) return denied;
+    const projectId = parseId(c.req.param("id"));
+    if (projectId === null) return c.json({ error: "invalid project id" }, 400);
+    if (!(await projectExists(storage, projectId))) return c.json({ error: "project not found" }, 404);
+    const rows = await storage.db
+      .select({
+        userId: schema.user.id,
+        email: schema.user.email,
+        name: schema.user.name,
+        role: schema.user.role,
+        addedAt: schema.projectMembers.createdAt,
+      })
+      .from(schema.projectMembers)
+      .innerJoin(schema.user, eq(schema.user.id, schema.projectMembers.userId))
+      .where(eq(schema.projectMembers.projectId, projectId))
+      .orderBy(schema.user.email);
+    return c.json({
+      members: rows
+        .filter((r) => r.role !== "admin")
+        .map((r) => ({
+          userId: String(r.userId),
+          email: r.email,
+          name: r.name,
+          role: isRole(r.role) ? r.role : "viewer",
+          addedAt: Number(r.addedAt),
+        })),
+    });
+  });
+
+  app.post("/v1/projects/:id/members", async (c) => {
+    const denied = requirePermission(c, "projects.write");
+    if (denied) return denied;
+    const projectId = parseId(c.req.param("id"));
+    if (projectId === null) return c.json({ error: "invalid project id" }, 400);
+    if (!(await projectExists(storage, projectId))) return c.json({ error: "project not found" }, 404);
+    const parsedBody = await readJsonStrict(c);
+    if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
+    const userId = typeof parsedBody.body?.userId === "string" ? parsedBody.body.userId : "";
+    if (!userId) return c.json({ error: "userId is required" }, 400);
+    const target = await getUserById(storage, userId);
+    if (!target) return c.json({ error: "user not found" }, 404);
+    await storage.db
+      .insert(schema.projectMembers)
+      .values({ projectId, userId, createdAt: Date.now() })
+      .onConflictDoNothing();
+    return c.json({ ok: true, member: { userId, email: target.email, name: target.name, role: target.role } }, 201);
+  });
+
+  app.delete("/v1/projects/:id/members/:userId", async (c) => {
+    const denied = requirePermission(c, "projects.write");
+    if (denied) return denied;
+    const projectId = parseId(c.req.param("id"));
+    if (projectId === null) return c.json({ error: "invalid project id" }, 400);
+    const userId = c.req.param("userId");
+    if (!userId) return c.json({ error: "invalid user id" }, 400);
+    const result = await storage.db
+      .delete(schema.projectMembers)
+      .where(
+        and(
+          eq(schema.projectMembers.projectId, projectId),
+          eq(schema.projectMembers.userId, userId)
+        )
+      );
+    if (Number(result.rowsAffected ?? 0) === 0) return c.json({ error: "member not found" }, 404);
     return c.json({ ok: true });
   });
 
@@ -389,6 +549,32 @@ export function registerRoutes(
     if (projectId instanceof Response) return projectId;
     if (!allowIngest(authInfo)) {
       return c.json({ error: "ingest rate limit exceeded (600 batches/minute)" }, 429);
+    }
+    if (config.maxDbBytes > 0) {
+      const bytes = localDbBytes(config.dbPath);
+      if (bytes !== null && bytes >= config.maxDbBytes) {
+        return c.json(
+          {
+            error:
+              `database size limit reached (${Math.round(config.maxDbBytes / 1_048_576)} MB) — ` +
+              "shorten KINGLET_RETENTION_DAYS or raise KINGLET_MAX_DB_MB",
+          },
+          507
+        );
+      }
+    }
+    if (config.maxEventsPerProject > 0) {
+      const stored = await projectEventCount(storage, projectId);
+      if (stored >= config.maxEventsPerProject) {
+        return c.json(
+          {
+            error:
+              `project event limit reached (${config.maxEventsPerProject.toLocaleString()}) — ` +
+              "raise KINGLET_MAX_EVENTS_PER_PROJECT or shorten retention",
+          },
+          429
+        );
+      }
     }
 
     const contentType = (c.req.header("content-type") ?? "").toLowerCase();
@@ -448,6 +634,7 @@ export function registerRoutes(
     }
 
     const rows = await storage.insertEvents(projectId, normalized);
+    bumpProjectCount(projectId, rows.length);
     publishEvents(rows);
 
     if (rows.length === 0 && errors.length + parseErrors > 0) {

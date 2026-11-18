@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import {
+  addProjectMember,
   changePassword,
   createKey,
   createProject,
@@ -9,11 +10,13 @@ import {
   deleteProject,
   deleteUser,
   fetchKeys,
+  fetchProjectMembers,
   fetchUsers,
+  removeProjectMember,
   updateUser,
 } from "../api";
 import { hasPermission, useApp } from "../app-context";
-import type { ApiKeyInfo, AppUser } from "../types";
+import type { ApiKeyInfo, AppUser, ProjectMember } from "../types";
 import SiteHeader from "../components/SiteHeader";
 
 export const Route = createFileRoute("/settings")({
@@ -90,6 +93,9 @@ function KeysPanel() {
 
   const [projectName, setProjectName] = useState("");
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
+  const [members, setMembers] = useState<ProjectMember[]>([]);
+  const [allUsers, setAllUsers] = useState<AppUser[]>([]);
+  const [memberToAdd, setMemberToAdd] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -104,6 +110,46 @@ function KeysPanel() {
     setCreatedKey(null);
     void load();
   }, [load]);
+
+  const loadMembers = useCallback(async () => {
+    if (!canWriteProjects) return;
+    try {
+      const [m, u] = await Promise.all([fetchProjectMembers(currentProjectId), fetchUsers()]);
+      setMembers(m.members);
+      setAllUsers(u.users);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [currentProjectId, canWriteProjects]);
+
+  useEffect(() => {
+    setMemberToAdd("");
+    void loadMembers();
+  }, [loadMembers]);
+
+  const candidates = allUsers.filter(
+    (u) => u.role !== "admin" && !members.some((m) => m.userId === u.id)
+  );
+
+  const addMember = async (): Promise<void> => {
+    if (!memberToAdd) return;
+    try {
+      await addProjectMember(currentProjectId, memberToAdd);
+      setMemberToAdd("");
+      await loadMembers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const removeMember = async (userId: string): Promise<void> => {
+    try {
+      await removeProjectMember(currentProjectId, userId);
+      await loadMembers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const create = async (): Promise<void> => {
     const scopes = [scopeIngest ? "ingest" : null, scopeQuery ? "query" : null].filter(
@@ -282,6 +328,57 @@ function KeysPanel() {
             </span>
           ))}
         </div>
+        {canWriteProjects && (
+          <div className="mt-4 border-t border-white/[0.06] pt-4">
+            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
+              members — {project?.name ?? "project"}
+            </span>
+            <p className="mt-1 font-mono text-[11px] leading-relaxed text-mist-faint">
+              Admins see every project. Members and viewers see only the projects assigned here.
+            </p>
+            <div className="mt-3 flex flex-col gap-1">
+              {members.map((m) => (
+                <div
+                  key={m.userId}
+                  className="flex items-center gap-2 border-b border-white/[0.04] py-1.5 font-mono text-xs"
+                >
+                  <span className="truncate text-mist">{m.email}</span>
+                  <span className="text-[9px] uppercase tracking-[0.12em] text-mist-faint">{m.role}</span>
+                  <button
+                    onClick={() => void removeMember(m.userId)}
+                    className="k-chip-btn ml-auto hover:!border-coral/35 hover:!text-coral"
+                  >
+                    remove
+                  </button>
+                </div>
+              ))}
+              {members.length === 0 && (
+                <p className="py-1 font-mono text-xs text-mist-faint">No members assigned yet.</p>
+              )}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <select
+                value={memberToAdd}
+                onChange={(e) => setMemberToAdd(e.target.value)}
+                className="cursor-pointer rounded-[5px] border border-white/[0.08] bg-ink-900 px-2 py-2 font-mono text-xs text-mist outline-none focus:border-gold/40"
+              >
+                <option value="">select a user…</option>
+                {candidates.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.email}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => void addMember()}
+                disabled={!memberToAdd}
+                className="k-btn k-btn-ghost k-btn-sm disabled:opacity-40"
+              >
+                add member
+              </button>
+            </div>
+          </div>
+        )}
         {canWriteProjects && (
           <div className="mt-4 flex flex-wrap items-end gap-2 border-t border-white/[0.06] pt-4">
             <label className="min-w-40 flex-1">

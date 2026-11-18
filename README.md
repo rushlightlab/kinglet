@@ -12,8 +12,8 @@ Named after the tiny bird with the golden crown (genus *Regulus* — "little kin
   matches (`"timeout"`) just work
 - **Filter grammar** — `level>=warn service:api "connection refused" -healthcheck`
 - **Monitors & alerts** — instant match, rate spikes, silence detection → webhook/Discord/Slack
-- **Team-ready auth** — Better Auth email/password login with admin / member / viewer roles and cached sessions
-- **Multi-project** — every project owns its logs, monitors, and `kl_…` API keys with `ingest`/`query` scopes
+- **Team-ready auth** — Better Auth email/password login with admin / member / viewer roles, cached sessions, and per-project membership
+- **Multi-project** — every project owns its logs, monitors, and `kl_…` API keys with `ingest`/`query` scopes; non-admins see only projects they're assigned to
 - **Volume histogram** by level, drag across it to zoom into a time range
 - **Retention built in** — drop events older than N days, automatically
 - **Zero external services** — no Postgres, no Redis, no Kafka. One process.
@@ -45,12 +45,11 @@ curl -X POST http://localhost:8080/v1/events \
   --data-binary '{"level":"error","message":"payment failed","service":"billing"}'
 ```
 
-No clone needed? Run the published multi-arch image (replace `your-org` with
-the repository owner):
+No clone needed? Run the published multi-arch image:
 
 ```bash
 docker run -d --name kinglet -p 8080:3000 -v kinglet-data:/data \
-  ghcr.io/your-org/kinglet:latest
+  ghcr.io/kinglet-labs/kinglet:latest
 ```
 
 Legacy `tok_…` tokens (`KINGLET_TOKENS`) still work as workspace-wide
@@ -197,8 +196,10 @@ your UI with the query and time range pre-filled.
 | `KINGLET_TOKENS` | *(auto-generate)* | **Legacy** global tokens — all projects, full access |
 | `KINGLET_BASE_URL` | — | Public URL, used for deep links in alert notifications |
 | `KINGLET_RETENTION_DAYS` | `14` | Delete events older than this |
+| `KINGLET_MAX_EVENTS_PER_PROJECT` | `1000000` | Hard cap on retained events per project (`0` = unlimited) |
+| `KINGLET_MAX_DB_MB` | `4096` | Hard cap on local database size in MB (`0` = unlimited) |
 
-On first boot with an empty users table, Kinglet creates the administrator from
+On first boot, or if the database has no administrator, Kinglet creates one from
 `KINGLET_ADMIN_EMAIL` / `KINGLET_ADMIN_PASSWORD`. If no password is set, one is
 generated, printed to the console, and written to `admin-password.txt` next to
 the database. Real ingest integrations should use project API keys (`kl_…`)

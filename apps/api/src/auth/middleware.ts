@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getCookie } from "hono/cookie";
 import type { Context, MiddlewareHandler } from "hono";
 import type { Config } from "../env.js";
@@ -149,8 +149,36 @@ export async function projectExists(storage: Storage, id: number): Promise<boole
 }
 
 /**
- * Resolves the project for this request: API keys are bound to theirs,
- * sessions/legacy tokens use ?project= (or the default project).
+ * Project access rules:
+ *  - legacy tokens and admins: every project
+ *  - API keys: only the project they were minted for
+ *  - everyone else: only projects with a project_members row
+ */
+export async function canAccessProject(
+  auth: AuthInfo,
+  storage: Storage,
+  projectId: number
+): Promise<boolean> {
+  if (auth.kind === "legacy") return true;
+  if (auth.kind === "key") return auth.projectId === projectId;
+  if (auth.user.role === "admin") return true;
+  const rows = await storage.db
+    .select({ id: schema.projectMembers.id })
+    .from(schema.projectMembers)
+    .where(
+      and(
+        eq(schema.projectMembers.projectId, projectId),
+        eq(schema.projectMembers.userId, auth.user.id)
+      )
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
+ * Resolves the project for this request: API keys are bound to theirs;
+ * sessions use ?project= only when they are a member (admins bypass), else
+ * the first project assigned to them.
  */
 export async function resolveProjectId(
   c: Context<AppEnv>,
@@ -163,7 +191,26 @@ export async function resolveProjectId(
     const id = Math.trunc(Number(raw));
     if (!Number.isFinite(id) || id <= 0) return c.json({ error: "invalid project id" }, 400);
     if (!(await projectExists(storage, id))) return c.json({ error: "project not found" }, 404);
+    // 404 (not 403) so non-members cannot probe which project ids exist.
+    if (!(await canAccessProject(auth, storage, id))) {
+      return c.json({ error: "project not found" }, 404);
+    }
     return id;
+  }
+  if (auth.kind === "user" && auth.user.role !== "admin") {
+    const rows = await storage.db
+      .select({ id: schema.projects.id })
+      .from(schema.projects)
+      .innerJoin(
+        schema.projectMembers,
+        eq(schema.projectMembers.projectId, schema.projects.id)
+      )
+      .where(eq(schema.projectMembers.userId, auth.user.id))
+      .orderBy(schema.projects.id)
+      .limit(1);
+    const first = rows[0];
+    if (!first) return c.json({ error: "no projects are assigned to your account" }, 409);
+    return Number(first.id);
   }
   const fallback = await defaultProjectId(storage);
   if (fallback === null) return c.json({ error: "no projects exist" }, 409);

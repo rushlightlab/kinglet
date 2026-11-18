@@ -8,6 +8,7 @@ import type {
   KingletEvent,
   Monitor,
   Project,
+  ProjectMember,
   Service,
 } from "./types";
 import { LEVEL_NAMES } from "./types";
@@ -111,6 +112,33 @@ export function createProject(name: string): Promise<{ project: Project }> {
 
 export function deleteProject(id: number): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/projects/${id}`, { method: "DELETE" });
+}
+
+// ---------- project members (admin) ----------
+
+export function fetchProjectMembers(
+  projectId: number
+): Promise<{ members: ProjectMember[] }> {
+  return api<{ members: ProjectMember[] }>(`/v1/projects/${projectId}/members`);
+}
+
+export function addProjectMember(
+  projectId: number,
+  userId: string
+): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/v1/projects/${projectId}/members`, {
+    method: "POST",
+    body: JSON.stringify({ userId }),
+  });
+}
+
+export function removeProjectMember(
+  projectId: number,
+  userId: string
+): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/v1/projects/${projectId}/members/${userId}`, {
+    method: "DELETE",
+  });
 }
 
 // ---------- users (admin) ----------

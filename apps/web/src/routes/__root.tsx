@@ -36,7 +36,11 @@ function RootComponent() {
         Number.isFinite(id) && id > 0 && projects.some((p) => p.id === id);
       const chosen = [urlRaw, storedRaw].find(valid) ?? projects[0]?.id;
       if (chosen === undefined) {
-        setState({ phase: "offline", error: "The API is up, but no projects exist yet — check the server logs." });
+        setState({
+          phase: "offline",
+          error:
+            "No project is available for your account. An administrator can assign you to one in Settings → projects & keys.",
+        });
         return;
       }
       localStorage.setItem("kinglet.project", String(chosen));
