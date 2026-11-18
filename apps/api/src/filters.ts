@@ -1,4 +1,4 @@
-import { LEVEL_NAMES } from "./db.js";
+import { LEVEL_NAMES } from "./types.js";
 import type { StoredEvent } from "./types.js";
 
 /**

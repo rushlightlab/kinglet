@@ -1,4 +1,6 @@
-/** Row shape as stored in SQLite (fields is a JSON string). */
+export const LEVEL_NAMES = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
+
+/** Row shape as stored in a Kinglet store (fields is a JSON string). */
 export interface StoredEvent {
   id: number;
   ts: number;

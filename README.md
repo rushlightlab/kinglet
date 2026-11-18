@@ -116,12 +116,47 @@ Combine freely: `level>=warn service:api -healthcheck`
 | Env var | Default | What it does |
 | --- | --- | --- |
 | `KINGLET_PORT` | `3000` | HTTP port |
-| `KINGLET_DB_PATH` | `data/kinglet.db` | SQLite file location |
+| `KINGLET_STORAGE` | `auto` | `sqlite`, `libsql`, or `auto` (picks by db path scheme) |
+| `KINGLET_DB_PATH` | `data/kinglet.db` | Plain path → SQLite; `libsql://`/`https://`/`file:` → libSQL |
+| `KINGLET_DB_AUTH_TOKEN` | — | Auth token for remote libSQL/Turso databases |
 | `KINGLET_TOKENS` | *(auto-generate)* | Comma-separated ingest tokens |
 | `KINGLET_RETENTION_DAYS` | `14` | Delete events older than this |
 
 When `KINGLET_TOKENS` is unset, a token is generated on first boot, printed to
 the console, and written to `kinglet.token` next to the database.
+
+## Storage backends
+
+Storage is pluggable behind a small interface (`apps/api/src/storage/types.ts`).
+The API, retention job, and live tail never know which driver is underneath.
+
+**sqlite** *(default)* — better-sqlite3, one file, WAL mode, FTS5 trigram search.
+Zero services, zero config.
+
+**libsql** — the [libSQL](https://turso.tech) driver, for local `file:`
+databases or a hosted [Turso](https://turso.tech) instance. Same container,
+same API — just point it at your database:
+
+```bash
+# local libSQL file
+KINGLET_STORAGE=libsql
+KINGLET_DB_PATH=file:/data/kinglet.db
+
+# Turso
+KINGLET_DB_PATH=libsql://your-db.turso.io
+KINGLET_DB_AUTH_TOKEN=eyJ…
+```
+
+With `KINGLET_STORAGE=auto` (the default), the driver is picked from the db
+path scheme: plain paths use sqlite; `libsql://`, `https://`, `wss://`, and
+`file:` URLs use libSQL. One caveat: some hosted libSQL builds lack the FTS5
+trigram tokenizer — Kinglet detects that and falls back to word-prefix search
+with a console warning instead of refusing to boot.
+
+**ClickHouse** is the planned scale-out backend. It will implement the same
+`Storage` interface, so the API and UI stay untouched — and if you want to
+wire up Postgres or anything else in the meantime, that's the whole contract
+you need to satisfy.
 
 ## Self-hosting notes
 
@@ -130,9 +165,9 @@ the console, and written to `kinglet.token` next to the database.
 - **Backups**: the whole store is one file — point
   [Litestream](https://litestream.io/) at `data/kinglet.db` for continuous
   S3 replication.
-- **Scale ceiling**: SQLite is the right engine for single-node self-hosting.
-  The storage layer is intentionally isolated behind `src/events.ts`; a
-  ClickHouse profile in `docker-compose.yml` is the planned graduation path.
+- **Scale ceiling**: SQLite/libSQL are the right engines for single-node
+  self-hosting. Storage sits behind a driver interface — Turso for managed
+  hosting today, ClickHouse as the planned scale-out backend tomorrow.
 
 ## Development
 
@@ -150,6 +185,7 @@ The dev API writes to `apps/api/data/` and prints a fresh token on first boot.
 ## Roadmap
 
 - [x] v0.1 — HTTP ingest, live tail, filter grammar, histogram, retention, Docker
+- [ ] Docs + landing page — Astro/Starlight site in a separate `kinglet-site` repo (HTTP API reference, self-hosting guide, SDK docs)
 - [ ] v0.2 — pino transport + zero-code Node preload, PHP Monolog handler, Fluent Bit/Vector guides
 - [ ] v0.3 — OTLP + syslog receivers, saved searches, shareable permalinks
 - [ ] v1.0 — monitors/alerts (webhooks), ClickHouse storage profile, teams

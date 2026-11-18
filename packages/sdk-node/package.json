@@ -19,11 +19,11 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=26"
   },
   "devDependencies": {
     "@kinglet/config": "workspace:*",
     "@types/node": "^24.0.0",
-    "typescript": "^5.9.0"
+    "typescript": "^7.0.2"
   }
 }

@@ -1,22 +1,25 @@
+import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   clearToken,
   fetchEvents,
   fetchHistogram,
   fetchServices,
-  getToken,
   openStream,
-  setToken,
   sprayDemoEvents,
   UnauthorizedError,
-} from "./api";
-import type { Histogram, KingletEvent, Service } from "./types";
-import EventDrawer from "./components/EventDrawer";
-import FilterBar from "./components/FilterBar";
-import HistogramChart from "./components/Histogram";
-import LogTable from "./components/LogTable";
-import TokenGate from "./components/TokenGate";
-import Crown from "./components/Crown";
+} from "../api";
+import type { Histogram, KingletEvent, Service } from "../types";
+import Crown from "../components/Crown";
+import EventDrawer from "../components/EventDrawer";
+import FilterBar from "../components/FilterBar";
+import HistogramChart from "../components/Histogram";
+import LogTable from "../components/LogTable";
+import TokenGate from "../components/TokenGate";
+
+export const Route = createFileRoute("/")({
+  component: Explorer,
+});
 
 const WINDOWS: Record<string, number> = {
   "15m": 15 * 60_000,
@@ -26,24 +29,7 @@ const WINDOWS: Record<string, number> = {
   "7d": 7 * 24 * 60 * 60_000,
 };
 
-export default function App() {
-  const [token, setTokenState] = useState<string | null>(() => getToken());
-
-  if (!token) {
-    return (
-      <TokenGate
-        onSave={(t) => {
-          setToken(t);
-          setTokenState(t);
-        }}
-      />
-    );
-  }
-
-  return <Explorer onSignOut={() => { clearToken(); setTokenState(null); }} />;
-}
-
-function Explorer({ onSignOut }: { onSignOut: () => void }) {
+function Explorer() {
   const [qDraft, setQDraft] = useState("");
   const [q, setQ] = useState("");
   const [rangeKey, setRangeKey] = useState("1h");
@@ -59,6 +45,11 @@ function Explorer({ onSignOut }: { onSignOut: () => void }) {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
+
+  const signOut = (): void => {
+    clearToken();
+    window.location.reload();
+  };
 
   // Debounce the filter bar into the applied query.
   useEffect(() => {
@@ -142,8 +133,8 @@ function Explorer({ onSignOut }: { onSignOut: () => void }) {
     return (
       <TokenGate
         error="That token was rejected."
-        onSave={(t) => {
-          setToken(t);
+        onSave={() => {
+          // Root re-checks localStorage; just reload the view state.
           setAuthFailed(false);
           loadWindow();
         }}
@@ -201,7 +192,7 @@ function Explorer({ onSignOut }: { onSignOut: () => void }) {
             Spray demo logs
           </button>
           <button
-            onClick={onSignOut}
+            onClick={signOut}
             className="rounded-md px-2 py-1 text-xs text-[#8b93a3] hover:bg-[#11151f] hover:text-[#e6e9ef]"
           >
             Sign out

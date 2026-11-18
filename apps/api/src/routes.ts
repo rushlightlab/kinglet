@@ -2,11 +2,10 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import { publishEvents, subscribeEvents } from "./bus.js";
-import type { DatabaseType } from "./db.js";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
 import type { Normalized } from "./ingest.js";
 import { normalizeEvent } from "./ingest.js";
-import { histogramPoints, insertEvents, listServices, queryEvents } from "./events.js";
+import type { Storage } from "./storage/index.js";
 import { toClientEvent } from "./types.js";
 
 const MAX_BATCH = 10000;
@@ -24,7 +23,7 @@ function clampInt(value: string | undefined, fallback: number, min: number, max:
   return Math.min(max, Math.max(min, n));
 }
 
-export function registerRoutes(app: Hono, db: DatabaseType): void {
+export function registerRoutes(app: Hono, storage: Storage): void {
   const api = new Hono();
 
   // ---------- ingest: POST /v1/events ----------
@@ -68,7 +67,7 @@ export function registerRoutes(app: Hono, db: DatabaseType): void {
       else errors.push(result.error);
     }
 
-    const rows = insertEvents(db, normalized);
+    const rows = await storage.insertEvents(normalized);
     publishEvents(rows);
 
     return c.json({
@@ -80,7 +79,7 @@ export function registerRoutes(app: Hono, db: DatabaseType): void {
   });
 
   // ---------- query: GET /v1/events ----------
-  api.get("/events", (c) => {
+  api.get("/events", async (c) => {
     const q = c.req.query("q") ?? "";
     const now = Date.now();
     const from = parseTimestamp(c.req.query("from"), now - 3600_000);
@@ -88,9 +87,8 @@ export function registerRoutes(app: Hono, db: DatabaseType): void {
     const limit = clampInt(c.req.query("limit"), 200, 1, 1000);
     const cursorRaw = Number(c.req.query("cursor"));
     const cursor = Number.isFinite(cursorRaw) && cursorRaw > 0 ? cursorRaw : null;
-    const f = parseFilters(q);
-    const where = buildWhere(f, { from, to });
-    const rows = queryEvents(db, { where: where.sql, params: where.params, limit, cursor });
+    const where = buildWhere(parseFilters(q), { from, to });
+    const rows = await storage.queryEvents({ where: where.sql, params: where.params, limit, cursor });
     return c.json({
       events: rows.map(toClientEvent),
       nextCursor: rows.length === limit ? rows[rows.length - 1]?.id ?? null : null,
@@ -98,17 +96,18 @@ export function registerRoutes(app: Hono, db: DatabaseType): void {
   });
 
   // ---------- histogram: GET /v1/histogram ----------
-  api.get("/histogram", (c) => {
+  api.get("/histogram", async (c) => {
     const now = Date.now();
     const from = parseTimestamp(c.req.query("from"), now - 3600_000);
     const to = parseTimestamp(c.req.query("to"), now);
     const buckets = clampInt(c.req.query("buckets"), 60, 1, 240);
     const bucketMs = Math.max(1000, Math.trunc((to - from) / buckets));
-    return c.json({ from, to, bucketMs, points: histogramPoints(db, from, to, bucketMs) });
+    const points = await storage.histogramPoints(from, to, bucketMs);
+    return c.json({ from, to, bucketMs, points });
   });
 
   // ---------- services: GET /v1/services ----------
-  api.get("/services", (c) => c.json({ services: listServices(db) }));
+  api.get("/services", async (c) => c.json({ services: await storage.listServices() }));
 
   // ---------- live tail: GET /v1/stream (SSE) ----------
   api.get("/stream", (c) => {

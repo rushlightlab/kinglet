@@ -4,26 +4,36 @@ import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { authMiddleware, sha256hex } from "./auth.js";
-import { openDb } from "./db.js";
 import { loadConfig } from "./env.js";
+import type { Config } from "./env.js";
 import { startRetentionJob } from "./retention.js";
 import { registerRoutes } from "./routes.js";
-import type { Config } from "./env.js";
+import { createStorage } from "./storage/index.js";
+import type { Storage } from "./storage/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const config = loadConfig();
-const db = openDb(config.dbPath);
+const storage = await createStorage({
+  kind: config.storageKind,
+  dbPath: config.dbPath,
+  authToken: config.dbAuthToken,
+});
 const tokenHashes = new Set(config.tokens.map((t) => sha256hex(t)));
 
-// First boot with no KINGLET_TOKENS: keep a copy of the generated token
-// next to the database so `cat kinglet.token` always works.
-if (config.generatedToken) {
+// First boot with no KINGLET_TOKENS: keep a copy of the generated token next
+// to a local database so `cat kinglet.token` always works. Remote stores
+// (Turso) only get the console banner.
+if (config.generatedToken && !isRemoteDbPath(config.dbPath)) {
   try {
     fs.writeFileSync(path.join(config.dataDir, "kinglet.token"), config.generatedToken + "\n");
   } catch (err) {
     console.warn("[kinglet] could not write kinglet.token:", err);
   }
+}
+
+function isRemoteDbPath(dbPath: string): boolean {
+  return /^(libsql:\/\/|https?:\/\/|wss?:\/\/)/i.test(dbPath);
 }
 
 const app = new Hono();
@@ -35,11 +45,19 @@ app.onError((err, c) => {
 
 app.get("/healthz", (c) => c.json({ ok: true, name: "kinglet", version: "0.1.0" }));
 app.use("/v1/*", authMiddleware(tokenHashes));
-registerRoutes(app, db);
+registerRoutes(app, storage);
 registerStaticUi(app);
 
-serve({ fetch: app.fetch, port: config.port }, () => printBanner(config));
-startRetentionJob(db, config.retentionDays);
+const server = serve({ fetch: app.fetch, port: config.port }, () => printBanner(config, storage));
+startRetentionJob(storage, config.retentionDays);
+
+const shutdown = (): void => {
+  console.log("[kinglet] shutting down…");
+  server.close();
+  void storage.close().finally(() => process.exit(0));
+};
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 /** Serves the built web UI from ../web/dist (single-container deploy). */
 function registerStaticUi(app: Hono): void {
@@ -86,7 +104,7 @@ function registerStaticUi(app: Hono): void {
   });
 }
 
-function printBanner(config: Config): void {
+function printBanner(config: Config, storage: Storage): void {
   const uiBuilt = fs.existsSync(path.resolve(__dirname, "../../web/dist"));
   console.log("");
   console.log("  👑 Kinglet — small. light. king.");
@@ -95,10 +113,12 @@ function printBanner(config: Config): void {
   console.log(`  Ingest        → POST /v1/events   (Authorization: Bearer <token>)`);
   if (uiBuilt) console.log(`  UI            → http://localhost:${config.port}`);
   else console.log(`  UI            → not built; run "pnpm --filter @kinglet/web dev"`);
-  console.log(`  Database      → ${path.resolve(config.dbPath)}`);
+  console.log(`  Storage       → ${storage.description}`);
   if (config.generatedToken) {
     console.log(`  Token (auto)  → ${config.generatedToken}`);
-    console.log(`                  also written to ${path.join(config.dataDir, "kinglet.token")}`);
+    if (!isRemoteDbPath(config.dbPath)) {
+      console.log(`                  also written to ${path.join(config.dataDir, "kinglet.token")}`);
+    }
   } else {
     console.log(`  Tokens        → from KINGLET_TOKENS env`);
   }
