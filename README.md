@@ -221,7 +221,34 @@ pnpm build      # build all packages (UI dist is served by the API after this)
 pnpm typecheck
 ```
 
-The dev API writes to `apps/api/data/` and prints a fresh token on first boot.
+The dev API writes to `apps/api/data/` and prints a fresh token on first boot
+(also saved to `apps/api/data/kinglet.token`). Paste that token into the UI at
+`http://localhost:5173`.
+
+Port 3000 already taken by another app? Point both dev servers elsewhere:
+
+```bash
+KINGLET_PORT=3100 KINGLET_API_URL=http://localhost:3100 pnpm dev
+```
+
+See logs move — in a second terminal:
+
+```bash
+pnpm demo:logs          # backfills an hour of events, then streams ~1 event/1.5s
+pnpm demo:logs --once   # backfill only, then exit
+```
+
+(`demo:logs` auto-reads the dev token from `apps/api/data/kinglet.token`; for a
+custom port use `KINGLET_URL=http://localhost:3100 pnpm demo:logs`.)
+
+Testing alert channels without Discord or Slack:
+
+```bash
+pnpm demo:webhook       # pretty-prints any POST on http://localhost:3999
+```
+
+Then in `/monitors`, point a channel at `http://localhost:3999/hook` and hit
+**test** — the payload shows up in the catcher's console.
 
 ### Releasing images
 

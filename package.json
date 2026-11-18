@@ -10,7 +10,9 @@
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
-    "typecheck": "turbo run typecheck"
+    "typecheck": "turbo run typecheck",
+    "demo:logs": "node scripts/demo-logs.mjs",
+    "demo:webhook": "node scripts/webhook-catcher.mjs"
   },
   "devDependencies": {
     "turbo": "^2.5.0"
