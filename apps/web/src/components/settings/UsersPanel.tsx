@@ -9,13 +9,7 @@ import {
   UserPlusIcon,
 } from "lucide-react";
 import { toast } from "sonner";
-import {
-  createUser,
-  deleteUser,
-  fetchUsers,
-  resetUserPassword,
-  updateUser,
-} from "../../api";
+import { createUser, deleteUser, fetchUsers, resetUserPassword, updateUser } from "../../api";
 import { useApp } from "../../app-context";
 import type { AppUser } from "../../types";
 import { passwordProblem } from "../../lib/password";
@@ -83,9 +77,10 @@ export default function UsersPanel() {
   const [name, setName] = useState("");
   const [role, setRole] = useState("member");
   const [password, setPassword] = useState("");
-  const [createdPassword, setCreatedPassword] = useState<{ email: string; password: string } | null>(
-    null
-  );
+  const [createdPassword, setCreatedPassword] = useState<{
+    email: string;
+    password: string;
+  } | null>(null);
   const [pendingUser, setPendingUser] = useState<{
     type: "delete" | "reset" | "disable";
     user: AppUser;
@@ -123,7 +118,8 @@ export default function UsersPanel() {
         role,
         ...(password ? { password } : {}),
       });
-      if (result.password) setCreatedPassword({ email: result.user.email, password: result.password });
+      if (result.password)
+        setCreatedPassword({ email: result.user.email, password: result.password });
       setEmail("");
       setName("");
       setPassword("");
@@ -259,10 +255,7 @@ export default function UsersPanel() {
                         disabled
                       </Badge>
                     ) : (
-                      <Badge
-                        variant="ghost"
-                        className="text-[10px] normal-case tracking-normal"
-                      >
+                      <Badge variant="ghost" className="text-[10px] normal-case tracking-normal">
                         active
                       </Badge>
                     )}
@@ -413,7 +406,9 @@ export default function UsersPanel() {
               <Button
                 type="submit"
                 className="shadow-none hover:translate-y-0 hover:shadow-none"
-                disabled={!email.trim() || (password.length > 0 && passwordProblem(password) !== null)}
+                disabled={
+                  !email.trim() || (password.length > 0 && passwordProblem(password) !== null)
+                }
               >
                 <UserPlusIcon data-icon="inline-start" />
                 add user

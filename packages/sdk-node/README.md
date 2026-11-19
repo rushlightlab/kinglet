@@ -10,8 +10,8 @@ Batching log client for Kinglet. Zero dependencies, Node 26+.
 import { createLogger } from "@kinglet/sdk-node";
 
 const log = createLogger({
-  url: "http://localhost:8080",   // your Kinglet server
-  token: "kl_...",                // project key with the ingest scope
+  url: "http://localhost:8080", // your Kinglet server
+  token: "kl_...", // project key with the ingest scope
   service: "my-app",
   env: "prod",
 });

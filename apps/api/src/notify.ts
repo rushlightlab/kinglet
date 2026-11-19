@@ -57,7 +57,7 @@ function ipv4Private(address: string): boolean {
   return (
     a === 0 ||
     a === 10 ||
-    a === 100 && b >= 64 && b <= 127 || // CGNAT / Tailscale
+    (a === 100 && b >= 64 && b <= 127) || // CGNAT / Tailscale
     a === 127 ||
     (a === 169 && b === 254) ||
     (a === 172 && b >= 16 && b <= 31) ||
@@ -78,7 +78,11 @@ function ipv6Groups(address: string): number[] | null {
   const v4 = clean.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
   if (v4) {
     const parts = v4[2]?.split(".").map(Number);
-    if (!parts || parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    if (
+      !parts ||
+      parts.length !== 4 ||
+      parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+    ) {
       return null;
     }
     const hi = ((parts[0] ?? 0) << 8) | (parts[1] ?? 0);
@@ -103,7 +107,10 @@ function ipv6Groups(address: string): number[] | null {
 }
 
 export function isPrivateAddress(address: string): boolean {
-  const normalized = address.trim().replace(/^\[|\]$/g, "").toLowerCase();
+  const normalized = address
+    .trim()
+    .replace(/^\[|\]$/g, "")
+    .toLowerCase();
   const family = isIP(normalized);
   if (family === 4) return ipv4Private(normalized);
   if (family !== 6) return false;
@@ -138,14 +145,23 @@ export function isPrivateAddress(address: string): boolean {
   // 100::/64 — discard-only
   if (g0 === 0x0100 && g1 === 0 && g2 === 0 && g3 === 0) return true;
   // 2001:0000::/32 — Teredo; 2001:2::/48 — benchmarking; 2001:10::/28 and 2001:20::/28 — ORCHID
-  if (g0 === 0x2001 && (g1 === 0x0000 || g1 === 0x0002 || g1 === 0x0010 || g1 === 0x0020)) return true;
+  if (g0 === 0x2001 && (g1 === 0x0000 || g1 === 0x0002 || g1 === 0x0010 || g1 === 0x0020))
+    return true;
   // ::ffff:0:0/96 — IPv4-mapped, recurse into the IPv4 classifier
   if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff) {
     const v4 = `${g6 >> 8}.${g6 & 0xff}.${g7 >> 8}.${g7 & 0xff}`;
     return ipv4Private(v4);
   }
   // ::/96 IPv4-compatible (deprecated)
-  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0 && (g6 !== 0 || g7 !== 0)) {
+  if (
+    g0 === 0 &&
+    g1 === 0 &&
+    g2 === 0 &&
+    g3 === 0 &&
+    g4 === 0 &&
+    g5 === 0 &&
+    (g6 !== 0 || g7 !== 0)
+  ) {
     return true;
   }
   return false;
@@ -185,7 +201,8 @@ async function postJson(url: URL, body: string, allowPrivate: boolean): Promise<
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     });
-    if (res.status >= 300 && res.status < 400) throw new Error("channel redirected — configure its final URL");
+    if (res.status >= 300 && res.status < 400)
+      throw new Error("channel redirected — configure its final URL");
     if (!res.ok) throw new Error(`channel returned HTTP ${res.status}`);
     return;
   }
@@ -198,7 +215,8 @@ async function postJson(url: URL, body: string, allowPrivate: boolean): Promise<
     const addresses = await lookup(host, { all: true });
     if (addresses.length === 0) throw new Error("webhook host did not resolve");
     for (const entry of addresses) {
-      if (isPrivateAddress(entry.address)) throw new Error("webhook target resolves to a private address");
+      if (isPrivateAddress(entry.address))
+        throw new Error("webhook target resolves to a private address");
     }
     address = addresses[0]?.address ?? host;
   } else if (isPrivateAddress(host)) {
@@ -234,7 +252,7 @@ async function postJson(url: URL, body: string, allowPrivate: boolean): Promise<
           return;
         }
         resolve();
-      }
+      },
     );
     req.on("timeout", () => req.destroy(new Error("channel timed out")));
     req.on("error", reject);
@@ -245,7 +263,7 @@ async function postJson(url: URL, body: string, allowPrivate: boolean): Promise<
 export async function sendNotice(
   channel: NotifyChannel,
   notice: AlertNotice,
-  opts: { allowPrivate?: boolean } = {}
+  opts: { allowPrivate?: boolean } = {},
 ): Promise<void> {
   const allowPrivate = opts.allowPrivate ?? false;
   const invalid = validateWebhookUrl(channel.url, allowPrivate);
@@ -308,15 +326,18 @@ function notificationText(value: string, max: number): string {
   return truncate(flattened, max);
 }
 
-function noticeFields(
-  n: AlertNotice,
-  formatLink: (url: string) => string
-): NoticeField[] {
+function noticeFields(n: AlertNotice, formatLink: (url: string) => string): NoticeField[] {
   const fields: NoticeField[] = [];
-  if (n.projectName) fields.push({ name: "Project", value: notificationText(n.projectName, 200), inline: true });
-  if (n.service) fields.push({ name: "Service", value: notificationText(n.service, 200), inline: true });
+  if (n.projectName)
+    fields.push({ name: "Project", value: notificationText(n.projectName, 200), inline: true });
+  if (n.service)
+    fields.push({ name: "Service", value: notificationText(n.service, 200), inline: true });
   if (n.env) fields.push({ name: "Env", value: notificationText(n.env, 200), inline: true });
-  fields.push({ name: "Monitor", value: notificationText(n.monitorName || "—", 200), inline: true });
+  fields.push({
+    name: "Monitor",
+    value: notificationText(n.monitorName || "—", 200),
+    inline: true,
+  });
   if (n.level) fields.push({ name: "Level", value: notificationText(n.level, 40), inline: true });
   fields.push({
     name: "Query",

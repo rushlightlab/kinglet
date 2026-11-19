@@ -1,5 +1,4 @@
 import { and, count, eq, inArray, sql } from "drizzle-orm";
-import type { SQL } from "drizzle-orm";
 import { bodyLimit } from "hono/body-limit";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -171,7 +170,7 @@ async function readJson(c: Context<AppEnv>): Promise<Record<string, unknown> | n
 
 /** Strict body parser for mutations: distinguishes malformed JSON from bad fields. */
 async function readJsonStrict(
-  c: Context<AppEnv>
+  c: Context<AppEnv>,
 ): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; error: string }> {
   const body = await readJson(c);
   if (!body) return { ok: false, error: "invalid JSON body" };
@@ -193,7 +192,7 @@ export function registerRoutes(
   storage: Storage,
   engine: MonitorEngine,
   config: Config,
-  auth: KingletAuth
+  auth: KingletAuth,
 ): void {
   void config;
 
@@ -225,7 +224,7 @@ export function registerRoutes(
             .from(schema.projects)
             .innerJoin(
               schema.projectMembers,
-              eq(schema.projectMembers.projectId, schema.projects.id)
+              eq(schema.projectMembers.projectId, schema.projects.id),
             )
             .where(eq(schema.projectMembers.userId, authInfo.user.id))
             .orderBy(schema.projects.id)
@@ -286,10 +285,7 @@ export function registerRoutes(
           .onConflictDoNothing();
       }
     }
-    return c.json(
-      { project: { id: row?.id ?? "", name, slug, createdAt: now } },
-      201
-    );
+    return c.json({ project: { id: row?.id ?? "", name, slug, createdAt: now } }, 201);
   });
 
   app.patch("/v1/projects/:id", async (c) => {
@@ -300,9 +296,7 @@ export function registerRoutes(
     const parsedBody = await readJsonStrict(c);
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const name =
-      typeof parsedBody.body?.name === "string"
-        ? parsedBody.body.name.trim().slice(0, 64)
-        : "";
+      typeof parsedBody.body?.name === "string" ? parsedBody.body.name.trim().slice(0, 64) : "";
     if (!name) return c.json({ error: "name is required" }, 400);
     const existing = await storage.db
       .select()
@@ -330,7 +324,8 @@ export function registerRoutes(
     const id = parseId(c.req.param("id"));
     if (id === null) return c.json({ error: "invalid project id" }, 400);
     const totals = await storage.db.select({ n: count() }).from(schema.projects);
-    if (Number(totals[0]?.n ?? 0) <= 1) return c.json({ error: "cannot delete the only project" }, 400);
+    if (Number(totals[0]?.n ?? 0) <= 1)
+      return c.json({ error: "cannot delete the only project" }, 400);
     if (!(await projectExists(storage, id))) return c.json({ error: "project not found" }, 404);
 
     const monitorIds = storage.db
@@ -365,10 +360,12 @@ export function registerRoutes(
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
     const email = typeof body?.email === "string" ? body.email.trim() : "";
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return c.json({ error: "a valid email is required" }, 400);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
+      return c.json({ error: "a valid email is required" }, 400);
     const role: Role = isRole(body?.role) ? body.role : "member";
     const name = typeof body?.name === "string" ? body.name.trim().slice(0, 80) : "";
-    const password = typeof body?.password === "string" && body.password.length > 0 ? body.password : undefined;
+    const password =
+      typeof body?.password === "string" && body.password.length > 0 ? body.password : undefined;
     if (password !== undefined) {
       const problem = passwordProblem(password);
       if (problem) return c.json({ error: problem }, 400);
@@ -420,17 +417,23 @@ export function registerRoutes(
       } catch (err) {
         return c.json(
           { error: err instanceof Error ? err.message : "could not update user status" },
-          400
+          400,
         );
       }
       if (disabled) {
         // Disabling is an offboarding event: keys must not come back on unban.
         const revoked = await deleteApiKeysByOwner(storage, userId);
-        if (revoked > 0) console.log(`[kinglet] revoked ${revoked} API key(s) for disabled user ${userId}`);
+        if (revoked > 0)
+          console.log(`[kinglet] revoked ${revoked} API key(s) for disabled user ${userId}`);
       }
     }
 
-    if (target.role === "admin" && target.disabled === false && role !== undefined && role !== "admin") {
+    if (
+      target.role === "admin" &&
+      target.disabled === false &&
+      role !== undefined &&
+      role !== "admin"
+    ) {
       if ((await countAdmins(storage)) <= 1) {
         return c.json({ error: "cannot demote the last administrator" }, 400);
       }
@@ -446,7 +449,8 @@ export function registerRoutes(
       // Offboarding: a demoted user must not keep machine credentials that
       // outlive their permissions.
       const revoked = await deleteApiKeysByOwner(storage, userId);
-      if (revoked > 0) console.log(`[kinglet] revoked ${revoked} API key(s) for demoted user ${userId}`);
+      if (revoked > 0)
+        console.log(`[kinglet] revoked ${revoked} API key(s) for demoted user ${userId}`);
     }
     const updated = await getUserById(storage, userId);
     return c.json({ user: updated });
@@ -465,21 +469,19 @@ export function registerRoutes(
     const target = await getUserById(storage, userId);
     if (!target) return c.json({ error: "user not found" }, 404);
     try {
-      const password = await resetManagedUserPassword(
-        storage,
-        auth,
-        c.req.raw.headers,
-        userId
-      );
+      const password = await resetManagedUserPassword(storage, auth, c.req.raw.headers, userId);
       // Account recovery is a full credential rotation: keys minted during a
       // stolen session must not survive the password reset.
       const revokedKeys = await deleteApiKeysByOwner(storage, userId);
-      if (revokedKeys > 0) console.log(`[kinglet] revoked ${revokedKeys} API key(s) after password reset for ${userId}`);
+      if (revokedKeys > 0)
+        console.log(
+          `[kinglet] revoked ${revokedKeys} API key(s) after password reset for ${userId}`,
+        );
       return c.json({ password, revokedKeys });
     } catch (err) {
       return c.json(
         { error: err instanceof Error ? err.message : "could not reset password" },
-        400
+        400,
       );
     }
   });
@@ -501,7 +503,8 @@ export function registerRoutes(
       return c.json({ error: err instanceof Error ? err.message : "could not delete user" }, 400);
     }
     const revoked = await deleteApiKeysByOwner(storage, userId);
-    if (revoked > 0) console.log(`[kinglet] revoked ${revoked} API key(s) for deleted user ${userId}`);
+    if (revoked > 0)
+      console.log(`[kinglet] revoked ${revoked} API key(s) for deleted user ${userId}`);
     // Belt and braces: removeManagedUser normally drops sessions, but a
     // deleted account must never keep a live cookie.
     await storage.db.delete(schema.session).where(eq(schema.session.userId, userId));
@@ -511,15 +514,15 @@ export function registerRoutes(
   // ================= API keys =================
 
   const canManageApiKey = (auth: AuthInfo, key: { createdBy: string | null }): boolean =>
-    auth.kind === "user" &&
-    (auth.user.role === "admin" || key.createdBy === auth.user.id);
+    auth.kind === "user" && (auth.user.role === "admin" || key.createdBy === auth.user.id);
 
   app.get("/v1/projects/:id/keys", async (c) => {
     const denied = requirePermission(c, "keys.read");
     if (denied) return denied;
     const projectId = parseId(c.req.param("id"));
     if (projectId === null) return c.json({ error: "invalid project id" }, 400);
-    if (!(await projectExists(storage, projectId))) return c.json({ error: "project not found" }, 404);
+    if (!(await projectExists(storage, projectId)))
+      return c.json({ error: "project not found" }, 404);
     if (!(await canAccessProject(getAuth(c), storage, projectId))) {
       return c.json({ error: "project not found" }, 404);
     }
@@ -531,7 +534,8 @@ export function registerRoutes(
     if (denied) return denied;
     const projectId = parseId(c.req.param("id"));
     if (projectId === null) return c.json({ error: "invalid project id" }, 400);
-    if (!(await projectExists(storage, projectId))) return c.json({ error: "project not found" }, 404);
+    if (!(await projectExists(storage, projectId)))
+      return c.json({ error: "project not found" }, 404);
     if (!(await canAccessProject(getAuth(c), storage, projectId))) {
       return c.json({ error: "project not found" }, 404);
     }
@@ -550,7 +554,10 @@ export function registerRoutes(
     } else {
       const unknown = rawScopes.filter((s) => !isKeyScope(s));
       if (unknown.length > 0) {
-        return c.json({ error: `unknown scope(s): ${unknown.join(", ")} — use ingest and/or query` }, 400);
+        return c.json(
+          { error: `unknown scope(s): ${unknown.join(", ")} — use ingest and/or query` },
+          400,
+        );
       }
       scopes = [...new Set(rawScopes as KeyScope[])];
     }
@@ -607,7 +614,7 @@ export function registerRoutes(
     if (unknown.length > 0) {
       return c.json(
         { error: `unknown scope(s): ${unknown.join(", ")} — use ingest and/or query` },
-        400
+        400,
       );
     }
     const scopes = [...new Set(rawScopes as KeyScope[])];
@@ -645,7 +652,8 @@ export function registerRoutes(
     if (denied) return denied;
     const projectId = parseId(c.req.param("id"));
     if (projectId === null) return c.json({ error: "invalid project id" }, 400);
-    if (!(await projectExists(storage, projectId))) return c.json({ error: "project not found" }, 404);
+    if (!(await projectExists(storage, projectId)))
+      return c.json({ error: "project not found" }, 404);
     const rows = await storage.db
       .select({
         userId: schema.user.id,
@@ -678,7 +686,8 @@ export function registerRoutes(
     if (denied) return denied;
     const projectId = parseId(c.req.param("id"));
     if (projectId === null) return c.json({ error: "invalid project id" }, 400);
-    if (!(await projectExists(storage, projectId))) return c.json({ error: "project not found" }, 404);
+    if (!(await projectExists(storage, projectId)))
+      return c.json({ error: "project not found" }, 404);
     const parsedBody = await readJsonStrict(c);
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const userId = typeof parsedBody.body?.userId === "string" ? parsedBody.body.userId : "";
@@ -700,7 +709,7 @@ export function registerRoutes(
           canClearLogs: false,
         },
       },
-      201
+      201,
     );
   });
 
@@ -728,8 +737,8 @@ export function registerRoutes(
       .where(
         and(
           eq(schema.projectMembers.projectId, projectId),
-          eq(schema.projectMembers.userId, userId)
-        )
+          eq(schema.projectMembers.userId, userId),
+        ),
       );
     if (Number(result.rowsAffected ?? 0) === 0) return c.json({ error: "member not found" }, 404);
     return c.json({ ok: true, canClearLogs });
@@ -747,8 +756,8 @@ export function registerRoutes(
       .where(
         and(
           eq(schema.projectMembers.projectId, projectId),
-          eq(schema.projectMembers.userId, userId)
-        )
+          eq(schema.projectMembers.userId, userId),
+        ),
       );
     if (Number(result.rowsAffected ?? 0) === 0) return c.json({ error: "member not found" }, 404);
     // Offboarding a project member must revoke the machine credentials that
@@ -764,7 +773,8 @@ export function registerRoutes(
     if (authInfo.kind === "key" && !authInfo.scopes.has("ingest")) {
       return c.json({ error: "this key cannot ingest (missing ingest scope)" }, 403);
     }
-    if (authInfo.kind === "user" && !can(authInfo, "logs.write")) return c.json({ error: "forbidden" }, 403);
+    if (authInfo.kind === "user" && !can(authInfo, "logs.write"))
+      return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
     if (!allowIngest(authInfo)) {
@@ -779,7 +789,7 @@ export function registerRoutes(
               `database size limit reached (${Math.round(config.maxDbBytes / 1_048_576)} MB) — ` +
               "delete old data or raise KINGLET_MAX_DB_MB",
           },
-          507
+          507,
         );
       }
     }
@@ -792,7 +802,7 @@ export function registerRoutes(
               `project event limit reached (${config.maxEventsPerProject.toLocaleString()}) — ` +
               "raise KINGLET_MAX_EVENTS_PER_PROJECT or shorten retention",
           },
-          429
+          429,
         );
       }
     }
@@ -868,7 +878,7 @@ export function registerRoutes(
               `project storage limit reached (${Math.round(config.maxProjectBytes / 1_048_576)} MB) - ` +
               "delete old events or raise KINGLET_MAX_PROJECT_DB_MB",
           },
-          507
+          507,
         );
       }
     }
@@ -876,7 +886,7 @@ export function registerRoutes(
     const rows = await storage.insertEvents(
       projectId,
       normalized,
-      authInfo.kind === "key" ? authInfo.keyId : null
+      authInfo.kind === "key" ? authInfo.keyId : null,
     );
     bumpProjectCount(projectId, rows.length);
     publishEvents(rows);
@@ -884,7 +894,7 @@ export function registerRoutes(
     if (rows.length === 0 && errors.length + parseErrors > 0) {
       return c.json(
         { accepted: 0, rejected: errors.length + parseErrors, errors: errors.slice(0, 3) },
-        422
+        422,
       );
     }
 
@@ -911,13 +921,7 @@ export function registerRoutes(
     if (fromRaw !== undefined && toRaw !== undefined) {
       const from = Number(fromRaw);
       const to = Number(toRaw);
-      if (
-        !Number.isFinite(from) ||
-        !Number.isFinite(to) ||
-        from < 0 ||
-        to < 0 ||
-        from > to
-      ) {
+      if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to < 0 || from > to) {
         return c.json({ error: "invalid time range" }, 400);
       }
       range = { from: Math.trunc(from), to: Math.trunc(to) };
@@ -932,10 +936,12 @@ export function registerRoutes(
     invalidateDbSizeCache();
     console.log(
       `[kinglet] cleared ${deleted} event(s) from project ${projectId}` +
-        (range ? ` between ${new Date(range.from).toISOString()} and ${new Date(range.to).toISOString()}` : " (all time)") +
-        ` (${authInfo.user.email})`
+        (range
+          ? ` between ${new Date(range.from).toISOString()} and ${new Date(range.to).toISOString()}`
+          : " (all time)") +
+        ` (${authInfo.user.email})`,
     );
-    return c.json({ deleted, projectId, ...(range ?? {}) });
+    return c.json({ deleted, projectId, ...range });
   });
 
   app.get("/v1/events", async (c) => {
@@ -943,7 +949,8 @@ export function registerRoutes(
     if (authInfo.kind === "key" && !authInfo.scopes.has("query")) {
       return c.json({ error: "this key cannot query (missing query scope)" }, 403);
     }
-    if (authInfo.kind === "user" && !can(authInfo, "logs.read")) return c.json({ error: "forbidden" }, 403);
+    if (authInfo.kind === "user" && !can(authInfo, "logs.read"))
+      return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
 
@@ -960,7 +967,7 @@ export function registerRoutes(
     const rows = await storage.queryEvents({ filter, limit, cursor });
     return c.json({
       events: rows.map(toClientEvent),
-      nextCursor: rows.length === limit ? rows[rows.length - 1]?.id ?? null : null,
+      nextCursor: rows.length === limit ? (rows[rows.length - 1]?.id ?? null) : null,
     });
   });
 
@@ -983,8 +990,10 @@ export function registerRoutes(
 
   app.get("/v1/histogram", async (c) => {
     const authInfo = getAuth(c);
-    if (authInfo.kind === "key" && !authInfo.scopes.has("query")) return c.json({ error: "forbidden" }, 403);
-    if (authInfo.kind === "user" && !can(authInfo, "logs.read")) return c.json({ error: "forbidden" }, 403);
+    if (authInfo.kind === "key" && !authInfo.scopes.has("query"))
+      return c.json({ error: "forbidden" }, 403);
+    if (authInfo.kind === "user" && !can(authInfo, "logs.read"))
+      return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
     const range = parseRange(c);
@@ -992,13 +1001,20 @@ export function registerRoutes(
     const { from, to } = range;
     const buckets = clampInt(c.req.query("buckets"), 60, 1, 240);
     const bucketMs = Math.max(1000, Math.trunc((to - from) / buckets));
-    return c.json({ from, to, bucketMs, points: await storage.histogramPoints(projectId, from, to, bucketMs) });
+    return c.json({
+      from,
+      to,
+      bucketMs,
+      points: await storage.histogramPoints(projectId, from, to, bucketMs),
+    });
   });
 
   app.get("/v1/services", async (c) => {
     const authInfo = getAuth(c);
-    if (authInfo.kind === "key" && !authInfo.scopes.has("query")) return c.json({ error: "forbidden" }, 403);
-    if (authInfo.kind === "user" && !can(authInfo, "logs.read")) return c.json({ error: "forbidden" }, 403);
+    if (authInfo.kind === "key" && !authInfo.scopes.has("query"))
+      return c.json({ error: "forbidden" }, 403);
+    if (authInfo.kind === "user" && !can(authInfo, "logs.read"))
+      return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
     return c.json({ services: await storage.listServices(projectId) });
@@ -1006,8 +1022,10 @@ export function registerRoutes(
 
   app.get("/v1/stream", async (c) => {
     const authInfo = getAuth(c);
-    if (authInfo.kind === "key" && !authInfo.scopes.has("query")) return c.json({ error: "forbidden" }, 403);
-    if (authInfo.kind === "user" && !can(authInfo, "logs.read")) return c.json({ error: "forbidden" }, 403);
+    if (authInfo.kind === "key" && !authInfo.scopes.has("query"))
+      return c.json({ error: "forbidden" }, 403);
+    if (authInfo.kind === "user" && !can(authInfo, "logs.read"))
+      return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
     if (projectId instanceof Response) return projectId;
 
@@ -1070,8 +1088,10 @@ export function registerRoutes(
           });
           if (!session?.user) return false;
           const role = isRole(session.user.role) ? session.user.role : "viewer";
-          const createdAt = session.user.createdAt instanceof Date ? session.user.createdAt.getTime() : Date.now();
-          const updatedAt = session.user.updatedAt instanceof Date ? session.user.updatedAt.getTime() : createdAt;
+          const createdAt =
+            session.user.createdAt instanceof Date ? session.user.createdAt.getTime() : Date.now();
+          const updatedAt =
+            session.user.updatedAt instanceof Date ? session.user.updatedAt.getTime() : createdAt;
           const current = userAuth({
             id: String(session.user.id),
             email: session.user.email,
@@ -1080,16 +1100,16 @@ export function registerRoutes(
             createdAt,
             updatedAt,
           });
-          return can(current, "logs.read") && await canAccessProject(current, storage, projectId);
+          return can(current, "logs.read") && (await canAccessProject(current, storage, projectId));
         }
         if (authInfo.kind === "key") {
           if (!streamKey) return false;
           const verified = await verifyApiKey(storage, streamKey);
           return Boolean(
             verified &&
-              verified.id === authInfo.keyId &&
-              verified.projectId === projectId &&
-              verified.scopes.has("query")
+            verified.id === authInfo.keyId &&
+            verified.projectId === projectId &&
+            verified.scopes.has("query"),
           );
         }
         return false;
@@ -1153,7 +1173,9 @@ export function registerRoutes(
   const monitorGuard = (c: Context<AppEnv>, write: boolean): Response | null => {
     const authInfo = getAuth(c);
     if (authInfo.kind === "key") return c.json({ error: "keys cannot manage monitors" }, 403);
-    return can(authInfo, write ? "monitors.write" : "monitors.read") ? null : c.json({ error: "forbidden" }, 403);
+    return can(authInfo, write ? "monitors.write" : "monitors.read")
+      ? null
+      : c.json({ error: "forbidden" }, 403);
   };
 
   app.post("/v1/monitors/test-channel", async (c) => {
@@ -1188,7 +1210,7 @@ export function registerRoutes(
           summary: "Test notification from Kinglet — your channel works.",
           firedAt: Date.now(),
         },
-        { allowPrivate: config.allowPrivateWebhooks }
+        { allowPrivate: config.allowPrivateWebhooks },
       );
       return c.json({ ok: true });
     } catch (err) {
@@ -1316,7 +1338,7 @@ export function registerRoutes(
           console.warn(`[kinglet] test notification failed (${channel.type}):`, message);
           return { type: channel.type, ok: false, ...(detailed ? { error: message } : {}) };
         }
-      })
+      }),
     );
     return c.json({ results });
   });

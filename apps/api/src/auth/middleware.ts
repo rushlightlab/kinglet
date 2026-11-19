@@ -41,7 +41,7 @@ async function resolveAuth(
   c: Context,
   storage: Storage,
   auth: KingletAuth,
-  forceFreshSession: boolean
+  forceFreshSession: boolean,
 ): Promise<AuthInfo | null> {
   const header = c.req.header("authorization");
   let bearer: string | undefined;
@@ -56,7 +56,13 @@ async function resolveAuth(
   if (bearer) {
     const key = await verifyApiKey(storage, bearer);
     if (!key) return null;
-    return { kind: "key", keyId: key.id, name: key.name, projectId: key.projectId, scopes: key.scopes };
+    return {
+      kind: "key",
+      keyId: key.id,
+      name: key.name,
+      projectId: key.projectId,
+      scopes: key.scopes,
+    };
   }
 
   // Better Auth session — cookieCache makes this a signed-cookie read in the
@@ -68,8 +74,10 @@ async function resolveAuth(
   });
   if (!session?.user) return null;
   const role = isRole(session.user.role) ? session.user.role : "viewer";
-  const createdAt = session.user.createdAt instanceof Date ? session.user.createdAt.getTime() : Date.now();
-  const updatedAt = session.user.updatedAt instanceof Date ? session.user.updatedAt.getTime() : createdAt;
+  const createdAt =
+    session.user.createdAt instanceof Date ? session.user.createdAt.getTime() : Date.now();
+  const updatedAt =
+    session.user.updatedAt instanceof Date ? session.user.updatedAt.getTime() : createdAt;
   return userAuth({
     id: String(session.user.id),
     email: session.user.email,
@@ -80,10 +88,7 @@ async function resolveAuth(
   });
 }
 
-export function authMiddleware(
-  storage: Storage,
-  auth: KingletAuth
-): MiddlewareHandler<AppEnv> {
+export function authMiddleware(storage: Storage, auth: KingletAuth): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const method = c.req.method;
     const forceFreshSession = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
@@ -143,7 +148,7 @@ export async function projectExists(storage: Storage, id: string): Promise<boole
 export async function canAccessProject(
   auth: AuthInfo,
   storage: Storage,
-  projectId: string
+  projectId: string,
 ): Promise<boolean> {
   if (auth.kind === "key") return auth.projectId === projectId;
   if (auth.user.role === "admin") return true;
@@ -153,8 +158,8 @@ export async function canAccessProject(
     .where(
       and(
         eq(schema.projectMembers.projectId, projectId),
-        eq(schema.projectMembers.userId, auth.user.id)
-      )
+        eq(schema.projectMembers.userId, auth.user.id),
+      ),
     )
     .limit(1);
   return rows.length > 0;
@@ -169,7 +174,7 @@ export async function canAccessProject(
 export async function canClearProjectLogs(
   auth: AuthInfo,
   storage: Storage,
-  projectId: string
+  projectId: string,
 ): Promise<boolean> {
   if (auth.kind !== "user") return false;
   if (auth.user.role === "admin") return true;
@@ -181,8 +186,8 @@ export async function canClearProjectLogs(
     .where(
       and(
         eq(schema.projectMembers.projectId, projectId),
-        eq(schema.projectMembers.userId, auth.user.id)
-      )
+        eq(schema.projectMembers.userId, auth.user.id),
+      ),
     )
     .limit(1);
   return rows[0]?.canClearLogs === true;
@@ -195,7 +200,7 @@ export async function canClearProjectLogs(
  */
 export async function resolveProjectId(
   c: Context<AppEnv>,
-  storage: Storage
+  storage: Storage,
 ): Promise<string | Response> {
   const auth = getAuth(c);
   if (auth.kind === "key") return auth.projectId;
@@ -214,10 +219,7 @@ export async function resolveProjectId(
     const rows = await storage.db
       .select({ id: schema.projects.id })
       .from(schema.projects)
-      .innerJoin(
-        schema.projectMembers,
-        eq(schema.projectMembers.projectId, schema.projects.id)
-      )
+      .innerJoin(schema.projectMembers, eq(schema.projectMembers.projectId, schema.projects.id))
       .where(eq(schema.projectMembers.userId, auth.user.id))
       .orderBy(schema.projects.id)
       .limit(1);

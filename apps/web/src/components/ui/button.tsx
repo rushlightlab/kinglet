@@ -13,8 +13,7 @@ const buttonVariants = cva(
         outline:
           "border-white/[0.1] bg-white/[0.015] text-mist hover:border-gold/40 hover:bg-gold/[0.04] hover:text-gold",
         soft: "border-gold/40 bg-gold/[0.06] text-gold hover:bg-gold/[0.1]",
-        secondary:
-          "border-white/[0.08] bg-ink-800 text-mist hover:border-gold/30 hover:text-gold",
+        secondary: "border-white/[0.08] bg-ink-800 text-mist hover:border-gold/30 hover:text-gold",
         ghost: "text-mist-dim hover:bg-gold/[0.05] hover:text-gold",
         destructive:
           "border-coral/30 bg-coral/[0.08] text-coral hover:bg-coral/[0.14] focus-visible:ring-coral/30",
@@ -36,7 +35,7 @@ const buttonVariants = cva(
       variant: "default",
       size: "default",
     },
-  }
+  },
 );
 
 function Button({

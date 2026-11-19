@@ -92,7 +92,9 @@ function RootComponent() {
       <div className="relative flex h-screen items-center justify-center bg-ink-950 px-4">
         <div className="k-bg-grid absolute inset-0" aria-hidden="true" />
         <div className="k-window relative w-[30rem] p-6">
-          <h1 className="font-display text-lg font-bold tracking-wide text-mist">Can't reach the API.</h1>
+          <h1 className="font-display text-lg font-bold tracking-wide text-mist">
+            Can't reach the API.
+          </h1>
           <div className="mt-3">
             <ErrorAlert error={state.error} />
           </div>
@@ -136,7 +138,7 @@ function RootComponent() {
           const stillExists = projects.some((p) => p.id === prev.currentProjectId);
           const currentProjectId = stillExists
             ? prev.currentProjectId
-            : projects[0]?.id ?? prev.currentProjectId;
+            : (projects[0]?.id ?? prev.currentProjectId);
           if (currentProjectId !== prev.currentProjectId) {
             localStorage.setItem("kinglet.project", currentProjectId);
           }

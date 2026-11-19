@@ -7,7 +7,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 /**
  * Volume-by-level histogram. Drag across it to zoom into a time range.
  */
-export default function HistogramChart({ data, onSelectRange }: {
+export default function HistogramChart({
+  data,
+  onSelectRange,
+}: {
   data: Histogram;
   onSelectRange: (from: number, to: number) => void;
 }) {
@@ -64,7 +67,10 @@ export default function HistogramChart({ data, onSelectRange }: {
                   return (
                     <div
                       key={level}
-                      style={{ height: `${share}%`, backgroundColor: LEVEL_COLORS[level] ?? "#6b756c" }}
+                      style={{
+                        height: `${share}%`,
+                        backgroundColor: LEVEL_COLORS[level] ?? "#6b756c",
+                      }}
                     />
                   );
                 })}

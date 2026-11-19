@@ -14,7 +14,13 @@ interface LogTableProps {
   cursorId: number | null;
 }
 
-export default function LogTable({ events, scrollRef, onSelect, selectedId, cursorId }: LogTableProps) {
+export default function LogTable({
+  events,
+  scrollRef,
+  onSelect,
+  selectedId,
+  cursorId,
+}: LogTableProps) {
   const virtualizer = useVirtualizer({
     count: events.length,
     getScrollElement: () => scrollRef.current,
@@ -38,9 +44,7 @@ export default function LogTable({ events, scrollRef, onSelect, selectedId, curs
           <p className="font-mono text-xs text-mist-dim">
             No events match. Loosen the filters or widen the window.
           </p>
-          <p className="font-mono text-xs text-mist-dim">
-            New events appear here as they arrive.
-          </p>
+          <p className="font-mono text-xs text-mist-dim">New events appear here as they arrive.</p>
         </div>
       </div>
     );
@@ -69,9 +73,7 @@ export default function LogTable({ events, scrollRef, onSelect, selectedId, curs
             >
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="w-20 shrink-0 text-mist-faint">
-                    {formatTime(event.ts)}
-                  </span>
+                  <span className="w-20 shrink-0 text-mist-faint">{formatTime(event.ts)}</span>
                 </TooltipTrigger>
                 <TooltipContent>{new Date(event.ts).toISOString()}</TooltipContent>
               </Tooltip>

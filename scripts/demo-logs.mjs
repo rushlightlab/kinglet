@@ -16,7 +16,7 @@ function resolveKey(explicit) {
   if (process.env.KINGLET_KEY) return process.env.KINGLET_KEY;
   console.error(
     "No API key. Create a project API key with the ingest scope in the UI, " +
-      "then pass it as an argument or set KINGLET_KEY."
+      "then pass it as an argument or set KINGLET_KEY.",
   );
   process.exit(1);
 }

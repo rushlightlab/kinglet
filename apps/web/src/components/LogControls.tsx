@@ -243,8 +243,8 @@ export default function LogControls(props: LogControlsProps) {
                 })}
               </div>
               <p className="mt-2 text-[9px] leading-relaxed text-mist-faint">
-                off leaves the live tail as the only source. a rate re-fetches the
-                window on that interval.
+                off leaves the live tail as the only source. a rate re-fetches the window on that
+                interval.
               </p>
             </div>
 
@@ -385,9 +385,7 @@ export default function LogControls(props: LogControlsProps) {
                     <span aria-hidden="true" className="size-3.5" />
                   )}
                   <span className="truncate">{service.name}</span>
-                  <DropdownMenuShortcut>
-                    {service.count.toLocaleString()}
-                  </DropdownMenuShortcut>
+                  <DropdownMenuShortcut>{service.count.toLocaleString()}</DropdownMenuShortcut>
                 </DropdownMenuItem>
               );
             })}

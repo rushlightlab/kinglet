@@ -60,17 +60,14 @@ export default function ProjectsPanel() {
             </TableHeader>
             <TableBody>
               {projects.map((project) => {
-                const canManage =
-                  canWriteProjects || canReadKeys || project.canClearLogs;
+                const canManage = canWriteProjects || canReadKeys || project.canClearLogs;
                 return (
                   <TableRow key={project.id}>
                     <TableCell>
                       <div className="flex min-w-0 items-center gap-2">
                         <span className="truncate text-mist">{project.name}</span>
                         {project.id === currentProjectId && (
-                          <Badge className="text-[9px] normal-case tracking-normal">
-                            current
-                          </Badge>
+                          <Badge className="text-[9px] normal-case tracking-normal">current</Badge>
                         )}
                       </div>
                     </TableCell>
@@ -80,17 +77,12 @@ export default function ProjectsPanel() {
                     <TableCell className="text-right">
                       {canManage ? (
                         <Button variant="outline" size="xs" asChild>
-                          <Link
-                            to="/projects/$projectId"
-                            params={{ projectId: project.id }}
-                          >
+                          <Link to="/projects/$projectId" params={{ projectId: project.id }}>
                             manage
                           </Link>
                         </Button>
                       ) : (
-                        <span className="font-mono text-[10px] text-mist-faint">
-                          read only
-                        </span>
+                        <span className="font-mono text-[10px] text-mist-faint">read only</span>
                       )}
                     </TableCell>
                   </TableRow>

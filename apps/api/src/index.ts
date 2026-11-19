@@ -62,7 +62,7 @@ async function main(): Promise<void> {
     const requestId = randomUUID();
     console.error(
       `[kinglet] ${c.req.method} ${c.req.path} failed (request ${requestId}):`,
-      err instanceof Error ? (err.stack ?? err.message) : err
+      err instanceof Error ? (err.stack ?? err.message) : err,
     );
     c.header("x-request-id", requestId);
     return c.json({ error: "internal server error", requestId }, 500);
@@ -131,7 +131,7 @@ async function main(): Promise<void> {
     c.header(
       "content-security-policy",
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
-        "connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        "connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     );
     const path = c.req.path;
     if (path.startsWith("/v1/") || path.startsWith("/api/auth/")) {
@@ -153,7 +153,7 @@ async function main(): Promise<void> {
   // Better Auth owns /api/auth/* (sign-in, sign-out, session, password).
   // Public self-signup is closed: accounts are created by administrators.
   app.post("/api/auth/sign-up/*", (c) =>
-    c.json({ error: "sign-up is disabled — an administrator creates accounts" }, 403)
+    c.json({ error: "sign-up is disabled — an administrator creates accounts" }, 403),
   );
   // Better Auth enforces length; this adds the complexity rules before the
   // change-password handler consumes the body.
@@ -186,7 +186,7 @@ async function main(): Promise<void> {
   registerStaticUi(app);
 
   const server = serve({ fetch: app.fetch, port: config.port }, () =>
-    printBanner(config, storage, bootstrap)
+    printBanner(config, storage, bootstrap),
   );
   server.on("error", (err: NodeJS.ErrnoException) => {
     console.error("");
@@ -224,8 +224,10 @@ function isRemoteDbPath(dbPath: string): boolean {
 /** Serves the built web UI from ../web/dist (single-container deploy). */
 function registerStaticUi(app: Hono<AppEnv>): void {
   const webDist = path.resolve(__dirname, "../../web/dist");
-  const apiNotFound = (c: { json: (body: unknown, status: 404) => Response }, pathname: string): Response =>
-    c.json({ error: "not found", path: pathname }, 404);
+  const apiNotFound = (
+    c: { json: (body: unknown, status: 404) => Response },
+    pathname: string,
+  ): Response => c.json({ error: "not found", path: pathname }, 404);
 
   if (!fs.existsSync(webDist)) {
     app.get("*", (c) => {
@@ -233,7 +235,8 @@ function registerStaticUi(app: Hono<AppEnv>): void {
       if (pathname === "/v1" || pathname.startsWith("/v1/")) return apiNotFound(c, pathname);
       return c.json({
         name: "kinglet",
-        message: 'UI not built. Run "pnpm --filter @kinglet/web dev" for the dev UI, or build with "pnpm run build".',
+        message:
+          'UI not built. Run "pnpm --filter @kinglet/web dev" for the dev UI, or build with "pnpm run build".',
       });
     });
     return;
@@ -285,7 +288,7 @@ function registerStaticUi(app: Hono<AppEnv>): void {
 function printBanner(
   config: Config,
   storage: Storage,
-  bootstrap: { adminEmail: string; generatedPassword: string | null } | null
+  bootstrap: { adminEmail: string; generatedPassword: string | null } | null,
 ): void {
   const uiBuilt = fs.existsSync(path.resolve(__dirname, "../../web/dist"));
   console.log("");
@@ -301,7 +304,9 @@ function printBanner(
     if (bootstrap.generatedPassword) {
       console.log(`  Admin password→ ${bootstrap.generatedPassword}`);
       if (!isRemoteDbPath(config.dbPath)) {
-        console.log(`                  also written to ${path.join(config.dataDir, "admin-password.txt")}`);
+        console.log(
+          `                  also written to ${path.join(config.dataDir, "admin-password.txt")}`,
+        );
       }
     }
   }

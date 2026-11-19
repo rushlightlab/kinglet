@@ -76,7 +76,7 @@ export async function listApiKeys(storage: Storage, projectId: string): Promise<
 export async function getApiKey(
   storage: Storage,
   id: string,
-  projectId: string
+  projectId: string,
 ): Promise<ApiKey | null> {
   const rows = await storage.db
     .select({ key: schema.apiKeys, email: schema.user.email })
@@ -90,7 +90,7 @@ export async function getApiKey(
 
 export async function createApiKey(
   storage: Storage,
-  input: { projectId: string; name: string; scopes: KeyScope[]; createdBy: string | null }
+  input: { projectId: string; name: string; scopes: KeyScope[]; createdBy: string | null },
 ): Promise<{ key: ApiKey; plaintext: string }> {
   const plaintext = KEY_PREFIX + randomToken();
   const prefix = newPrefix(plaintext);
@@ -125,7 +125,7 @@ export async function createApiKey(
 export async function deleteApiKey(
   storage: Storage,
   id: string,
-  projectId: string
+  projectId: string,
 ): Promise<boolean> {
   const result = await storage.db
     .delete(schema.apiKeys)
@@ -142,7 +142,7 @@ export async function updateApiKeyScopes(
   storage: Storage,
   id: string,
   projectId: string,
-  scopes: KeyScope[]
+  scopes: KeyScope[],
 ): Promise<boolean> {
   const result = await storage.db
     .update(schema.apiKeys)
@@ -155,7 +155,7 @@ export async function updateApiKeyScopes(
 export async function rotateApiKey(
   storage: Storage,
   id: string,
-  projectId: string
+  projectId: string,
 ): Promise<{ plaintext: string; prefix: string } | null> {
   const plaintext = KEY_PREFIX + randomToken();
   const prefix = newPrefix(plaintext);
@@ -172,7 +172,9 @@ export async function rotateApiKey(
  * deleted. Returns how many were removed (useful for logs/audit output).
  */
 export async function deleteApiKeysByOwner(storage: Storage, userId: string): Promise<number> {
-  const result = await storage.db.delete(schema.apiKeys).where(eq(schema.apiKeys.createdBy, userId));
+  const result = await storage.db
+    .delete(schema.apiKeys)
+    .where(eq(schema.apiKeys.createdBy, userId));
   return Number(result.rowsAffected ?? 0);
 }
 
@@ -180,7 +182,7 @@ export async function deleteApiKeysByOwner(storage: Storage, userId: string): Pr
 export async function deleteApiKeysByOwnerInProject(
   storage: Storage,
   userId: string,
-  projectId: string
+  projectId: string,
 ): Promise<number> {
   const result = await storage.db
     .delete(schema.apiKeys)
@@ -191,7 +193,10 @@ export async function deleteApiKeysByOwnerInProject(
 /** In-memory throttle so hot ingest batches don't UPDATE last_used_at constantly. */
 const lastTouch = new Map<string, number>();
 
-export async function verifyApiKey(storage: Storage, plaintext: string): Promise<VerifiedKey | null> {
+export async function verifyApiKey(
+  storage: Storage,
+  plaintext: string,
+): Promise<VerifiedKey | null> {
   if (!plaintext.startsWith(KEY_PREFIX)) return null;
   const rows = await storage.db
     .select()

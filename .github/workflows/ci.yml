@@ -21,8 +21,10 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run build
+      - run: pnpm run format:check
+      - run: pnpm run lint
       - run: pnpm run typecheck
+      - run: pnpm run build
 
   docker:
     # Catch Dockerfile/context breakage before merge (build only, never push).

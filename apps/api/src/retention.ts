@@ -10,7 +10,7 @@ import { systemStatus } from "./status.js";
 export function startRetentionJob(
   storage: Storage,
   retentionDays: number,
-  alertRetentionDays: number
+  alertRetentionDays: number,
 ): void {
   let running = false;
   const run = (): void => {
@@ -21,7 +21,7 @@ export function startRetentionJob(
         const now = Date.now();
         const deleted = await storage.deleteOlderThan(now - retentionDays * 86_400_000);
         const alertsDeleted = await storage.deleteAlertsOlderThan(
-          now - alertRetentionDays * 86_400_000
+          now - alertRetentionDays * 86_400_000,
         );
         systemStatus.retentionLastRunAt = Date.now();
         systemStatus.retentionLastError = null;
@@ -30,7 +30,9 @@ export function startRetentionJob(
           await storage.runMaintenance();
           console.log(
             `[kinglet] retention: deleted ${deleted} events older than ${retentionDays}d` +
-              (alertsDeleted > 0 ? ` and ${alertsDeleted} alerts older than ${alertRetentionDays}d` : "")
+              (alertsDeleted > 0
+                ? ` and ${alertsDeleted} alerts older than ${alertRetentionDays}d`
+                : ""),
           );
         }
       } catch (err) {

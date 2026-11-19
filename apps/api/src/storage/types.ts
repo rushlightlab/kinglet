@@ -39,7 +39,7 @@ export interface Storage {
   insertEvents(
     projectId: string,
     events: Normalized[],
-    apiKeyId: string | null
+    apiKeyId: string | null,
   ): Promise<StoredEvent[]>;
   queryEvents(opts: QueryOptions): Promise<StoredEvent[]>;
   getEventByUid(projectId: string, uid: string): Promise<StoredEvent | null>;
@@ -47,7 +47,7 @@ export interface Storage {
     projectId: string,
     from: number,
     to: number,
-    bucketMs: number
+    bucketMs: number,
   ): Promise<HistogramPointRow[]>;
   listServices(projectId: string): Promise<ServiceRow[]>;
   /** Chunked delete; returns how many events were dropped. */

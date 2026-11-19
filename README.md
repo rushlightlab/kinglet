@@ -4,7 +4,7 @@
 experience, running on your own $5 VPS: one container, one SQLite database, one
 fast dark UI with a live tail.
 
-Named after the tiny bird with the golden crown (genus *Regulus* — "little king").
+Named after the tiny bird with the golden crown (genus _Regulus_ — "little king").
 
 Docs and landing page: **https://kinglet.rushlightlab.com**
 
@@ -75,13 +75,13 @@ curl -X POST http://localhost:8080/v1/events \
 
 Each line (or each item in a JSON `{"events":[...]}` array) is one event:
 
-| Field | Required | Notes |
-| --- | --- | --- |
-| `message` (or `msg`) | yes | the log line |
-| `level` | no | `trace`…`fatal`, a number 0–5, defaults to `info` |
-| `ts` (or `time`/`timestamp`) | no | epoch ms, epoch s (auto-detected), or ISO string |
-| `service`, `env` | no | lowercase identifiers |
-| `fields` | no | arbitrary JSON object (≤ 32KB serialized) |
+| Field                        | Required | Notes                                             |
+| ---------------------------- | -------- | ------------------------------------------------- |
+| `message` (or `msg`)         | yes      | the log line                                      |
+| `level`                      | no       | `trace`…`fatal`, a number 0–5, defaults to `info` |
+| `ts` (or `time`/`timestamp`) | no       | epoch ms, epoch s (auto-detected), or ISO string  |
+| `service`, `env`             | no       | lowercase identifiers                             |
+| `fields`                     | no       | arbitrary JSON object (≤ 32KB serialized)         |
 
 ### Node.js
 
@@ -126,29 +126,29 @@ Auth accepts either the `better-auth.session_token` cookie (the web UI) or
 (sessions); API keys are bound to their project. Cookie-authenticated
 mutations must send `X-Kinglet-Request: 1`; Bearer requests are exempt.
 
-| Route | What it does |
-| --- | --- |
-| `/api/auth/*` | Better Auth endpoints (sign-in, sign-out, session, password) |
-| `GET /v1/me` | Current user + permissions |
-| `GET/POST /v1/projects` | List assigned projects / create one (admin) |
-| `DELETE /v1/projects/:id` | Delete a project and all its data (admin) |
-| `GET/POST /v1/users` | List / create users (admin) |
-| `PATCH/DELETE /v1/users/:id` | Change role / delete user (admin) |
-| `GET/POST /v1/projects/:id/keys` | List / create API keys for a project |
-| `DELETE /v1/keys/:id?project=` | Revoke an API key |
-| `GET/POST /v1/projects/:id/members` | List / assign project members (admin) |
-| `DELETE /v1/projects/:id/members/:userId` | Remove a project member (admin) |
-| `POST /v1/events` | Ingest a batch (NDJSON or JSON, ≤ 10k events, ≤ 8MB) |
-| `GET /v1/events` | Query. Params: `q` (filter grammar), `from`, `to` (epoch ms), `limit`, `cursor` |
-| `GET /v1/histogram` | Counts per level per bucket. Params: `from`, `to`, `buckets` |
-| `GET /v1/services` | Your known services and their event counts |
-| `GET /v1/stream` | SSE live tail. Params: `q` (cookie auth; `?key=` for headerless clients) |
-| `GET/POST /v1/monitors` | List monitors / create one |
-| `PATCH/DELETE /v1/monitors/:id` | Update / delete a monitor |
-| `POST /v1/monitors/:id/test` | Send a test notification through every channel |
-| `GET /v1/alerts` | Alert history, latest first |
-| `GET /v1/system/status` | Operational diagnostics (admin) |
-| `GET /healthz` | Minimal health check (no auth) |
+| Route                                     | What it does                                                                    |
+| ----------------------------------------- | ------------------------------------------------------------------------------- |
+| `/api/auth/*`                             | Better Auth endpoints (sign-in, sign-out, session, password)                    |
+| `GET /v1/me`                              | Current user + permissions                                                      |
+| `GET/POST /v1/projects`                   | List assigned projects / create one (admin)                                     |
+| `DELETE /v1/projects/:id`                 | Delete a project and all its data (admin)                                       |
+| `GET/POST /v1/users`                      | List / create users (admin)                                                     |
+| `PATCH/DELETE /v1/users/:id`              | Change role / delete user (admin)                                               |
+| `GET/POST /v1/projects/:id/keys`          | List / create API keys for a project                                            |
+| `DELETE /v1/keys/:id?project=`            | Revoke an API key                                                               |
+| `GET/POST /v1/projects/:id/members`       | List / assign project members (admin)                                           |
+| `DELETE /v1/projects/:id/members/:userId` | Remove a project member (admin)                                                 |
+| `POST /v1/events`                         | Ingest a batch (NDJSON or JSON, ≤ 10k events, ≤ 8MB)                            |
+| `GET /v1/events`                          | Query. Params: `q` (filter grammar), `from`, `to` (epoch ms), `limit`, `cursor` |
+| `GET /v1/histogram`                       | Counts per level per bucket. Params: `from`, `to`, `buckets`                    |
+| `GET /v1/services`                        | Your known services and their event counts                                      |
+| `GET /v1/stream`                          | SSE live tail. Params: `q` (cookie auth; `?key=` for headerless clients)        |
+| `GET/POST /v1/monitors`                   | List monitors / create one                                                      |
+| `PATCH/DELETE /v1/monitors/:id`           | Update / delete a monitor                                                       |
+| `POST /v1/monitors/:id/test`              | Send a test notification through every channel                                  |
+| `GET /v1/alerts`                          | Alert history, latest first                                                     |
+| `GET /v1/system/status`                   | Operational diagnostics (admin)                                                 |
+| `GET /healthz`                            | Minimal health check (no auth)                                                  |
 
 Ingest is rate-limited to 600 batches/minute per identity. Filters are capped at
 500 characters / 32 terms, `limit` at 1000, `buckets` at 240, alerts at 500, and
@@ -173,11 +173,11 @@ Combine freely: `level>=warn service:api -healthcheck`
 Monitors are standing queries evaluated against a project's stream (add
 `?project=<id>` — `kl_` keys can't manage monitors; use the UI or a session):
 
-| Kind | Fires when | Example |
-| --- | --- | --- |
-| `match` | any event matches — instantly | `level:fatal` |
-| `count_above` | more than N matches within a window | `level>=error service:api` > 10 in 5m |
-| `count_below` | fewer than N matches within a window (silence) | `service:cron-backup` < 1 in 30m |
+| Kind          | Fires when                                     | Example                               |
+| ------------- | ---------------------------------------------- | ------------------------------------- |
+| `match`       | any event matches — instantly                  | `level:fatal`                         |
+| `count_above` | more than N matches within a window            | `level>=error service:api` > 10 in 5m |
+| `count_below` | fewer than N matches within a window (silence) | `service:cron-backup` < 1 in 30m      |
 
 Create one over HTTP, or in the UI at `/monitors`:
 
@@ -202,24 +202,24 @@ your UI with the query and time range pre-filled.
 
 ## Configuration
 
-| Env var | Default | What it does |
-| --- | --- | --- |
-| `KINGLET_PORT` | `3000` | HTTP port |
-| `KINGLET_STORAGE` | `auto` | `sqlite`, `libsql`, or `auto` (picks by db path scheme) |
-| `KINGLET_DB_PATH` | `data/kinglet.db` (image: `/data/kinglet.db`) | Plain path → SQLite; `libsql://`/`https://`/`file:` → libSQL |
-| `KINGLET_DB_AUTH_TOKEN` | — | Auth token for remote libSQL/Turso databases |
-| `KINGLET_ADMIN_EMAIL` | `admin@kinglet.local` | Bootstrap administrator email (when no administrator exists) |
-| `KINGLET_ADMIN_PASSWORD` | *(generated)* | Bootstrap administrator password (when no administrator exists) |
-| `BETTER_AUTH_SECRET` | *(generated, persisted)* | Session signing secret; set explicitly for multi-instance installs |
-| `KINGLET_TRUSTED_PROXIES` | — | CIDRs allowed to set `X-Forwarded-For` |
-| `KINGLET_ALLOW_PRIVATE_WEBHOOKS` | — | Allow private/internal webhook targets (SSRF escape hatch) |
-| `KINGLET_SESSION_DAYS` | `30` | Web session lifetime |
-| `KINGLET_BASE_URL` | — | Public URL, used for deep links in alert notifications |
-| `KINGLET_RETENTION_DAYS` | `14` | Delete events older than this |
-| `KINGLET_ALERT_RETENTION_DAYS` | `90` | Delete alert history older than this |
-| `KINGLET_MAX_EVENTS_PER_PROJECT` | `1000000` | Hard cap on retained events per project (`0` = unlimited) |
-| `KINGLET_MAX_PROJECT_DB_MB` | `1024` | Hard cap on retained event bytes per project (`0` = unlimited) |
-| `KINGLET_MAX_DB_MB` | `4096` | Hard cap on local database size in MB (`0` = unlimited) |
+| Env var                          | Default                                       | What it does                                                       |
+| -------------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
+| `KINGLET_PORT`                   | `3000`                                        | HTTP port                                                          |
+| `KINGLET_STORAGE`                | `auto`                                        | `sqlite`, `libsql`, or `auto` (picks by db path scheme)            |
+| `KINGLET_DB_PATH`                | `data/kinglet.db` (image: `/data/kinglet.db`) | Plain path → SQLite; `libsql://`/`https://`/`file:` → libSQL       |
+| `KINGLET_DB_AUTH_TOKEN`          | —                                             | Auth token for remote libSQL/Turso databases                       |
+| `KINGLET_ADMIN_EMAIL`            | `admin@kinglet.local`                         | Bootstrap administrator email (when no administrator exists)       |
+| `KINGLET_ADMIN_PASSWORD`         | _(generated)_                                 | Bootstrap administrator password (when no administrator exists)    |
+| `BETTER_AUTH_SECRET`             | _(generated, persisted)_                      | Session signing secret; set explicitly for multi-instance installs |
+| `KINGLET_TRUSTED_PROXIES`        | —                                             | CIDRs allowed to set `X-Forwarded-For`                             |
+| `KINGLET_ALLOW_PRIVATE_WEBHOOKS` | —                                             | Allow private/internal webhook targets (SSRF escape hatch)         |
+| `KINGLET_SESSION_DAYS`           | `30`                                          | Web session lifetime                                               |
+| `KINGLET_BASE_URL`               | —                                             | Public URL, used for deep links in alert notifications             |
+| `KINGLET_RETENTION_DAYS`         | `14`                                          | Delete events older than this                                      |
+| `KINGLET_ALERT_RETENTION_DAYS`   | `90`                                          | Delete alert history older than this                               |
+| `KINGLET_MAX_EVENTS_PER_PROJECT` | `1000000`                                     | Hard cap on retained events per project (`0` = unlimited)          |
+| `KINGLET_MAX_PROJECT_DB_MB`      | `1024`                                        | Hard cap on retained event bytes per project (`0` = unlimited)     |
+| `KINGLET_MAX_DB_MB`              | `4096`                                        | Hard cap on local database size in MB (`0` = unlimited)            |
 
 On first boot, or if the database has no administrator, Kinglet creates one from
 `KINGLET_ADMIN_EMAIL` / `KINGLET_ADMIN_PASSWORD`. If no password is set, one is
@@ -235,7 +235,7 @@ default or connects to a hosted [Turso](https://turso.tech) database with the
 same code. Schema and queries are defined with **Drizzle ORM**; migrations live
 in `apps/api/drizzle` and run automatically on boot.
 
-**sqlite** *(default)* — one local database file (plus WAL/SHM sidecars while running), WAL mode, FTS5 trigram search:
+**sqlite** _(default)_ — one local database file (plus WAL/SHM sidecars while running), WAL mode, FTS5 trigram search:
 
 ```bash
 KINGLET_DB_PATH=/data/kinglet.db
@@ -282,6 +282,9 @@ pnpm install
 pnpm dev        # API on :3000 (tsx watch) + UI on :5173 (Vite, proxies /v1)
 pnpm build      # build all packages (UI dist is served by the API after this)
 pnpm typecheck
+pnpm lint       # oxlint
+pnpm format     # oxfmt, writes files
+pnpm format:check
 ```
 
 The dev API writes to `apps/api/data/`. On first boot, or whenever no

@@ -57,9 +57,7 @@ function ProjectSettingsPage() {
       <div className="mt-3 flex flex-col gap-3">
         {canWriteProjects && <ProjectRenameCard project={project} />}
         {canReadKeys && <KeysCard projectId={project.id} projectName={project.name} />}
-        {canWriteProjects && (
-          <MembersCard projectId={project.id} projectName={project.name} />
-        )}
+        {canWriteProjects && <MembersCard projectId={project.id} projectName={project.name} />}
         <ClearLogsCard
           projectId={project.id}
           projectName={project.name}
@@ -72,16 +70,13 @@ function ProjectSettingsPage() {
             <CardHeader>
               <CardTitle>Read-only project</CardTitle>
               <CardDescription>
-                Your role can view logs from this project but cannot manage its keys,
-                members, or retention.
+                Your role can view logs from this project but cannot manage its keys, members, or
+                retention.
               </CardDescription>
             </CardHeader>
             <CardContent>
               <Button variant="outline" size="sm" asChild>
-                <Link
-                  to="/"
-                  search={{ q: undefined, from: undefined, to: undefined }}
-                >
+                <Link to="/" search={{ q: undefined, from: undefined, to: undefined }}>
                   open logs
                 </Link>
               </Button>

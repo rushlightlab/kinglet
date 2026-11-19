@@ -32,7 +32,7 @@ export function createAuth(
     secret: string;
     trustedProxies?: string[];
     sessionDays?: number;
-  }
+  },
 ) {
   const rawBase = opts.baseUrl ?? `http://localhost:${opts.port}`;
   let baseOrigin = rawBase;
@@ -49,7 +49,7 @@ export function createAuth(
   const localOrigins =
     baseHost === "localhost" || baseHost === "127.0.0.1"
       ? ["localhost", "127.0.0.1"].flatMap((host) =>
-          [3000, 5173, 8080].map((port) => `http://${host}:${port}`)
+          [3000, 5173, 8080].map((port) => `http://${host}:${port}`),
         )
       : [];
   const trustedProxies = opts.trustedProxies ?? [];
@@ -105,11 +105,10 @@ export function createAuth(
         "/sign-in/email": { window: 60, max: 20 },
       },
     },
-    advanced: {
-      ...(trustedProxies.length > 0
+    advanced:
+      trustedProxies.length > 0
         ? { ipAddress: { trustedProxies } }
-        : { ipAddress: { ipAddressHeaders: ["x-kinglet-client-ip"] } }),
-    },
+        : { ipAddress: { ipAddressHeaders: ["x-kinglet-client-ip"] } },
   });
 }
 

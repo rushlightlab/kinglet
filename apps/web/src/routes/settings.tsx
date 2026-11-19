@@ -30,11 +30,7 @@ function SettingsPage() {
       description="Projects and people across this Kinglet instance."
     >
       {canUsers ? (
-        <Tabs
-          value={tab}
-          onValueChange={(value) => setTab(value as Tab)}
-          className="mt-6 gap-4"
-        >
+        <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="mt-6 gap-4">
           <TabsList>
             <TabsTrigger value="projects">projects</TabsTrigger>
             <TabsTrigger value="users">users</TabsTrigger>

@@ -73,9 +73,7 @@ export default function MembersCard({
   }, [loadMembers]);
 
   const eligibleUsers = allUsers.filter((u) => u.role !== "admin");
-  const candidates = eligibleUsers.filter(
-    (u) => !members.some((m) => m.userId === u.id)
-  );
+  const candidates = eligibleUsers.filter((u) => !members.some((m) => m.userId === u.id));
   const memberEmptyMessage =
     eligibleUsers.length === 0
       ? "No member accounts yet. Create one under Workspace → Users."
@@ -105,7 +103,7 @@ export default function MembersCard({
 
   const setMemberClearLogs = async (
     member: ProjectMember,
-    canClearLogs: boolean
+    canClearLogs: boolean,
   ): Promise<void> => {
     try {
       await updateProjectMember(projectId, member.userId, { canClearLogs });
@@ -113,7 +111,7 @@ export default function MembersCard({
       toast.success(
         canClearLogs
           ? `Allowed ${member.email} to clear logs`
-          : `Revoked clear logs from ${member.email}`
+          : `Revoked clear logs from ${member.email}`,
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

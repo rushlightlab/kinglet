@@ -1,12 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  fetchEvents,
-  fetchHistogram,
-  fetchServices,
-  openStream,
-  UnauthorizedError,
-} from "../api";
+import { fetchEvents, fetchHistogram, fetchServices, openStream, UnauthorizedError } from "../api";
 import { useApp } from "../app-context";
 import type { Histogram, KingletEvent, Service } from "../types";
 import EventDrawer from "../components/EventDrawer";
@@ -15,18 +9,16 @@ import HistogramChart from "../components/Histogram";
 import LogControls from "../components/LogControls";
 import LogTable from "../components/LogTable";
 import SiteHeader from "../components/SiteHeader";
-import {
-  DEFAULT_WINDOW_KEY,
-  recommendedRefreshKey,
-  refreshMsFor,
-  WINDOWS,
-} from "../time";
+import { DEFAULT_WINDOW_KEY, recommendedRefreshKey, refreshMsFor, WINDOWS } from "../time";
 import type { RefreshKey } from "../time";
 
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>) => ({
     q: typeof search.q === "string" ? search.q.slice(0, 500) : undefined,
-    from: Number.isFinite(Number(search.from)) && Number(search.from) > 0 ? Number(search.from) : undefined,
+    from:
+      Number.isFinite(Number(search.from)) && Number(search.from) > 0
+        ? Number(search.from)
+        : undefined,
     to: Number.isFinite(Number(search.to)) && Number(search.to) > 0 ? Number(search.to) : undefined,
   }),
   component: Explorer,
@@ -42,7 +34,9 @@ function Explorer() {
   const [rangeKey, setRangeKey] = useState(DEFAULT_WINDOW_KEY);
   const [refreshKey, setRefreshKey] = useState<RefreshKey>("off");
   const [customRange, setCustomRange] = useState<null | { from: number; to: number }>(() =>
-    search.from !== undefined && search.to !== undefined ? { from: search.from, to: search.to } : null
+    search.from !== undefined && search.to !== undefined
+      ? { from: search.from, to: search.to }
+      : null,
   );
   const [events, setEvents] = useState<KingletEvent[]>([]);
   const [histogram, setHistogram] = useState<Histogram | null>(null);
@@ -56,7 +50,7 @@ function Explorer() {
 
   const windowMs = customRange
     ? customRange.to - customRange.from
-    : WINDOWS[rangeKey] ?? 60 * 60_000;
+    : (WINDOWS[rangeKey] ?? 60 * 60_000);
   const refreshMs = refreshMsFor(refreshKey);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -87,7 +81,7 @@ function Explorer() {
         if (!silent) setBusy(false);
       }
     },
-    [q, currentProjectId]
+    [q, currentProjectId],
   );
 
   const loadWindow = useCallback(
@@ -100,7 +94,7 @@ function Explorer() {
       const width = WINDOWS[rangeKey] ?? 60 * 60_000;
       void loadRange(to - width, to, silent);
     },
-    [customRange, rangeKey, loadRange]
+    [customRange, rangeKey, loadRange],
   );
 
   // Reload when the query, time window, or project changes.
@@ -170,7 +164,7 @@ function Explorer() {
       setCursorId(event.id);
       setSelected(event);
     },
-    [cursorId, events]
+    [cursorId, events],
   );
 
   useEffect(() => {

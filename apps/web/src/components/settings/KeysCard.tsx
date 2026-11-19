@@ -10,13 +10,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import {
-  createKey,
-  deleteKey,
-  fetchKeys,
-  rotateKey,
-  updateKeyScopes,
-} from "../../api";
+import { createKey, deleteKey, fetchKeys, rotateKey, updateKeyScopes } from "../../api";
 import { hasPermission, useApp } from "../../app-context";
 import type { ApiKeyInfo } from "../../types";
 import CopyButton from "../CopyButton";
@@ -24,7 +18,6 @@ import ErrorAlert from "../ErrorAlert";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -111,7 +104,7 @@ export default function KeysCard({
 
   const create = async (): Promise<void> => {
     const scopes = [scopeIngest ? "ingest" : null, scopeQuery ? "query" : null].filter(
-      (s): s is string => s !== null
+      (s): s is string => s !== null,
     );
     if (!name.trim() || scopes.length === 0) return;
     setBusy(true);
@@ -136,7 +129,7 @@ export default function KeysCard({
   const saveKeyScopes = async (): Promise<void> => {
     if (!editKey) return;
     const scopes = [editIngest ? "ingest" : null, editQuery ? "query" : null].filter(
-      (scope): scope is string => scope !== null
+      (scope): scope is string => scope !== null,
     );
     if (scopes.length === 0) return;
     setActionBusy(true);
@@ -236,9 +229,7 @@ export default function KeysCard({
                     </div>
                   </TableCell>
                   <TableCell className="hidden md:table-cell text-[10px] text-mist-faint">
-                    {key.lastUsedAt
-                      ? new Date(key.lastUsedAt).toLocaleDateString()
-                      : "No activity"}
+                    {key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleDateString() : "No activity"}
                   </TableCell>
                   <TableCell className="hidden md:table-cell">
                     <div className="flex min-w-0 flex-col gap-0.5">

@@ -5,10 +5,7 @@ import { cn } from "cn";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-export default function PasswordInput({
-  className,
-  ...props
-}: ComponentProps<typeof Input>) {
+export default function PasswordInput({ className, ...props }: ComponentProps<typeof Input>) {
   const [visible, setVisible] = useState(false);
 
   return (

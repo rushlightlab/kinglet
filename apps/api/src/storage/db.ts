@@ -63,7 +63,10 @@ export async function openDatabase(opts: {
       await client.execute("PRAGMA synchronous = NORMAL");
       await client.execute("PRAGMA busy_timeout = 5000");
     } catch (err) {
-      console.warn("[kinglet] could not apply SQLite pragmas:", err instanceof Error ? err.message : err);
+      console.warn(
+        "[kinglet] could not apply SQLite pragmas:",
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 
@@ -77,7 +80,10 @@ export async function openDatabase(opts: {
     // Some hosted libSQL builds lack the FTS5 trigram tokenizer. Only fall
     // back for that specific failure — everything else must surface.
     if (!/trigram|tokenizer/i.test(message)) throw err;
-    console.warn("[kinglet] FTS5 trigram unavailable; using word-prefix search (unicode61):", message);
+    console.warn(
+      "[kinglet] FTS5 trigram unavailable; using word-prefix search (unicode61):",
+      message,
+    );
     await client.execute("DROP TABLE IF EXISTS events_fts");
     await client.executeMultiple(`
       CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5 (
@@ -101,7 +107,7 @@ export async function openDatabase(opts: {
 async function backfillEventUids(client: Client): Promise<void> {
   for (;;) {
     const rows = await client.execute(
-      "SELECT id FROM events WHERE uid IS NULL ORDER BY id LIMIT 1000"
+      "SELECT id FROM events WHERE uid IS NULL ORDER BY id LIMIT 1000",
     );
     if (rows.rows.length === 0) return;
     await client.batch(
@@ -109,7 +115,7 @@ async function backfillEventUids(client: Client): Promise<void> {
         sql: "UPDATE events SET uid = ? WHERE id = ?",
         args: [uuidv7(), Number(row.id)],
       })),
-      "write"
+      "write",
     );
     if (rows.rows.length < 1000) return;
   }
@@ -174,7 +180,7 @@ async function prepareUuidIdMigration(client: Client): Promise<void> {
 
   for (const [, map] of maps) {
     await client.execute(
-      `CREATE TABLE IF NOT EXISTS ${map} (old_id INTEGER PRIMARY KEY, new_id TEXT NOT NULL)`
+      `CREATE TABLE IF NOT EXISTS ${map} (old_id INTEGER PRIMARY KEY, new_id TEXT NOT NULL)`,
     );
   }
 
@@ -187,7 +193,7 @@ async function prepareUuidIdMigration(client: Client): Promise<void> {
         sql: `INSERT OR IGNORE INTO ${map} (old_id, new_id) VALUES (?, ?)`,
         args: [Number(row.id), uuidv7()],
       })),
-      "write"
+      "write",
     );
   }
 }

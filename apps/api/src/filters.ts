@@ -77,7 +77,8 @@ export function parseFilters(q: string): ParsedFilters {
     }
     const levelMatch = /^level(>=|<=|>|<|=|:)(.+)$/i.exec(t);
     const kvMatch = /^(service|env):(.+)$/i.exec(t);
-    const keyMatch = /^(?:key|api_key):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(t);
+    const keyMatch =
+      /^(?:key|api_key):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(t);
     if (!negative && levelMatch) {
       const value = levelIndex(levelMatch[2] ?? "");
       if (value !== null) {
@@ -138,12 +139,18 @@ export function buildWhere(f: ParsedFilters, range: EventRange, projectId: strin
 
 function compare(a: number, op: string, b: number): boolean {
   switch (op) {
-    case "=": return a === b;
-    case ">": return a > b;
-    case ">=": return a >= b;
-    case "<": return a < b;
-    case "<=": return a <= b;
-    default: return false;
+    case "=":
+      return a === b;
+    case ">":
+      return a > b;
+    case ">=":
+      return a >= b;
+    case "<":
+      return a < b;
+    case "<=":
+      return a <= b;
+    default:
+      return false;
   }
 }
 
@@ -156,9 +163,10 @@ export function matchesEvent(
     env: string | null;
     message: string;
     apiKeyId?: string | null;
-  }
+  },
 ): boolean {
-  if (f.levelOp && f.levelValue !== null && !compare(row.level, f.levelOp, f.levelValue)) return false;
+  if (f.levelOp && f.levelValue !== null && !compare(row.level, f.levelOp, f.levelValue))
+    return false;
   if (f.service !== null && (row.service ?? "").toLowerCase() !== f.service) return false;
   if (f.env !== null && (row.env ?? "").toLowerCase() !== f.env) return false;
   if (f.apiKeyId !== null && (row.apiKeyId ?? null) !== f.apiKeyId) return false;

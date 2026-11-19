@@ -63,7 +63,7 @@ export async function createManagedUser(
   storage: Storage,
   auth: KingletAuth,
   headers: Headers,
-  input: { email: string; name: string; role: Role; password?: string }
+  input: { email: string; name: string; role: Role; password?: string },
 ): Promise<{ user: AdminUser; password?: string }> {
   if (input.password) {
     const problem = passwordProblem(input.password);
@@ -95,7 +95,7 @@ export async function setUserRole(
   auth: KingletAuth,
   headers: Headers,
   userId: string,
-  role: Role
+  role: Role,
 ): Promise<void> {
   await auth.api.setRole({
     body: { userId, role: role as "admin" | "user" },
@@ -108,14 +108,18 @@ export async function setUserRole(
   await storage.db.delete(schema.session).where(eq(schema.session.userId, userId));
 }
 
-export async function updateUserName(storage: Storage, userId: string, name: string): Promise<void> {
+export async function updateUserName(
+  storage: Storage,
+  userId: string,
+  name: string,
+): Promise<void> {
   await storage.db.update(schema.user).set({ name }).where(eq(schema.user.id, userId));
 }
 
 export async function removeManagedUser(
   auth: KingletAuth,
   headers: Headers,
-  userId: string
+  userId: string,
 ): Promise<void> {
   await auth.api.removeUser({ body: { userId }, headers });
 }
@@ -125,7 +129,7 @@ export async function setManagedUserDisabled(
   auth: KingletAuth,
   headers: Headers,
   userId: string,
-  disabled: boolean
+  disabled: boolean,
 ): Promise<AdminUser> {
   if (disabled) {
     await auth.api.banUser({
@@ -145,7 +149,7 @@ export async function resetManagedUserPassword(
   storage: Storage,
   auth: KingletAuth,
   headers: Headers,
-  userId: string
+  userId: string,
 ): Promise<string> {
   const password = generatePassword();
   await auth.api.setUserPassword({ body: { userId, newPassword: password }, headers });

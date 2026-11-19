@@ -5,7 +5,6 @@ import type {
   ChannelTestResult,
   EventPage,
   Histogram,
-  KingletEvent,
   Monitor,
   NotifyChannel,
   Project,
@@ -123,26 +122,18 @@ export function renameProject(id: string, name: string): Promise<{ project: Proj
 
 // ---------- project members (admin) ----------
 
-export function fetchProjectMembers(
-  projectId: string
-): Promise<{ members: ProjectMember[] }> {
+export function fetchProjectMembers(projectId: string): Promise<{ members: ProjectMember[] }> {
   return api<{ members: ProjectMember[] }>(`/v1/projects/${projectId}/members`);
 }
 
-export function addProjectMember(
-  projectId: string,
-  userId: string
-): Promise<{ ok: true }> {
+export function addProjectMember(projectId: string, userId: string): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/projects/${projectId}/members`, {
     method: "POST",
     body: JSON.stringify({ userId }),
   });
 }
 
-export function removeProjectMember(
-  projectId: string,
-  userId: string
-): Promise<{ ok: true }> {
+export function removeProjectMember(projectId: string, userId: string): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/projects/${projectId}/members/${userId}`, {
     method: "DELETE",
   });
@@ -151,12 +142,12 @@ export function removeProjectMember(
 export function updateProjectMember(
   projectId: string,
   userId: string,
-  body: { canClearLogs: boolean }
+  body: { canClearLogs: boolean },
 ): Promise<{ ok: true; canClearLogs: boolean }> {
-  return api<{ ok: true; canClearLogs: boolean }>(
-    `/v1/projects/${projectId}/members/${userId}`,
-    { method: "PATCH", body: JSON.stringify(body) }
-  );
+  return api<{ ok: true; canClearLogs: boolean }>(`/v1/projects/${projectId}/members/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
 }
 
 // ---------- users (admin) ----------
@@ -179,7 +170,7 @@ export function createUser(input: {
 
 export function updateUser(
   id: string,
-  patch: { name?: string; role?: string; disabled?: boolean }
+  patch: { name?: string; role?: string; disabled?: boolean },
 ): Promise<{ user: AppUser }> {
   return api<{ user: AppUser }>(`/v1/users/${id}`, {
     method: "PATCH",
@@ -203,7 +194,7 @@ export function fetchKeys(projectId: string): Promise<{ keys: ApiKeyInfo[] }> {
 
 export function createKey(
   projectId: string,
-  input: { name: string; scopes: string[] }
+  input: { name: string; scopes: string[] },
 ): Promise<{ key: ApiKeyInfo; plaintext: string }> {
   return api<{ key: ApiKeyInfo; plaintext: string }>(`/v1/projects/${projectId}/keys`, {
     method: "POST",
@@ -218,7 +209,7 @@ export function deleteKey(id: string, projectId: string): Promise<{ ok: true }> 
 export function updateKeyScopes(
   id: string,
   projectId: string,
-  scopes: string[]
+  scopes: string[],
 ): Promise<{ ok: true; scopes: string[] }> {
   return api<{ ok: true; scopes: string[] }>(`/v1/keys/${id}?project=${projectId}`, {
     method: "PATCH",
@@ -228,12 +219,11 @@ export function updateKeyScopes(
 
 export function rotateKey(
   id: string,
-  projectId: string
+  projectId: string,
 ): Promise<{ plaintext: string; prefix: string }> {
-  return api<{ plaintext: string; prefix: string }>(
-    `/v1/keys/${id}/rotate?project=${projectId}`,
-    { method: "POST" }
-  );
+  return api<{ plaintext: string; prefix: string }>(`/v1/keys/${id}/rotate?project=${projectId}`, {
+    method: "POST",
+  });
 }
 
 // ---------- events ----------
@@ -256,7 +246,7 @@ export function fetchEvents(opts: {
 /** Deletes events in the project, optionally within an epoch-ms range. */
 export function clearProjectLogs(
   projectId: string,
-  range?: { from: number; to: number }
+  range?: { from: number; to: number },
 ): Promise<{ deleted: number; projectId: string; from?: number; to?: number }> {
   const params = new URLSearchParams({ project: String(projectId) });
   if (range) {
@@ -265,7 +255,7 @@ export function clearProjectLogs(
   }
   return api<{ deleted: number; projectId: string; from?: number; to?: number }>(
     `/v1/events?${params.toString()}`,
-    { method: "DELETE" }
+    { method: "DELETE" },
   );
 }
 
@@ -297,7 +287,10 @@ export function fetchMonitors(projectId: string): Promise<{ monitors: Monitor[] 
   return api<{ monitors: Monitor[] }>(withProject("/v1/monitors", projectId));
 }
 
-export function createMonitor(projectId: string, input: Partial<Monitor>): Promise<{ monitor: Monitor }> {
+export function createMonitor(
+  projectId: string,
+  input: Partial<Monitor>,
+): Promise<{ monitor: Monitor }> {
   return api<{ monitor: Monitor }>(withProject("/v1/monitors", projectId), {
     method: "POST",
     body: JSON.stringify(input),
@@ -307,7 +300,7 @@ export function createMonitor(projectId: string, input: Partial<Monitor>): Promi
 export function updateMonitor(
   projectId: string,
   id: string,
-  input: Partial<Monitor>
+  input: Partial<Monitor>,
 ): Promise<{ monitor: Monitor }> {
   return api<{ monitor: Monitor }>(withProject(`/v1/monitors/${id}`, projectId), {
     method: "PATCH",
@@ -319,7 +312,10 @@ export function deleteMonitor(projectId: string, id: string): Promise<{ ok: true
   return api<{ ok: true }>(withProject(`/v1/monitors/${id}`, projectId), { method: "DELETE" });
 }
 
-export function testMonitor(projectId: string, id: string): Promise<{ results: ChannelTestResult[] }> {
+export function testMonitor(
+  projectId: string,
+  id: string,
+): Promise<{ results: ChannelTestResult[] }> {
   return api<{ results: ChannelTestResult[] }>(withProject(`/v1/monitors/${id}/test`, projectId), {
     method: "POST",
   });

@@ -42,7 +42,7 @@ function toLocalInput(ts: number): string {
   const date = new Date(ts);
   const pad = (n: number): string => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
-    date.getHours()
+    date.getHours(),
   )}:${pad(date.getMinutes())}`;
 }
 
@@ -58,7 +58,7 @@ export default function ClearLogsCard({
   const [open, setOpen] = useState(false);
   const [range, setRange] = useState<ClearRange>("24h");
   const [customFrom, setCustomFrom] = useState(() =>
-    toLocalInput(Date.now() - CLEAR_RANGE_MS["24h"])
+    toLocalInput(Date.now() - CLEAR_RANGE_MS["24h"]),
   );
   const [customTo, setCustomTo] = useState(() => toLocalInput(Date.now()));
   const [confirm, setConfirm] = useState("");

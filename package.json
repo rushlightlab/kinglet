@@ -11,10 +11,16 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
     "demo:logs": "node scripts/demo-logs.mjs",
     "demo:webhook": "node scripts/webhook-catcher.mjs"
   },
   "devDependencies": {
+    "oxfmt": "0.79.0",
+    "oxlint": "1.94.0",
     "turbo": "^2.5.0"
   }
 }

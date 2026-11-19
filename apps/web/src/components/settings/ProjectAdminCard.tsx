@@ -133,11 +133,7 @@ export function ProjectDangerCard({ project }: { project: Project }) {
                   tabIndex={isOnlyProject ? 0 : -1}
                 >
                   <AlertDialogTrigger asChild>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      disabled={isOnlyProject || deleting}
-                    >
+                    <Button variant="destructive" size="sm" disabled={isOnlyProject || deleting}>
                       <Trash2Icon data-icon="inline-start" />
                       delete project
                     </Button>
@@ -145,9 +141,7 @@ export function ProjectDangerCard({ project }: { project: Project }) {
                 </span>
               </TooltipTrigger>
               <TooltipContent>
-                {isOnlyProject
-                  ? "The only project cannot be deleted"
-                  : "Delete this project"}
+                {isOnlyProject ? "The only project cannot be deleted" : "Delete this project"}
               </TooltipContent>
             </Tooltip>
             <AlertDialogContent>

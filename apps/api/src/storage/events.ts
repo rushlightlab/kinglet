@@ -43,7 +43,7 @@ export async function insertEvents(
   db: KingletDb,
   projectId: string,
   events: Normalized[],
-  apiKeyId: string | null
+  apiKeyId: string | null,
 ): Promise<StoredEvent[]> {
   if (events.length === 0) return [];
   const rows: StoredEvent[] = [];
@@ -67,7 +67,7 @@ export async function insertEvents(
             message: e.message,
             fields: e.fields,
             sizeBytes: eventSizeBytes(e),
-          }))
+          })),
         )
         .returning({ id: schema.events.id });
       inserted.forEach((insertedRow, index) => {
@@ -107,7 +107,7 @@ export async function queryEvents(db: KingletDb, opts: QueryOptions): Promise<St
 export async function getEventByUid(
   db: KingletDb,
   projectId: string,
-  uid: string
+  uid: string,
 ): Promise<StoredEvent | null> {
   const rows = await db
     .select()
@@ -123,7 +123,7 @@ export async function histogramPoints(
   projectId: string,
   from: number,
   to: number,
-  bucketMs: number
+  bucketMs: number,
 ): Promise<HistogramPointRow[]> {
   const bucket = sql<number>`(CAST(${schema.events.ts} / ${bucketMs} AS INTEGER) * ${bucketMs})`;
   const rows = await db
@@ -133,8 +133,8 @@ export async function histogramPoints(
       and(
         gte(schema.events.ts, from),
         lte(schema.events.ts, to),
-        eq(schema.events.projectId, projectId)
-      )
+        eq(schema.events.projectId, projectId),
+      ),
     )
     .groupBy(bucket, schema.events.level)
     .orderBy(bucket);
@@ -175,7 +175,7 @@ export async function deleteOlderThan(db: KingletDb, ts: number): Promise<number
   let total = 0;
   for (;;) {
     const result = await db.run(
-      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ts < ${ts} ORDER BY id LIMIT 10000)`
+      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ts < ${ts} ORDER BY id LIMIT 10000)`,
     );
     const changed = Number(result.rowsAffected ?? 0);
     total += changed;
@@ -188,15 +188,13 @@ export async function deleteOlderThan(db: KingletDb, ts: number): Promise<number
 export async function deleteByProject(
   db: KingletDb,
   projectId: string,
-  range?: { from: number; to: number }
+  range?: { from: number; to: number },
 ): Promise<number> {
   let total = 0;
   for (;;) {
-    const rangeClause = range
-      ? sql` AND ts >= ${range.from} AND ts <= ${range.to}`
-      : sql``;
+    const rangeClause = range ? sql` AND ts >= ${range.from} AND ts <= ${range.to}` : sql``;
     const result = await db.run(
-      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE project_id = ${projectId}${rangeClause} ORDER BY id LIMIT 10000)`
+      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE project_id = ${projectId}${rangeClause} ORDER BY id LIMIT 10000)`,
     );
     const changed = Number(result.rowsAffected ?? 0);
     total += changed;
@@ -210,7 +208,7 @@ export async function deleteAlertsOlderThan(db: KingletDb, ts: number): Promise<
   let total = 0;
   for (;;) {
     const result = await db.run(
-      sql`DELETE FROM alerts WHERE id IN (SELECT id FROM alerts WHERE fired_at < ${ts} ORDER BY fired_at LIMIT 10000)`
+      sql`DELETE FROM alerts WHERE id IN (SELECT id FROM alerts WHERE fired_at < ${ts} ORDER BY fired_at LIMIT 10000)`,
     );
     const changed = Number(result.rowsAffected ?? 0);
     total += changed;

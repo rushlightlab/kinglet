@@ -38,7 +38,9 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
         aria-label="Kinglet home"
       >
         <Crown className="size-5 text-gold transition-colors group-hover:text-gold-bright" />
-        <span className="font-display text-[15px] font-bold tracking-[0.1em] text-mist">KINGLET</span>
+        <span className="font-display text-[15px] font-bold tracking-[0.1em] text-mist">
+          KINGLET
+        </span>
       </Link>
 
       <nav className="flex items-center gap-1" aria-label="Main navigation">
@@ -60,10 +62,7 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
       </nav>
 
       {projects.length > 0 ? (
-        <Select
-          value={String(currentProjectId)}
-          onValueChange={(value) => setProjectId(value)}
-        >
+        <Select value={String(currentProjectId)} onValueChange={(value) => setProjectId(value)}>
           <SelectTrigger size="sm" className="min-w-28" aria-label="Current project">
             <SelectValue />
           </SelectTrigger>

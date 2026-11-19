@@ -39,7 +39,7 @@ function isRemoteDbPath(dbPath: string): boolean {
 export async function ensureBootstrapAdmin(
   storage: Storage,
   config: Config,
-  auth: KingletAuth
+  auth: KingletAuth,
 ): Promise<BootstrapInfo | null> {
   // Recover a zero-admin database too (not just a zero-user one), e.g. after
   // a manual role edit or an old admin-plugin bypass.
@@ -75,11 +75,14 @@ export async function ensureBootstrapAdmin(
     if (!userId) throw err;
     console.warn(
       `[kinglet] bootstrap: promoted the existing account ${email} to administrator; ` +
-        "its current password is unchanged."
+        "its current password is unchanged.",
     );
   }
   if (!userId) throw new Error("bootstrap: Better Auth did not return a user id");
-  await storage.db.update(schema.user).set({ role: "admin", banned: false }).where(eq(schema.user.id, userId));
+  await storage.db
+    .update(schema.user)
+    .set({ role: "admin", banned: false })
+    .where(eq(schema.user.id, userId));
 
   if (generated && createdNow && !isRemoteDbPath(config.dbPath)) {
     try {

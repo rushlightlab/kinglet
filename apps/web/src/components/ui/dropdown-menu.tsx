@@ -33,7 +33,7 @@ function DropdownMenuContent({
         align={align}
         className={cn(
           "z-50 max-h-(--radix-dropdown-menu-content-available-height) min-w-44 origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-[5px] border border-white/[0.1] bg-ink-850 p-1 text-mist shadow-xl shadow-black/50 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-          className
+          className,
         )}
         {...props}
       />
@@ -61,7 +61,7 @@ function DropdownMenuItem({
       data-variant={variant}
       className={cn(
         "group/dropdown-menu-item relative flex cursor-default items-center gap-2 rounded-[3px] px-2 py-1.5 font-mono text-xs outline-hidden select-none focus:bg-gold/[0.08] focus:text-gold data-inset:pl-7 data-[variant=destructive]:text-coral data-[variant=destructive]:focus:bg-coral/[0.08] data-[variant=destructive]:focus:text-coral data-disabled:pointer-events-none data-disabled:opacity-40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
-        className
+        className,
       )}
       {...props}
     />
@@ -83,7 +83,7 @@ function DropdownMenuCheckboxItem({
       data-inset={inset}
       className={cn(
         "relative flex cursor-default items-center gap-2 rounded-[3px] py-1.5 pr-8 pl-2 font-mono text-xs outline-hidden select-none focus:bg-gold/[0.08] focus:text-gold data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
-        className
+        className,
       )}
       checked={checked}
       {...props}
@@ -118,7 +118,7 @@ function DropdownMenuRadioItem({
       data-inset={inset}
       className={cn(
         "relative flex cursor-default items-center gap-2 rounded-[3px] py-1.5 pr-8 pl-2 font-mono text-xs outline-hidden select-none focus:bg-gold/[0.08] focus:text-gold data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
-        className
+        className,
       )}
       {...props}
     >
@@ -145,7 +145,7 @@ function DropdownMenuLabel({
       data-inset={inset}
       className={cn(
         "px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint data-inset:pl-7",
-        className
+        className,
       )}
       {...props}
     />
@@ -171,7 +171,7 @@ function DropdownMenuShortcut({ className, ...props }: React.ComponentProps<"spa
       data-slot="dropdown-menu-shortcut"
       className={cn(
         "ml-auto text-[10px] tracking-widest text-mist-faint group-focus/dropdown-menu-item:text-gold",
-        className
+        className,
       )}
       {...props}
     />
@@ -196,7 +196,7 @@ function DropdownMenuSubTrigger({
       data-inset={inset}
       className={cn(
         "flex cursor-default items-center gap-2 rounded-[3px] px-2 py-1.5 font-mono text-xs outline-hidden select-none focus:bg-gold/[0.08] focus:text-gold data-inset:pl-7 data-open:bg-gold/[0.08] data-open:text-gold [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
-        className
+        className,
       )}
       {...props}
     >
@@ -215,7 +215,7 @@ function DropdownMenuSubContent({
       data-slot="dropdown-menu-sub-content"
       className={cn(
         "z-50 min-w-36 origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-[5px] border border-white/[0.1] bg-ink-850 p-1 text-mist shadow-xl shadow-black/50 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-        className
+        className,
       )}
       {...props}
     />

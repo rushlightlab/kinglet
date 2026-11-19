@@ -84,7 +84,9 @@ export default function FilterBar(props: FilterBarProps) {
   return (
     <div className="border-b border-white/[0.08] px-4 py-2">
       <div className="flex items-center gap-2.5 rounded-[5px] border border-white/[0.08] bg-ink-900/90 px-3 py-1.5 transition-colors focus-within:border-gold/30">
-        <span aria-hidden="true" className="text-gold">⌕</span>
+        <span aria-hidden="true" className="text-gold">
+          ⌕
+        </span>
         <input
           ref={props.inputRef}
           value={props.value}
@@ -118,12 +120,7 @@ export default function FilterBar(props: FilterBarProps) {
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
-              variant="chip"
-              size="icon-xs"
-              onClick={props.onRefresh}
-              aria-label="Refresh"
-            >
+            <Button variant="chip" size="icon-xs" onClick={props.onRefresh} aria-label="Refresh">
               <RefreshCwIcon />
             </Button>
           </TooltipTrigger>

@@ -163,9 +163,7 @@ function MonitorsPage() {
       if (failed.length === 0) {
         toast.success(`Sent to ${r.results.length} channel${r.results.length === 1 ? "" : "s"}`);
       } else {
-        toast.error(
-          failed.map((x) => `${x.type}: ${x.error ?? "failed"}`).join(" · ")
-        );
+        toast.error(failed.map((x) => `${x.type}: ${x.error ?? "failed"}`).join(" · "));
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "test failed");
@@ -173,7 +171,7 @@ function MonitorsPage() {
   };
 
   const editingMonitor =
-    editing !== null && editing !== "new" ? monitors.find((m) => m.id === editing) ?? null : null;
+    editing !== null && editing !== "new" ? (monitors.find((m) => m.id === editing) ?? null) : null;
 
   return (
     <PageShell
@@ -199,11 +197,7 @@ function MonitorsPage() {
             {monitors.length} monitor{monitors.length === 1 ? "" : "s"}
           </span>
           <WriteGuard allowed={canWrite}>
-            <Button
-              size="sm"
-              disabled={!canWrite}
-              onClick={() => setEditing("new")}
-            >
+            <Button size="sm" disabled={!canWrite} onClick={() => setEditing("new")}>
               <PlusIcon data-icon="inline-start" />
               new monitor
             </Button>
@@ -294,8 +288,8 @@ function MonitorsPage() {
                     <AlertDialogHeader>
                       <AlertDialogTitle>Delete {m.name}?</AlertDialogTitle>
                       <AlertDialogDescription>
-                        The monitor stops checking and its alert history stays behind. This cannot be
-                        undone.
+                        The monitor stops checking and its alert history stays behind. This cannot
+                        be undone.
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
@@ -372,9 +366,7 @@ function MonitorsPage() {
                         </Tooltip>
                       </TableCell>
                       <TableCell className="hidden sm:table-cell">
-                        {a.state === "fired" &&
-                        a.notifyStatus &&
-                        a.notifyStatus !== "none" ? (
+                        {a.state === "fired" && a.notifyStatus && a.notifyStatus !== "none" ? (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Badge
@@ -600,10 +592,7 @@ function MonitorForm({
 
         <Field>
           <FieldLabel htmlFor="monitor-kind">condition</FieldLabel>
-          <Select
-            value={form.kind}
-            onValueChange={(value) => set("kind", value as MonitorKind)}
-          >
+          <Select value={form.kind} onValueChange={(value) => set("kind", value as MonitorKind)}>
             <SelectTrigger id="monitor-kind" className="w-full">
               <SelectValue />
             </SelectTrigger>
@@ -683,9 +672,7 @@ function MonitorForm({
               <div key={i} className="flex flex-wrap gap-2">
                 <Select
                   value={c.type}
-                  onValueChange={(value) =>
-                    setChannel(i, { type: value as NotifyChannel["type"] })
-                  }
+                  onValueChange={(value) => setChannel(i, { type: value as NotifyChannel["type"] })}
                 >
                   <SelectTrigger className="w-28">
                     <SelectValue />
@@ -716,11 +703,7 @@ function MonitorForm({
                       disabled={testingChannel !== null || !c.url.trim()}
                       onClick={() => void testRow(c, i)}
                     >
-                      {testingChannel === i ? (
-                        <Spinner />
-                      ) : (
-                        <SendIcon data-icon="inline-start" />
-                      )}
+                      {testingChannel === i ? <Spinner /> : <SendIcon data-icon="inline-start" />}
                       {testingChannel === i ? "sending" : "test"}
                     </Button>
                   </TooltipTrigger>
@@ -731,7 +714,12 @@ function MonitorForm({
                   variant="chip"
                   size="icon"
                   aria-label="Remove channel"
-                  onClick={() => set("channels", form.channels.filter((_, j) => j !== i))}
+                  onClick={() =>
+                    set(
+                      "channels",
+                      form.channels.filter((_, j) => j !== i),
+                    )
+                  }
                 >
                   ✕
                 </Button>

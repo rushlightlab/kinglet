@@ -77,7 +77,7 @@ function resolveAuthSecret(dataDir: string): string {
   } catch (err) {
     console.warn(
       "[kinglet] could not persist the auth secret — sessions will not survive restarts. " +
-        "Set BETTER_AUTH_SECRET explicitly for multi-instance or read-only data dirs."
+        "Set BETTER_AUTH_SECRET explicitly for multi-instance or read-only data dirs.",
     );
     if (err instanceof Error) console.warn("[kinglet]", err.message);
   }
@@ -97,7 +97,9 @@ export function loadConfig(): Config {
     storageKind: storageKindEnv(),
     dbAuthToken,
     baseUrl,
-    allowPrivateWebhooks: ["1", "true", "yes"].includes((process.env.KINGLET_ALLOW_PRIVATE_WEBHOOKS ?? "").toLowerCase()),
+    allowPrivateWebhooks: ["1", "true", "yes"].includes(
+      (process.env.KINGLET_ALLOW_PRIVATE_WEBHOOKS ?? "").toLowerCase(),
+    ),
     authSecret: resolveAuthSecret(dataDir),
     trustedProxies: (process.env.KINGLET_TRUSTED_PROXIES ?? "")
       .split(",")

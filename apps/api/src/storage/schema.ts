@@ -36,7 +36,7 @@ export const apiKeys = sqliteTable(
     createdAt: integer("created_at").notNull(),
     lastUsedAt: integer("last_used_at"),
   },
-  (table) => [index("idx_api_keys_project").on(table.projectId)]
+  (table) => [index("idx_api_keys_project").on(table.projectId)],
 );
 
 export const events = sqliteTable(
@@ -64,7 +64,7 @@ export const events = sqliteTable(
     index("idx_events_service_ts").on(table.service, table.ts),
     index("idx_events_env_ts").on(table.env, table.ts),
     uniqueIndex("uq_events_uid").on(table.uid),
-  ]
+  ],
 );
 
 /**
@@ -99,7 +99,7 @@ export const monitors = sqliteTable(
     lastError: text("last_error"),
     lastErrorAt: integer("last_error_at"),
   },
-  (table) => [index("idx_monitors_project").on(table.projectId)]
+  (table) => [index("idx_monitors_project").on(table.projectId)],
 );
 
 export const alerts = sqliteTable(
@@ -117,7 +117,10 @@ export const alerts = sqliteTable(
     notifyStatus: text("notify_status"),
     notifyError: text("notify_error"),
   },
-  (table) => [index("idx_alerts_monitor").on(table.monitorId, table.firedAt), index("idx_alerts_fired").on(table.firedAt)]
+  (table) => [
+    index("idx_alerts_monitor").on(table.monitorId, table.firedAt),
+    index("idx_alerts_fired").on(table.firedAt),
+  ],
 );
 
 export type EventRow = typeof events.$inferSelect;
@@ -164,7 +167,7 @@ export const session = sqliteTable(
       .references(() => user.id, { onDelete: "cascade" }),
     impersonatedBy: text("impersonated_by"),
   },
-  (table) => [index("session_user_id_idx").on(table.userId)]
+  (table) => [index("session_user_id_idx").on(table.userId)],
 );
 
 export const account = sqliteTable(
@@ -186,7 +189,7 @@ export const account = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
   },
-  (table) => [index("account_user_id_idx").on(table.userId)]
+  (table) => [index("account_user_id_idx").on(table.userId)],
 );
 
 export const verification = sqliteTable(
@@ -199,7 +202,7 @@ export const verification = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
   },
-  (table) => [index("verification_identifier_idx").on(table.identifier)]
+  (table) => [index("verification_identifier_idx").on(table.identifier)],
 );
 
 /**
@@ -223,7 +226,7 @@ export const projectMembers = sqliteTable(
     index("idx_project_members_project").on(table.projectId),
     index("idx_project_members_user").on(table.userId),
     uniqueIndex("uq_project_members").on(table.projectId, table.userId),
-  ]
+  ],
 );
 
 export type AuthUserRow = typeof user.$inferSelect;

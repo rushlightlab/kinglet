@@ -5,7 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import CopyButton from "./CopyButton";
 
-export default function EventDrawer({ event, onClose }: { event: KingletEvent; onClose: () => void }) {
+export default function EventDrawer({
+  event,
+  onClose,
+}: {
+  event: KingletEvent;
+  onClose: () => void;
+}) {
   return (
     <aside className="absolute right-0 top-0 z-10 flex h-full w-[26rem] flex-col overflow-y-auto border-l border-white/[0.08] bg-ink-900 p-4">
       <div className="flex items-center justify-between">
@@ -25,9 +31,7 @@ export default function EventDrawer({ event, onClose }: { event: KingletEvent; o
         <Row label="env" value={event.env ?? "—"} />
         <Row
           label="api key"
-          value={
-            event.apiKeyId ? `key ${event.apiKeyId.slice(0, 8)}…` : "session"
-          }
+          value={event.apiKeyId ? `key ${event.apiKeyId.slice(0, 8)}…` : "session"}
         />
         <Row label="uid" value={event.uid ?? "—"} />
         <Row label="id" value={String(event.id)} />
