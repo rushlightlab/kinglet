@@ -72,6 +72,7 @@ export interface StorageSettings {
 export function resolveStorageKind(settings: StorageSettings): StorageKind {
   if (settings.kind !== "auto") return settings.kind;
   const p = settings.dbPath.toLowerCase();
+
   if (
     p.startsWith("libsql") ||
     p.startsWith("http://") ||
@@ -81,5 +82,6 @@ export function resolveStorageKind(settings: StorageSettings): StorageKind {
   ) {
     return "libsql";
   }
+
   return "sqlite";
 }

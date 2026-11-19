@@ -19,6 +19,7 @@ const MIGRATIONS_FOLDER = path.resolve(__dirname, "../../drizzle");
 /** Plain paths and file: URLs are local SQLite files; everything else is remote. */
 export function toLibsqlUrl(dbPath: string): string {
   const lower = dbPath.toLowerCase();
+
   if (
     lower.startsWith("file:") ||
     lower.startsWith("libsql:") ||
@@ -27,7 +28,9 @@ export function toLibsqlUrl(dbPath: string): string {
   ) {
     return dbPath;
   }
+
   if (dbPath === ":memory:" || dbPath.startsWith(":memory:")) return dbPath;
+
   return `file:${dbPath}`;
 }
 
@@ -45,8 +48,10 @@ export async function openDatabase(opts: {
   authToken?: string;
 }): Promise<{ db: KingletDb; client: Client }> {
   const isFile = opts.url.toLowerCase().startsWith("file:");
+
   if (isFile) {
     const local = opts.url.slice(5);
+
     if (local !== ":memory:" || local.length > 8) {
       fs.mkdirSync(path.dirname(path.resolve(local)), { recursive: true, mode: 0o700 });
     }
@@ -73,10 +78,12 @@ export async function openDatabase(opts: {
   const db = drizzle(client, { schema });
   await ensureProjectIdCompat(client);
   await prepareUuidIdMigration(client);
+
   try {
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+
     // Some hosted libSQL builds lack the FTS5 trigram tokenizer. Only fall
     // back for that specific failure — everything else must surface.
     if (!/trigram|tokenizer/i.test(message)) throw err;
@@ -99,7 +106,9 @@ export async function openDatabase(opts: {
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
     await client.execute("INSERT INTO events_fts(events_fts) VALUES('rebuild')");
   }
+
   await backfillEventUids(client);
+
   return { db, client };
 }
 
@@ -109,6 +118,7 @@ async function backfillEventUids(client: Client): Promise<void> {
     const rows = await client.execute(
       "SELECT id FROM events WHERE uid IS NULL ORDER BY id LIMIT 1000",
     );
+
     if (rows.rows.length === 0) return;
     await client.batch(
       rows.rows.map((row) => ({
@@ -117,6 +127,7 @@ async function backfillEventUids(client: Client): Promise<void> {
       })),
       "write",
     );
+
     if (rows.rows.length < 1000) return;
   }
 }
@@ -128,18 +139,22 @@ async function ensureProjectIdCompat(client: Client): Promise<void> {
       sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
       args: [name],
     });
+
     return result.rows.length > 0;
   };
+
   if (!(await hasTable("events"))) return; // fresh database — migrations do everything
 
   const columns = async (table: string): Promise<string[]> => {
     const result = await client.execute(`PRAGMA table_info(${table})`);
+
     return result.rows.map((row) => String(row.name));
   };
 
   if (!(await columns("events")).includes("project_id")) {
     await client.execute("ALTER TABLE events ADD COLUMN project_id INTEGER NOT NULL DEFAULT 1");
   }
+
   if (!(await columns("monitors")).includes("project_id")) {
     await client.execute("ALTER TABLE monitors ADD COLUMN project_id INTEGER NOT NULL DEFAULT 1");
   }
@@ -156,16 +171,20 @@ async function prepareUuidIdMigration(client: Client): Promise<void> {
       sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
       args: [name],
     });
+
     return result.rows.length > 0;
   };
+
   const idType = async (table: string): Promise<string | null> => {
     if (!(await hasTable(table))) return null;
     const result = await client.execute(`PRAGMA table_info(${table})`);
     const id = result.rows.find((row) => String(row.name) === "id");
+
     return id ? String(id.type ?? "").toUpperCase() : null;
   };
 
   const type = await idType("projects");
+
   // Already migrated to UUID text IDs, or no projects table but this is not a
   // fresh boot. A fresh database has no projects table and needs empty maps.
   if (type !== null && !type.includes("INT")) return;
@@ -187,6 +206,7 @@ async function prepareUuidIdMigration(client: Client): Promise<void> {
   for (const [table, map] of maps) {
     if (!(await hasTable(table))) continue;
     const rows = await client.execute(`SELECT id FROM ${table}`);
+
     if (rows.rows.length === 0) continue;
     await client.batch(
       rows.rows.map((row) => ({

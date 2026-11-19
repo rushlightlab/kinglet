@@ -33,6 +33,7 @@ export interface VerifiedKey {
 function parseScopes(raw: string | null): KeyScope[] {
   try {
     const parsed: unknown = JSON.parse(raw ?? "[]");
+
     return Array.isArray(parsed) ? parsed.filter(isKeyScope) : [];
   } catch {
     return [];
@@ -42,6 +43,7 @@ function parseScopes(raw: string | null): KeyScope[] {
 /** Keep only the identifying head of the token, even for older long prefixes. */
 function displayPrefix(stored: string): string {
   const head = stored.split("…")[0] ?? stored;
+
   return `${head.slice(0, 11)}…`;
 }
 
@@ -70,6 +72,7 @@ export async function listApiKeys(storage: Storage, projectId: string): Promise<
     .leftJoin(schema.user, eq(schema.user.id, schema.apiKeys.createdBy))
     .where(eq(schema.apiKeys.projectId, projectId))
     .orderBy(schema.apiKeys.id);
+
   return rows.map(({ key, email }) => toApiKey(key, email ?? null));
 }
 
@@ -84,7 +87,9 @@ export async function getApiKey(
     .leftJoin(schema.user, eq(schema.user.id, schema.apiKeys.createdBy))
     .where(and(eq(schema.apiKeys.id, id), eq(schema.apiKeys.projectId, projectId)))
     .limit(1);
+
   const row = rows[0];
+
   return row ? toApiKey(row.key, row.email ?? null) : null;
 }
 
@@ -106,6 +111,7 @@ export async function createApiKey(
     createdBy: input.createdBy,
     createdAt: now,
   });
+
   return {
     key: {
       id,
@@ -130,6 +136,7 @@ export async function deleteApiKey(
   const result = await storage.db
     .delete(schema.apiKeys)
     .where(and(eq(schema.apiKeys.id, id), eq(schema.apiKeys.projectId, projectId)));
+
   return Number(result.rowsAffected ?? 0) > 0;
 }
 
@@ -148,6 +155,7 @@ export async function updateApiKeyScopes(
     .update(schema.apiKeys)
     .set({ scopes: JSON.stringify(scopes) })
     .where(and(eq(schema.apiKeys.id, id), eq(schema.apiKeys.projectId, projectId)));
+
   return Number(result.rowsAffected ?? 0) > 0;
 }
 
@@ -159,11 +167,14 @@ export async function rotateApiKey(
 ): Promise<{ plaintext: string; prefix: string } | null> {
   const plaintext = KEY_PREFIX + randomToken();
   const prefix = newPrefix(plaintext);
+
   const result = await storage.db
     .update(schema.apiKeys)
     .set({ keyHash: sha256hex(plaintext), prefix, lastUsedAt: null })
     .where(and(eq(schema.apiKeys.id, id), eq(schema.apiKeys.projectId, projectId)));
+
   if (Number(result.rowsAffected ?? 0) === 0) return null;
+
   return { plaintext, prefix };
 }
 
@@ -175,6 +186,7 @@ export async function deleteApiKeysByOwner(storage: Storage, userId: string): Pr
   const result = await storage.db
     .delete(schema.apiKeys)
     .where(eq(schema.apiKeys.createdBy, userId));
+
   return Number(result.rowsAffected ?? 0);
 }
 
@@ -187,6 +199,7 @@ export async function deleteApiKeysByOwnerInProject(
   const result = await storage.db
     .delete(schema.apiKeys)
     .where(and(eq(schema.apiKeys.createdBy, userId), eq(schema.apiKeys.projectId, projectId)));
+
   return Number(result.rowsAffected ?? 0);
 }
 
@@ -198,13 +211,17 @@ export async function verifyApiKey(
   plaintext: string,
 ): Promise<VerifiedKey | null> {
   if (!plaintext.startsWith(KEY_PREFIX)) return null;
+
   const rows = await storage.db
     .select()
     .from(schema.apiKeys)
     .where(eq(schema.apiKeys.keyHash, sha256hex(plaintext)))
     .limit(1);
+
   const row = rows[0];
+
   if (!row) return null;
+
   // Keys are bound to their creator's lifecycle. Revocation on demotion is
   // explicit, but this also closes deleted-user and banned-user windows.
   if (row.createdBy) {
@@ -213,11 +230,15 @@ export async function verifyApiKey(
       .from(schema.user)
       .where(eq(schema.user.id, row.createdBy))
       .limit(1);
+
     const owner = owners[0];
+
     if (!owner || owner.banned === true) return null;
   }
+
   const id = row.id;
   const now = Date.now();
+
   if (now - (lastTouch.get(id) ?? 0) > 60_000) {
     lastTouch.set(id, now);
     void storage.db
@@ -226,6 +247,7 @@ export async function verifyApiKey(
       .where(eq(schema.apiKeys.id, id))
       .catch(() => undefined);
   }
+
   return {
     id,
     projectId: row.projectId,

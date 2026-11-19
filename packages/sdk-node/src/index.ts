@@ -72,10 +72,12 @@ export function createLogger(opts: LoggerOptions): Logger {
       clearInterval(timer);
       timer = null;
     }
+
     if (flushing || buffer.length === 0) return;
     flushing = true;
     const batch = buffer;
     buffer = [];
+
     try {
       const res = await fetch(endpoint, {
         method: "POST",
@@ -85,6 +87,7 @@ export function createLogger(opts: LoggerOptions): Logger {
         },
         body: batch.map((e) => JSON.stringify(e)).join("\n"),
       });
+
       if (!res.ok) throw new Error(`kinglet ingest failed: HTTP ${res.status}`);
     } catch (err) {
       // Re-queue the batch (newest wins if we overflow) and let the app live on.
@@ -104,6 +107,7 @@ export function createLogger(opts: LoggerOptions): Logger {
       fields,
       ts: Date.now(),
     });
+
     if (buffer.length >= batchSize) void flush();
     else schedule();
   }
@@ -118,6 +122,7 @@ export function createLogger(opts: LoggerOptions): Logger {
     flush,
     async close(): Promise<void> {
       closing = true;
+
       if (timer) clearInterval(timer);
       await flush();
     },

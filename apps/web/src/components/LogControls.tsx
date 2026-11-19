@@ -52,14 +52,17 @@ interface LogControlsProps {
 
 function serviceTerm(name: string): string {
   const lower = name.toLowerCase();
+
   return /\s/.test(lower) ? `service:"${lower}"` : `service:${lower}`;
 }
 
 function toggleTerm(q: string, term: string): string {
   const parts = q.split(/\s+/).filter(Boolean);
   const idx = parts.indexOf(term);
+
   if (idx >= 0) parts.splice(idx, 1);
   else parts.push(term);
+
   return parts.join(" ");
 }
 
@@ -112,18 +115,25 @@ export default function LogControls(props: LogControlsProps) {
   const applyCustom = (): void => {
     const from = Date.parse(fromDraft);
     const to = Date.parse(toDraft);
+
     if (!fromDraft || !toDraft || !Number.isFinite(from) || !Number.isFinite(to)) {
       setRangeError("Enter both a start and end time.");
+
       return;
     }
+
     if (from >= to) {
       setRangeError("Start must be before end.");
+
       return;
     }
+
     if (to - from > MAX_RANGE_MS) {
       setRangeError("Keep the range within 31 days.");
+
       return;
     }
+
     props.onCustomRange({ from, to });
     setOpen(false);
   };
@@ -179,6 +189,7 @@ export default function LogControls(props: LogControlsProps) {
             <div className="mt-2 grid grid-cols-3 gap-1.5">
               {WINDOW_PRESETS.map((preset) => {
                 const active = !props.customRange && props.rangeKey === preset.key;
+
                 return (
                   <button
                     key={preset.key}
@@ -229,6 +240,7 @@ export default function LogControls(props: LogControlsProps) {
               <div className="mt-2 grid grid-cols-2 gap-1.5">
                 {REFRESH_OPTIONS.map((option) => {
                   const active = props.refreshKey === option.key;
+
                   return (
                     <button
                       key={option.key}
@@ -377,6 +389,7 @@ export default function LogControls(props: LogControlsProps) {
             {props.services.map((service) => {
               const term = serviceTerm(service.name);
               const active = terms.includes(term);
+
               return (
                 <DropdownMenuItem
                   key={service.name}

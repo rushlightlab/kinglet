@@ -25,6 +25,7 @@ export default function Login({
     if (!email.trim() || !password) return;
     setBusy(true);
     setError(null);
+
     try {
       await login(email.trim(), password);
       onSuccess();

@@ -30,6 +30,7 @@ export interface ClientEvent {
 
 export function toClientEvent(row: StoredEvent): ClientEvent {
   let fields: Record<string, unknown> | null = null;
+
   if (row.fields) {
     try {
       fields = JSON.parse(row.fields) as Record<string, unknown>;
@@ -37,6 +38,7 @@ export function toClientEvent(row: StoredEvent): ClientEvent {
       fields = null;
     }
   }
+
   return {
     id: row.id,
     uid: row.uid,

@@ -22,10 +22,12 @@ export default function HistogramChart({
 
   const tsAt = (clientX: number): number | null => {
     const el = ref.current;
+
     if (!el || data.points.length === 0) return null;
     const rect = el.getBoundingClientRect();
     const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
     const index = Math.floor(frac * data.points.length);
+
     return data.points[index]?.ts ?? null;
   };
 
@@ -37,9 +39,11 @@ export default function HistogramChart({
     const start = dragStart.current;
     dragStart.current = null;
     const end = tsAt(e.clientX);
+
     if (start === null || end === null) return;
     const from = Math.min(start, end);
     const to = Math.max(start, end) + data.bucketMs;
+
     if (to - from < data.bucketMs * 2) return; // accidental click, not a drag
     onSelectRange(from, to);
   };
@@ -59,6 +63,7 @@ export default function HistogramChart({
       {data.points.map((point, i) => {
         const total = totals[i] ?? 0;
         const fill = (total / max) * 100;
+
         return (
           <Tooltip key={point.ts}>
             <TooltipTrigger asChild>
@@ -69,6 +74,7 @@ export default function HistogramChart({
                 {point.counts.map((count, level) => {
                   if (count === 0) return null;
                   const share = (count / total) * fill;
+
                   return (
                     <div
                       key={level}

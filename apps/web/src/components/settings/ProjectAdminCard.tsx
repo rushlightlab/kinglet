@@ -36,8 +36,10 @@ export function ProjectRenameCard({ project }: { project: Project }) {
 
   const saveName = async (): Promise<void> => {
     const next = name.trim();
+
     if (!next || next === project.name) return;
     setSaving(true);
+
     try {
       await renameProject(project.id, next);
       await refreshProjects();
@@ -102,6 +104,7 @@ export function ProjectDangerCard({ project }: { project: Project }) {
 
   const remove = async (): Promise<void> => {
     setDeleting(true);
+
     try {
       await deleteProject(project.id);
       await refreshProjects();

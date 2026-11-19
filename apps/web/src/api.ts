@@ -21,6 +21,7 @@ const authClient = createAuthClient({
 
 function withProject(path: string, projectId: string): string {
   const separator = path.includes("?") ? "&" : "?";
+
   return `${path}${separator}project=${projectId}`;
 }
 
@@ -30,7 +31,9 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   // cookie-authenticated mutations; cross-site forms cannot set it.
   const headers = new Headers(init?.headers);
   headers.set("x-kinglet-request", "1");
+
   if (init?.body !== undefined) headers.set("content-type", "application/json");
+
   try {
     res = await fetch(path, {
       ...init,
@@ -41,20 +44,26 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   } catch (err) {
     throw new Error("Cannot reach the Kinglet API — is the server running?", { cause: err });
   }
+
   if (res.status === 401) {
     if (path !== "/v1/me") {
       window.dispatchEvent(new CustomEvent("kinglet:unauthorized"));
     }
+
     throw new UnauthorizedError("unauthorized");
   }
+
   if (!res.ok) {
     const contentType = res.headers.get("content-type") ?? "";
     let message = `request failed: HTTP ${res.status}`;
     let requestId: string | null = null;
+
     if (contentType.includes("application/json")) {
       try {
         const body = (await res.json()) as { error?: string; requestId?: string };
+
         if (body.error) message = body.error;
+
         if (body.requestId) requestId = body.requestId;
       } catch {
         // body wasn't valid JSON — keep the status message
@@ -63,11 +72,14 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
       message =
         "the Kinglet API returned an internal error — the server likely crashed or hit a bug. Check its terminal output";
     }
+
     throw new Error(requestId ? `${message} (request ${requestId})` : message);
   }
+
   if (!(res.headers.get("content-type") ?? "").includes("application/json")) {
     throw new Error("the Kinglet API returned a non-JSON response (likely a proxy error page)");
   }
+
   return (await res.json()) as T;
 }
 
@@ -75,11 +87,13 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function login(email: string, password: string): Promise<void> {
   const { error } = await authClient.signIn.email({ email, password });
+
   if (error) throw new Error(error.message ?? "invalid email or password");
 }
 
 export async function logout(): Promise<void> {
   const { error } = await authClient.signOut();
+
   if (error) throw new Error(error.message ?? "could not sign out");
 }
 
@@ -93,6 +107,7 @@ export async function changePassword(currentPassword: string, newPassword: strin
     newPassword,
     revokeOtherSessions: true,
   });
+
   if (error) throw new Error(error.message ?? "could not change password");
 }
 
@@ -236,10 +251,15 @@ export function fetchEvents(opts: {
   limit?: number;
 }): Promise<EventPage> {
   const params = new URLSearchParams();
+
   if (opts.q) params.set("q", opts.q);
+
   if (opts.from) params.set("from", String(opts.from));
+
   if (opts.to) params.set("to", String(opts.to));
+
   if (opts.limit) params.set("limit", String(opts.limit));
+
   return api<EventPage>(withProject(`/v1/events?${params.toString()}`, opts.projectId));
 }
 
@@ -249,10 +269,12 @@ export function clearProjectLogs(
   range?: { from: number; to: number },
 ): Promise<{ deleted: number; projectId: string; from?: number; to?: number }> {
   const params = new URLSearchParams({ project: String(projectId) });
+
   if (range) {
     params.set("from", String(range.from));
     params.set("to", String(range.to));
   }
+
   return api<{ deleted: number; projectId: string; from?: number; to?: number }>(
     `/v1/events?${params.toString()}`,
     { method: "DELETE" },
@@ -266,7 +288,9 @@ export function fetchHistogram(opts: {
   buckets?: number;
 }): Promise<Histogram> {
   const params = new URLSearchParams({ from: String(opts.from), to: String(opts.to) });
+
   if (opts.buckets) params.set("buckets", String(opts.buckets));
+
   return api<Histogram>(withProject(`/v1/histogram?${params.toString()}`, opts.projectId));
 }
 
@@ -277,7 +301,9 @@ export function fetchServices(projectId: string): Promise<{ services: Service[] 
 /** SSE live tail — session cookie auth, so no token in the URL. */
 export function openStream(projectId: string, q: string): EventSource {
   const params = new URLSearchParams({ project: String(projectId) });
+
   if (q) params.set("q", q);
+
   return new EventSource(`/v1/stream?${params.toString()}`);
 }
 

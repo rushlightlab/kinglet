@@ -47,32 +47,40 @@ export function normalizeEvent(raw: unknown): NormalizedResult {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, error: "event must be an object" };
   }
+
   const obj = raw as Record<string, unknown>;
 
   const rawMessage = obj.message ?? obj.msg;
+
   if (typeof rawMessage !== "string" || rawMessage.trim().length === 0) {
     return { ok: false, error: "missing message" };
   }
+
   const message = rawMessage.length > MAX_MESSAGE ? rawMessage.slice(0, MAX_MESSAGE) : rawMessage;
 
   let level = 2; // info
   const rawLevel = obj.level;
+
   if (typeof rawLevel === "number" && Number.isFinite(rawLevel)) {
     level = Math.min(5, Math.max(0, Math.trunc(rawLevel)));
   } else if (typeof rawLevel === "string") {
     level = levelFromName(rawLevel.trim().toLowerCase()) ?? 2;
   }
+
   if (!Number.isInteger(level)) level = 2;
 
   let ts = Date.now();
   const rawTs = obj.ts ?? obj.time ?? obj.timestamp;
+
   if (typeof rawTs === "number" && Number.isFinite(rawTs) && rawTs > 0) {
     // Auto-detect seconds vs milliseconds.
     ts = rawTs < 1e11 ? Math.trunc(rawTs * 1000) : Math.trunc(rawTs);
   } else if (typeof rawTs === "string") {
     const parsed = Date.parse(rawTs);
+
     if (!Number.isNaN(parsed)) ts = parsed;
   }
+
   // Clamp timestamps: future-dated events would otherwise evade retention,
   // and ancient ones pollute the index.
   const now = Date.now();
@@ -82,12 +90,14 @@ export function normalizeEvent(raw: unknown): NormalizedResult {
     typeof obj.service === "string" && obj.service.trim()
       ? obj.service.trim().toLowerCase().slice(0, 128)
       : null;
+
   const env =
     typeof obj.env === "string" && obj.env.trim()
       ? obj.env.trim().toLowerCase().slice(0, 64)
       : null;
 
   let fields: string | null = null;
+
   if (obj.fields !== undefined && obj.fields !== null && typeof obj.fields === "object") {
     const serialized = JSON.stringify(obj.fields);
     fields =

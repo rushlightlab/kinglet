@@ -124,10 +124,15 @@ export const alerts = sqliteTable(
 );
 
 export type EventRow = typeof events.$inferSelect;
+
 export type MonitorRow = typeof monitors.$inferSelect;
+
 export type AlertRow = typeof alerts.$inferSelect;
+
 export type ProjectRow = typeof projects.$inferSelect;
+
 export type ApiKeyRow = typeof apiKeys.$inferSelect;
+
 export type ProjectUsageRow = typeof projectUsage.$inferSelect;
 
 // ---------------------------------------------------------------------------
@@ -230,4 +235,5 @@ export const projectMembers = sqliteTable(
 );
 
 export type AuthUserRow = typeof user.$inferSelect;
+
 export type ProjectMemberRow = typeof projectMembers.$inferSelect;

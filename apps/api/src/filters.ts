@@ -34,6 +34,7 @@ function tokenize(input: string): string[] {
   const tokens: string[] = [];
   let current = "";
   let quote: string | null = null;
+
   for (const ch of input) {
     if (quote !== null) {
       if (ch === quote) quote = null;
@@ -49,12 +50,15 @@ function tokenize(input: string): string[] {
       current += ch;
     }
   }
+
   if (current) tokens.push(current);
+
   return tokens;
 }
 
 function levelIndex(value: string): number | null {
   const idx = (LEVEL_NAMES as readonly string[]).indexOf(value.toLowerCase());
+
   return idx === -1 ? null : idx;
 }
 
@@ -68,19 +72,25 @@ export function parseFilters(q: string): ParsedFilters {
     includes: [],
     excludes: [],
   };
+
   for (const token of tokenize(q)) {
     let t = token;
     let negative = false;
+
     if (t.startsWith("-") && t.length > 1) {
       negative = true;
       t = t.slice(1);
     }
+
     const levelMatch = /^level(>=|<=|>|<|=|:)(.+)$/i.exec(t);
     const kvMatch = /^(service|env):(.+)$/i.exec(t);
+
     const keyMatch =
       /^(?:key|api_key):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(t);
+
     if (!negative && levelMatch) {
       const value = levelIndex(levelMatch[2] ?? "");
+
       if (value !== null) {
         const op = levelMatch[1] ?? "=";
         f.levelOp = op === ":" ? "=" : (op as ParsedFilters["levelOp"]);
@@ -88,20 +98,25 @@ export function parseFilters(q: string): ParsedFilters {
         continue;
       }
     }
+
     if (!negative && keyMatch) {
       f.apiKeyId = (keyMatch[1] ?? "").toLowerCase();
       continue;
     }
+
     if (!negative && kvMatch) {
       const key = (kvMatch[1] ?? "").toLowerCase();
       const value = (kvMatch[2] ?? "").toLowerCase();
+
       if (key === "service") f.service = value;
       else f.env = value;
       continue;
     }
+
     if (negative) f.excludes.push(t.toLowerCase());
     else f.includes.push(t.toLowerCase());
   }
+
   return f;
 }
 
@@ -113,9 +128,12 @@ export function parseFilters(q: string): ParsedFilters {
 function textClause(term: string): SQL {
   if (term.length >= 3) {
     const phrase = `"${term.replace(/"/g, '""')}"`;
+
     return sql`id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ${phrase})`;
   }
+
   const escaped = term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+
   return sql`message LIKE ${`%${escaped}%`} ESCAPE '\\'`;
 }
 
@@ -125,15 +143,22 @@ export function buildWhere(f: ParsedFilters, range: EventRange, projectId: strin
     sql`ts >= ${range.from}`,
     sql`ts <= ${range.to}`,
   ];
+
   if (f.levelOp && f.levelValue !== null) {
     // Operator is a whitelisted literal; the value stays parameterized.
     parts.push(sql`level ${sql.raw(f.levelOp)} ${f.levelValue}`);
   }
+
   if (f.service !== null) parts.push(sql`service = ${f.service}`);
+
   if (f.env !== null) parts.push(sql`env = ${f.env}`);
+
   if (f.apiKeyId !== null) parts.push(sql`api_key_id = ${f.apiKeyId}`);
+
   for (const term of f.includes) parts.push(textClause(term));
+
   for (const term of f.excludes) parts.push(sql`NOT (${textClause(term)})`);
+
   return sql.join(parts, sql` AND `);
 }
 
@@ -167,15 +192,21 @@ export function matchesEvent(
 ): boolean {
   if (f.levelOp && f.levelValue !== null && !compare(row.level, f.levelOp, f.levelValue))
     return false;
+
   if (f.service !== null && (row.service ?? "").toLowerCase() !== f.service) return false;
+
   if (f.env !== null && (row.env ?? "").toLowerCase() !== f.env) return false;
+
   if (f.apiKeyId !== null && (row.apiKeyId ?? null) !== f.apiKeyId) return false;
   const message = row.message.toLowerCase();
+
   for (const term of f.includes) {
     if (!message.includes(term)) return false;
   }
+
   for (const term of f.excludes) {
     if (message.includes(term)) return false;
   }
+
   return true;
 }

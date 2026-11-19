@@ -33,6 +33,7 @@ export default function LogTable({
   useEffect(() => {
     if (cursorId === null) return;
     const index = events.findIndex((e) => e.id === cursorId);
+
     if (index >= 0) virtualizer.scrollToIndex(index, { align: "auto" });
   }, [cursorId, events, virtualizer]);
 
@@ -56,9 +57,11 @@ export default function LogTable({
       <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
         {virtualizer.getVirtualItems().map((item) => {
           const event = events[item.index];
+
           if (!event) return null;
           const selected = event.id === selectedId;
           const isCursor = event.id === cursorId;
+
           return (
             <div
               key={event.id}
@@ -100,5 +103,6 @@ export default function LogTable({
 
 function formatTime(ts: number): string {
   const d = new Date(ts);
+
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
 }

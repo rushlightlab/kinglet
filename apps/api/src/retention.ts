@@ -13,6 +13,7 @@ export function startRetentionJob(
   alertRetentionDays: number,
 ): void {
   let running = false;
+
   const run = (): void => {
     if (running) return;
     running = true;
@@ -20,11 +21,14 @@ export function startRetentionJob(
       try {
         const now = Date.now();
         const deleted = await storage.deleteOlderThan(now - retentionDays * 86_400_000);
+
         const alertsDeleted = await storage.deleteAlertsOlderThan(
           now - alertRetentionDays * 86_400_000,
         );
+
         systemStatus.retentionLastRunAt = Date.now();
         systemStatus.retentionLastError = null;
+
         if (deleted > 0 || alertsDeleted > 0) {
           invalidateDbSizeCache();
           await storage.runMaintenance();
@@ -45,6 +49,7 @@ export function startRetentionJob(
       }
     })();
   };
+
   run();
   const timer = setInterval(run, 60 * 60 * 1000);
   timer.unref();

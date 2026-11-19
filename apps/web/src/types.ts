@@ -1,4 +1,5 @@
 export const LEVEL_NAMES = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
+
 /* Kinglet palette: faint greys for quiet levels, crown gold for warn,
    coral for error/fatal. */
 export const LEVEL_COLORS = [

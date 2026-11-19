@@ -33,11 +33,13 @@ function Explorer() {
   const [q, setQ] = useState(() => search.q ?? "");
   const [rangeKey, setRangeKey] = useState(DEFAULT_WINDOW_KEY);
   const [refreshKey, setRefreshKey] = useState<RefreshKey>("off");
+
   const [customRange, setCustomRange] = useState<null | { from: number; to: number }>(() =>
     search.from !== undefined && search.to !== undefined
       ? { from: search.from, to: search.to }
       : null,
   );
+
   const [events, setEvents] = useState<KingletEvent[]>([]);
   const [histogram, setHistogram] = useState<Histogram | null>(null);
   const [services, setServices] = useState<Service[]>([]);
@@ -51,6 +53,7 @@ function Explorer() {
   const windowMs = customRange
     ? customRange.to - customRange.from
     : (WINDOWS[rangeKey] ?? 60 * 60_000);
+
   const refreshMs = refreshMsFor(refreshKey);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -60,17 +63,20 @@ function Explorer() {
   // Debounce the filter bar into the applied query.
   useEffect(() => {
     const t = setTimeout(() => setQ(qDraft), 300);
+
     return () => clearTimeout(t);
   }, [qDraft]);
 
   const loadRange = useCallback(
     async (from: number, to: number, silent = false) => {
       if (!silent) setBusy(true);
+
       try {
         const [page, hist] = await Promise.all([
           fetchEvents({ projectId: currentProjectId, q, from, to, limit: 500 }),
           fetchHistogram({ projectId: currentProjectId, from, to, buckets: 90 }),
         ]);
+
         setEvents(page.events);
         setHistogram(hist);
         setError(null);
@@ -88,8 +94,10 @@ function Explorer() {
     (silent = false) => {
       if (customRange) {
         void loadRange(customRange.from, customRange.to, silent);
+
         return;
       }
+
       const to = Date.now();
       const width = WINDOWS[rangeKey] ?? 60 * 60_000;
       void loadRange(to - width, to, silent);
@@ -123,6 +131,7 @@ function Explorer() {
   useEffect(() => {
     if (refreshMs === null) return;
     const id = setInterval(() => loadWindow(true), refreshMs);
+
     return () => clearInterval(id);
   }, [loadWindow, refreshMs]);
 
@@ -130,10 +139,12 @@ function Explorer() {
   useEffect(() => {
     if (!live) return;
     const es = openStream(currentProjectId, q);
+
     const onMessage = (msg: MessageEvent): void => {
       try {
         const event = JSON.parse(msg.data) as KingletEvent;
         setEvents((prev) => [event, ...prev].slice(0, 5000));
+
         if (followRef.current && scrollRef.current) {
           scrollRef.current.scrollTo({ top: 0 });
         }
@@ -141,7 +152,9 @@ function Explorer() {
         // ignore malformed frames
       }
     };
+
     es.addEventListener("message", onMessage);
+
     return () => {
       es.removeEventListener("message", onMessage);
       es.close();
@@ -164,6 +177,7 @@ function Explorer() {
       const idx = cursorId === null ? -1 : events.findIndex((e) => e.id === cursorId);
       const next = Math.min(events.length - 1, Math.max(0, idx + delta));
       const event = events[next];
+
       if (!event) return;
       setCursorId(event.id);
       setSelected(event);
@@ -174,12 +188,16 @@ function Explorer() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       const target = e.target as HTMLElement | null;
+
       const typing =
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement ||
         target instanceof HTMLSelectElement;
+
       if (typing) return;
+
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+
       switch (e.key) {
         case "/":
           e.preventDefault();
@@ -206,7 +224,9 @@ function Explorer() {
           break;
       }
     };
+
     window.addEventListener("keydown", onKey);
+
     return () => window.removeEventListener("keydown", onKey);
   }, [move, toggleLive]);
 
@@ -222,6 +242,7 @@ function Explorer() {
     const cur = customRange ?? { from: now - (WINDOWS[rangeKey] ?? 60 * 60_000), to: now };
     const url = new URL(window.location.origin + "/");
     url.searchParams.set("project", String(currentProjectId));
+
     if (q) url.searchParams.set("q", q);
     url.searchParams.set("from", String(cur.from));
     url.searchParams.set("to", String(cur.to));
@@ -245,10 +266,12 @@ function Explorer() {
             const width = WINDOWS[value] ?? 60 * 60_000;
             setRangeKey(value);
             setCustomRange(null);
+
             if (refreshKey !== "off") setRefreshKey(recommendedRefreshKey(width));
           }}
           onCustomRange={(range) => {
             setCustomRange(range);
+
             if (refreshKey !== "off") {
               setRefreshKey(recommendedRefreshKey(range.to - range.from));
             }

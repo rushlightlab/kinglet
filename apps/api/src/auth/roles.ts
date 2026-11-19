@@ -9,6 +9,7 @@
  */
 
 export const ROLES = ["admin", "member", "viewer"] as const;
+
 export type Role = (typeof ROLES)[number];
 
 export const PERMISSIONS = [
@@ -23,6 +24,7 @@ export const PERMISSIONS = [
   "users.read",
   "users.write",
 ] as const;
+
 export type Permission = (typeof PERMISSIONS)[number];
 
 export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
@@ -48,6 +50,7 @@ export function permissionsForRole(role: Role): Permission[] {
 }
 
 export const KEY_SCOPES = ["ingest", "query"] as const;
+
 export type KeyScope = (typeof KEY_SCOPES)[number];
 
 export function isKeyScope(value: unknown): value is KeyScope {

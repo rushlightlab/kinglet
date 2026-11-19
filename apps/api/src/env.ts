@@ -37,21 +37,26 @@ export interface Config {
 
 function intEnv(name: string, fallback: number): number {
   const raw = process.env[name];
+
   if (!raw) return fallback;
   const n = Number.parseInt(raw, 10);
+
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 /** Like intEnv, but 0 is meaningful (disable the limit). */
 function nonNegativeIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
+
   if (raw === undefined || raw.trim() === "") return fallback;
   const n = Number.parseInt(raw, 10);
+
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
 function storageKindEnv(): StorageKindSetting {
   const raw = process.env.KINGLET_STORAGE?.trim().toLowerCase();
+
   return raw === "sqlite" || raw === "libsql" ? raw : "auto";
 }
 
@@ -62,15 +67,20 @@ function storageKindEnv(): StorageKindSetting {
  */
 function resolveAuthSecret(dataDir: string): string {
   const explicit = (process.env.BETTER_AUTH_SECRET ?? process.env.KINGLET_AUTH_SECRET ?? "").trim();
+
   if (explicit) return explicit;
   const secretFile = path.join(dataDir, "auth-secret.txt");
+
   try {
     const saved = fs.readFileSync(secretFile, "utf8").trim();
+
     if (saved) return saved;
   } catch {
     // generate below
   }
+
   const secret = randomBytes(32).toString("base64url");
+
   try {
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(secretFile, secret + "\n", { mode: 0o600 });
@@ -79,8 +89,10 @@ function resolveAuthSecret(dataDir: string): string {
       "[kinglet] could not persist the auth secret — sessions will not survive restarts. " +
         "Set BETTER_AUTH_SECRET explicitly for multi-instance or read-only data dirs.",
     );
+
     if (err instanceof Error) console.warn("[kinglet]", err.message);
   }
+
   return secret;
 }
 
@@ -91,6 +103,7 @@ export function loadConfig(): Config {
   const dataDir = path.dirname(path.resolve(localPath));
   const dbAuthToken = process.env.KINGLET_DB_AUTH_TOKEN?.trim() || undefined;
   const baseUrl = process.env.KINGLET_BASE_URL?.trim() || undefined;
+
   return {
     port,
     dbPath,

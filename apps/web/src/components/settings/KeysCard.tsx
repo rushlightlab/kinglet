@@ -69,6 +69,7 @@ export default function KeysCard({
   const { permissions, user } = useApp();
   const navigate = useNavigate();
   const canWriteKeys = hasPermission(permissions, "keys.write");
+
   const canManageKey = (key: ApiKeyInfo): boolean =>
     canWriteKeys && (user.role === "admin" || key.createdBy === user.id);
 
@@ -79,10 +80,12 @@ export default function KeysCard({
   const [scopeQuery, setScopeQuery] = useState(true);
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
   const [pendingKey, setPendingKey] = useState<{
     type: "revoke" | "rotate";
     key: ApiKeyInfo;
   } | null>(null);
+
   const [editKey, setEditKey] = useState<ApiKeyInfo | null>(null);
   const [editIngest, setEditIngest] = useState(true);
   const [editQuery, setEditQuery] = useState(true);
@@ -106,8 +109,10 @@ export default function KeysCard({
     const scopes = [scopeIngest ? "ingest" : null, scopeQuery ? "query" : null].filter(
       (s): s is string => s !== null,
     );
+
     if (!name.trim() || scopes.length === 0) return;
     setBusy(true);
+
     try {
       const result = await createKey(projectId, { name: name.trim(), scopes });
       setCreatedKey(result.plaintext);
@@ -128,11 +133,14 @@ export default function KeysCard({
 
   const saveKeyScopes = async (): Promise<void> => {
     if (!editKey) return;
+
     const scopes = [editIngest ? "ingest" : null, editQuery ? "query" : null].filter(
       (scope): scope is string => scope !== null,
     );
+
     if (scopes.length === 0) return;
     setActionBusy(true);
+
     try {
       await updateKeyScopes(editKey.id, projectId, scopes);
       await load();
@@ -149,6 +157,7 @@ export default function KeysCard({
   const runKeyAction = async (): Promise<void> => {
     if (!pendingKey) return;
     setActionBusy(true);
+
     try {
       if (pendingKey.type === "rotate") {
         const rotated = await rotateKey(pendingKey.key.id, projectId);
@@ -158,6 +167,7 @@ export default function KeysCard({
         await deleteKey(pendingKey.key.id, projectId);
         toast.success("Key revoked");
       }
+
       await load();
       setPendingKey(null);
     } catch (err) {

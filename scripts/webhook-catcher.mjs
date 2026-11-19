@@ -17,11 +17,13 @@ createServer((req, res) => {
   req.on("data", (chunk) => (body += chunk));
   req.on("end", () => {
     console.log(`\n${req.method} ${req.url}`);
+
     try {
       console.log(JSON.stringify(JSON.parse(body), null, 2));
     } catch {
       console.log(body || "(empty body)");
     }
+
     res.writeHead(200, { "content-type": "application/json" });
     res.end("{}");
   });

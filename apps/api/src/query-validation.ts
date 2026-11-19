@@ -5,6 +5,8 @@
  */
 export function validateQueryString(q: string): string | null {
   if (q.length > 500) return "filter is too long (max 500 characters)";
+
   if (q.split(/\s+/).filter(Boolean).length > 32) return "too many filter terms (max 32)";
+
   return null;
 }

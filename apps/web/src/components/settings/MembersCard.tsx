@@ -74,6 +74,7 @@ export default function MembersCard({
 
   const eligibleUsers = allUsers.filter((u) => u.role !== "admin");
   const candidates = eligibleUsers.filter((u) => !members.some((m) => m.userId === u.id));
+
   const memberEmptyMessage =
     eligibleUsers.length === 0
       ? "No member accounts yet. Create one under Workspace → Users."
@@ -81,6 +82,7 @@ export default function MembersCard({
 
   const addMember = async (): Promise<void> => {
     if (!memberToAdd) return;
+
     try {
       await addProjectMember(projectId, memberToAdd);
       setMemberToAdd("");

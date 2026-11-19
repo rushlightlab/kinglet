@@ -74,7 +74,9 @@ export function refreshLabel(key: RefreshKey): string {
  */
 export function recommendedRefreshKey(windowMs: number): RefreshKey {
   if (windowMs <= 15 * 60_000) return "15s";
+
   if (windowMs <= 6 * 60 * 60_000) return "1m";
+
   return "5m";
 }
 
@@ -90,6 +92,7 @@ export function pad(n: number, width = 2): string {
 /** `datetime-local` expects `YYYY-MM-DDTHH:mm` in local time. */
 export function toDatetimeLocal(ts: number): string {
   const date = new Date(ts);
+
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
     date.getHours(),
   )}:${pad(date.getMinutes())}`;

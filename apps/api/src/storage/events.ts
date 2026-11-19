@@ -53,6 +53,7 @@ export async function insertEvents(
         ...event,
         uid: uuidv7(),
       }));
+
       const inserted = await tx
         .insert(schema.events)
         .values(
@@ -70,8 +71,10 @@ export async function insertEvents(
           })),
         )
         .returning({ id: schema.events.id });
+
       inserted.forEach((insertedRow, index) => {
         const event = chunk[index];
+
         if (!event) return;
         rows.push({
           id: Number(insertedRow.id),
@@ -88,18 +91,22 @@ export async function insertEvents(
       });
     }
   });
+
   return rows;
 }
 
 export async function queryEvents(db: KingletDb, opts: QueryOptions): Promise<StoredEvent[]> {
   const conditions: SQL[] = [opts.filter];
+
   if (opts.cursor !== null) conditions.push(lt(schema.events.id, opts.cursor));
+
   const rows = await db
     .select()
     .from(schema.events)
     .where(and(...conditions))
     .orderBy(desc(schema.events.id))
     .limit(opts.limit);
+
   return rows.map(mapEventRow);
 }
 
@@ -114,7 +121,9 @@ export async function getEventByUid(
     .from(schema.events)
     .where(and(eq(schema.events.projectId, projectId), eq(schema.events.uid, uid)))
     .limit(1);
+
   const row = rows[0];
+
   return row ? mapEventRow(row) : null;
 }
 
@@ -126,6 +135,7 @@ export async function histogramPoints(
   bucketMs: number,
 ): Promise<HistogramPointRow[]> {
   const bucket = sql<number>`(CAST(${schema.events.ts} / ${bucketMs} AS INTEGER) * ${bucketMs})`;
+
   const rows = await db
     .select({ bucket, level: schema.events.level, n: count() })
     .from(schema.events)
@@ -140,22 +150,28 @@ export async function histogramPoints(
     .orderBy(bucket);
 
   const map = new Map<number, number[]>();
+
   for (const row of rows) {
     const bucketTs = Number(row.bucket);
     const level = Number(row.level);
     const n = Number(row.n);
+
     if (!Number.isFinite(bucketTs) || !Number.isFinite(level)) continue;
     const counts = map.get(bucketTs) ?? [0, 0, 0, 0, 0, 0];
+
     if (level >= 0 && level <= 5) counts[level] = n;
     map.set(bucketTs, counts);
   }
+
   const points: HistogramPointRow[] = [];
   const start = Math.floor(from / bucketMs) * bucketMs;
   const pointCount = Math.min(500, Math.ceil((to - start) / bucketMs) + 1);
+
   for (let i = 0; i < pointCount; i++) {
     const t = start + i * bucketMs;
     points.push({ ts: t, counts: map.get(t) ?? [0, 0, 0, 0, 0, 0] });
   }
+
   return points;
 }
 
@@ -167,18 +183,22 @@ export async function listServices(db: KingletDb, projectId: string): Promise<Se
     .groupBy(schema.events.service)
     .orderBy(desc(count()))
     .limit(200);
+
   return rows.map((row) => ({ name: String(row.name), count: Number(row.n) }));
 }
 
 /** Chunked delete so a big backlog never blocks ingest for long. */
 export async function deleteOlderThan(db: KingletDb, ts: number): Promise<number> {
   let total = 0;
+
   for (;;) {
     const result = await db.run(
       sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ts < ${ts} ORDER BY id LIMIT 10000)`,
     );
+
     const changed = Number(result.rowsAffected ?? 0);
     total += changed;
+
     if (changed === 0) return total;
     await yieldToEventLoop();
   }
@@ -191,13 +211,17 @@ export async function deleteByProject(
   range?: { from: number; to: number },
 ): Promise<number> {
   let total = 0;
+
   for (;;) {
     const rangeClause = range ? sql` AND ts >= ${range.from} AND ts <= ${range.to}` : sql``;
+
     const result = await db.run(
       sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE project_id = ${projectId}${rangeClause} ORDER BY id LIMIT 10000)`,
     );
+
     const changed = Number(result.rowsAffected ?? 0);
     total += changed;
+
     if (changed === 0) return total;
     await yieldToEventLoop();
   }
@@ -206,12 +230,15 @@ export async function deleteByProject(
 /** Chunked alert-history retention, yielded so it never blocks the loop. */
 export async function deleteAlertsOlderThan(db: KingletDb, ts: number): Promise<number> {
   let total = 0;
+
   for (;;) {
     const result = await db.run(
       sql`DELETE FROM alerts WHERE id IN (SELECT id FROM alerts WHERE fired_at < ${ts} ORDER BY fired_at LIMIT 10000)`,
     );
+
     const changed = Number(result.rowsAffected ?? 0);
     total += changed;
+
     if (changed === 0) return total;
     await yieldToEventLoop();
   }

@@ -28,6 +28,7 @@ export default function ProjectsPanel() {
 
   const create = async (): Promise<void> => {
     if (!name.trim()) return;
+
     try {
       await createProject(name.trim());
       setName("");
@@ -61,6 +62,7 @@ export default function ProjectsPanel() {
             <TableBody>
               {projects.map((project) => {
                 const canManage = canWriteProjects || canReadKeys || project.canClearLogs;
+
                 return (
                   <TableRow key={project.id}>
                     <TableCell>

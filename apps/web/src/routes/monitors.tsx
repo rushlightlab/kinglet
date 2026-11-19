@@ -86,22 +86,30 @@ const CHANNEL_PLACEHOLDERS: Record<NotifyChannel["type"], string> = {
 
 function fmtDur(ms: number): string {
   if (ms % 3_600_000 === 0) return `${ms / 3_600_000}h`;
+
   if (ms % 60_000 === 0) return `${ms / 60_000}m`;
+
   return `${Math.round(ms / 1000)}s`;
 }
 
 function relTime(ts: number): string {
   const diff = Date.now() - ts;
+
   if (diff < 60_000) return "just now";
+
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
 function describe(m: Monitor): string {
   if (m.kind === "match") return "Fires the instant an event matches.";
+
   if (m.kind === "count_above")
     return `Fires when more than ${m.threshold} matching events land within ${fmtDur(m.windowMs)}.`;
+
   return `Fires when fewer than ${m.threshold} matching events land within ${fmtDur(m.windowMs)} — silence means something broke.`;
 }
 
@@ -119,6 +127,7 @@ function MonitorsPage() {
         fetchMonitors(currentProjectId),
         fetchAlerts(currentProjectId, 50),
       ]);
+
       setMonitors(m.monitors);
       setAlerts(a.alerts);
       setError(null);
@@ -155,11 +164,15 @@ function MonitorsPage() {
   const runTest = async (m: Monitor): Promise<void> => {
     try {
       const r = await testMonitor(currentProjectId, m.id);
+
       if (r.results.length === 0) {
         toast.info("No channels configured");
+
         return;
       }
+
       const failed = r.results.filter((x) => !x.ok);
+
       if (failed.length === 0) {
         toast.success(`Sent to ${r.results.length} channel${r.results.length === 1 ? "" : "s"}`);
       } else {
@@ -452,6 +465,7 @@ interface FormState {
 
 function WriteGuard({ allowed, children }: { allowed: boolean; children: ReactNode }) {
   if (allowed) return <>{children}</>;
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -488,6 +502,7 @@ function MonitorForm({
     cooldownMin: initial ? Math.max(0, Math.round(initial.cooldownMs / 60_000)) : 10,
     channels: initial?.channels ?? [],
   }));
+
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [testingChannel, setTestingChannel] = useState<number | null>(null);
@@ -505,6 +520,7 @@ function MonitorForm({
 
   const testRow = async (channel: NotifyChannel, index: number): Promise<void> => {
     setTestingChannel(index);
+
     try {
       await testChannel(projectId, channel);
       toast.success(`Test sent to ${channel.type}`);
@@ -518,15 +534,21 @@ function MonitorForm({
   const save = async (): Promise<void> => {
     if (!form.name.trim()) {
       setFormError("Give the monitor a name.");
+
       return;
     }
+
     const channels = form.channels.filter((c) => c.url.trim());
+
     if (channels.some((c) => !/^https?:\/\//i.test(c.url.trim()))) {
       setFormError("Channel URLs must start with http:// or https://");
+
       return;
     }
+
     setSaving(true);
     setFormError(null);
+
     try {
       const payload = {
         name: form.name.trim(),
@@ -539,6 +561,7 @@ function MonitorForm({
         enabled: true,
         channels,
       };
+
       if (initial) await updateMonitor(projectId, initial.id, payload);
       else await createMonitor(projectId, payload);
       toast.success(initial ? "Monitor updated" : "Monitor created");

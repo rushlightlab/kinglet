@@ -8,8 +8,12 @@ export function passwordProblem(password: string): string | null {
   if (password.length < PASSWORD_MIN_LENGTH) {
     return `password must be at least ${PASSWORD_MIN_LENGTH} characters`;
   }
+
   if (!/[a-z]/.test(password)) return "password must include a lowercase letter";
+
   if (!/[A-Z]/.test(password)) return "password must include an uppercase letter";
+
   if (!/[0-9]/.test(password)) return "password must include a number";
+
   return null;
 }

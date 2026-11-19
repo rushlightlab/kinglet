@@ -22,13 +22,18 @@ export default function AccountPanel() {
   const submit = async (): Promise<void> => {
     if (next !== confirm) {
       setError("new passwords don't match");
+
       return;
     }
+
     const problem = passwordProblem(next);
+
     if (problem) {
       setError(problem);
+
       return;
     }
+
     try {
       await changePassword(current, next);
       setError(null);

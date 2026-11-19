@@ -23,6 +23,7 @@ function pick(chars: string): string {
  */
 export function generatePassword(): string {
   const chars = [pick(PASSWORD_LOWER), pick(PASSWORD_UPPER), pick(PASSWORD_DIGITS)];
+
   while (chars.length < 16) chars.push(pick(PASSWORD_ALL));
 
   // Fisher-Yates so the guaranteed characters are not stuck at the front.
@@ -32,6 +33,7 @@ export function generatePassword(): string {
     chars[i] = chars[j]!;
     chars[j] = tmp;
   }
+
   return chars.join("");
 }
 

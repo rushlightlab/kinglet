@@ -50,9 +50,11 @@ export default function ClearLogsCard({
 }) {
   const [open, setOpen] = useState(false);
   const [range, setRange] = useState<ClearRange>("24h");
+
   const [customFrom, setCustomFrom] = useState(() =>
     toDatetimeLocal(Date.now() - CLEAR_RANGE_MS["24h"]),
   );
+
   const [customTo, setCustomTo] = useState(() => toDatetimeLocal(Date.now()));
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -64,11 +66,14 @@ export default function ClearLogsCard({
     if (range === "all") return undefined;
     const to = range === "custom" ? Date.parse(customTo) : Date.now();
     const from = range === "custom" ? Date.parse(customFrom) : to - CLEAR_RANGE_MS[range];
+
     if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) return undefined;
+
     return { from, to };
   };
 
   const bounds = resolved();
+
   const summary =
     range === "all"
       ? "every stored event in this project"
@@ -78,12 +83,16 @@ export default function ClearLogsCard({
 
   const clear = async (): Promise<void> => {
     if (confirm !== projectName) return;
+
     if (range !== "all" && !bounds) {
       setError("Choose a valid start and end.");
+
       return;
     }
+
     setBusy(true);
     setError(null);
+
     try {
       const result = await clearProjectLogs(projectId, bounds);
       toast.success(`Deleted ${result.deleted.toLocaleString()} events`);
@@ -109,6 +118,7 @@ export default function ClearLogsCard({
           open={open}
           onOpenChange={(next) => {
             setOpen(next);
+
             if (!next) {
               setConfirm("");
               setError(null);

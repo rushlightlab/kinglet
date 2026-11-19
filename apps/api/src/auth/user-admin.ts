@@ -40,12 +40,14 @@ function toAdminUser(row: UserRow): AdminUser {
 
 export async function listUsers(storage: Storage): Promise<AdminUser[]> {
   const rows = await storage.db.select().from(schema.user).orderBy(asc(schema.user.createdAt));
+
   return rows.map(toAdminUser);
 }
 
 export async function getUserById(storage: Storage, id: string): Promise<AdminUser | null> {
   const rows = await storage.db.select().from(schema.user).where(eq(schema.user.id, id)).limit(1);
   const row = rows[0];
+
   return row ? toAdminUser(row) : null;
 }
 
@@ -54,6 +56,7 @@ export async function countAdmins(storage: Storage): Promise<number> {
     .select({ banned: schema.user.banned })
     .from(schema.user)
     .where(eq(schema.user.role, "admin"));
+
   // A banned administrator cannot approve releases, recover the instance, or
   // use any admin-only route. Only active admins count toward the guard.
   return rows.filter((row) => row.banned !== true).length;
@@ -67,9 +70,12 @@ export async function createManagedUser(
 ): Promise<{ user: AdminUser; password?: string }> {
   if (input.password) {
     const problem = passwordProblem(input.password);
+
     if (problem) throw new Error(problem);
   }
+
   const password = input.password ?? generatePassword();
+
   const created = (await auth.api.createUser({
     body: {
       email: input.email.toLowerCase(),
@@ -81,12 +87,15 @@ export async function createManagedUser(
   })) as unknown as { user?: { id?: string; email?: string; name?: string } };
 
   const userId = created.user?.id;
+
   if (!userId) throw new Error("better-auth did not return a user id");
   // Ensure the role is ours even if the plugin normalized it.
   await storage.db.update(schema.user).set({ role: input.role }).where(eq(schema.user.id, userId));
 
   const user = await getUserById(storage, userId);
+
   if (!user) throw new Error("created user not found");
+
   return { user, ...(input.password ? {} : { password }) };
 }
 
@@ -139,8 +148,11 @@ export async function setManagedUserDisabled(
   } else {
     await auth.api.unbanUser({ body: { userId }, headers });
   }
+
   const user = await getUserById(storage, userId);
+
   if (!user) throw new Error("user not found after status update");
+
   return user;
 }
 
@@ -154,5 +166,6 @@ export async function resetManagedUserPassword(
   const password = generatePassword();
   await auth.api.setUserPassword({ body: { userId, newPassword: password }, headers });
   await storage.db.delete(schema.session).where(eq(schema.session.userId, userId));
+
   return password;
 }

@@ -6,13 +6,17 @@ let dbSizeCache: { bytes: number | null; checkedAt: number } = { bytes: null, ch
 /** Size of a local libSQL store, WAL included; null for remote stores. */
 export function localDbBytes(dbPath: string): number | null {
   const local = dbPath.toLowerCase().startsWith("file:") ? dbPath.slice(5) : dbPath;
+
   if (/^(libsql:\/\/|https?:\/\/|wss?:\/\/)/i.test(local)) return null;
   const now = Date.now();
+
   if (now - dbSizeCache.checkedAt < 30_000) return dbSizeCache.bytes;
   let bytes: number | null = null;
+
   try {
     const resolved = path.resolve(local);
     bytes = fs.statSync(resolved).size;
+
     for (const suffix of ["-wal", "-shm"]) {
       try {
         bytes += fs.statSync(resolved + suffix).size;
@@ -23,7 +27,9 @@ export function localDbBytes(dbPath: string): number | null {
   } catch {
     bytes = null;
   }
+
   dbSizeCache = { bytes, checkedAt: now };
+
   return bytes;
 }
 

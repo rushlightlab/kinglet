@@ -22,6 +22,7 @@ export interface BootstrapInfo {
 
 export async function ensureSchemaExtras(storage: Storage): Promise<void> {
   const rows = await storage.db.select({ n: count() }).from(schema.projects);
+
   if (Number(rows[0]?.n ?? 0) === 0) {
     // onConflictDoNothing keeps two instances booting against one libSQL
     // database from racing on the unique slug.
@@ -47,6 +48,7 @@ export async function ensureBootstrapAdmin(
     .select({ banned: schema.user.banned })
     .from(schema.user)
     .where(eq(schema.user.role, "admin"));
+
   // Recover a database whose only admins are banned as well as a zero-admin
   // database. A banned row must not suppress bootstrap recovery.
   if (admins.some((row) => row.banned !== true)) return null;
@@ -57,10 +59,12 @@ export async function ensureBootstrapAdmin(
 
   let userId: string | undefined;
   let createdNow = true;
+
   try {
     const result = await auth.api.signUpEmail({
       body: { email, password, name: "Administrator" },
     });
+
     userId = (result as { user?: { id?: string } }).user?.id;
   } catch (err) {
     // Concurrent boot or a pre-existing account with this email: promote it
@@ -70,14 +74,17 @@ export async function ensureBootstrapAdmin(
       .from(schema.user)
       .where(eq(schema.user.email, email))
       .limit(1);
+
     userId = existing[0]?.id;
     createdNow = false;
+
     if (!userId) throw err;
     console.warn(
       `[kinglet] bootstrap: promoted the existing account ${email} to administrator; ` +
         "its current password is unchanged.",
     );
   }
+
   if (!userId) throw new Error("bootstrap: Better Auth did not return a user id");
   await storage.db
     .update(schema.user)
@@ -94,5 +101,6 @@ export async function ensureBootstrapAdmin(
       // banner still shows it
     }
   }
+
   return { adminEmail: email, generatedPassword: createdNow ? generated : null };
 }

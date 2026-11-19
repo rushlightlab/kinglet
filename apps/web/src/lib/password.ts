@@ -24,6 +24,8 @@ export function passwordChecks(value: string): PasswordCheck[] {
 
 export function passwordProblem(value: string): string | null {
   const missing = passwordChecks(value).filter((check) => !check.ok);
+
   if (missing.length === 0) return null;
+
   return `Password needs ${missing.map((check) => check.label).join(", ")}.`;
 }

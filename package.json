@@ -19,6 +19,7 @@
     "demo:webhook": "node scripts/webhook-catcher.mjs"
   },
   "devDependencies": {
+    "@oxlint/plugins": "1.94.0",
     "oxfmt": "0.79.0",
     "oxlint": "1.94.0",
     "turbo": "^2.5.0"

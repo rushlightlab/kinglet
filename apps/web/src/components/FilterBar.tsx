@@ -16,6 +16,7 @@ function loadSaved(): SavedSearch[] {
   try {
     const raw = localStorage.getItem(SAVED_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
+
     return Array.isArray(parsed) ? (parsed as SavedSearch[]) : [];
   } catch {
     return [];
@@ -25,8 +26,10 @@ function loadSaved(): SavedSearch[] {
 function toggleTerm(q: string, term: string): string {
   const parts = q.split(/\s+/).filter(Boolean);
   const idx = parts.indexOf(term);
+
   if (idx >= 0) parts.splice(idx, 1);
   else parts.push(term);
+
   return parts.join(" ");
 }
 
@@ -50,15 +53,18 @@ export default function FilterBar(props: FilterBarProps) {
 
   const saveCurrent = (): void => {
     const q = props.appliedQ.trim();
+
     if (!q) return;
     const name = q.length > 28 ? `${q.slice(0, 25)}…` : q;
     setSaved((prev) => {
       const next = [{ name, q }, ...prev.filter((s) => s.q !== q)].slice(0, 8);
+
       try {
         localStorage.setItem(SAVED_KEY, JSON.stringify(next));
       } catch {
         // storage full or unavailable — chips stay for this session
       }
+
       return next;
     });
   };
@@ -66,11 +72,13 @@ export default function FilterBar(props: FilterBarProps) {
   const removeSaved = (q: string): void => {
     setSaved((prev) => {
       const next = prev.filter((s) => s.q !== q);
+
       try {
         localStorage.setItem(SAVED_KEY, JSON.stringify(next));
       } catch {
         // ignore
       }
+
       return next;
     });
   };
@@ -133,6 +141,7 @@ export default function FilterBar(props: FilterBarProps) {
           const color = LEVEL_COLORS[i] ?? "#6b756c";
           const term = `level:${name}`;
           const active = props.appliedQ.split(/\s+/).includes(term);
+
           return (
             <Tooltip key={name}>
               <TooltipTrigger asChild>

@@ -37,6 +37,7 @@ export function createAuth(
   const rawBase = opts.baseUrl ?? `http://localhost:${opts.port}`;
   let baseOrigin = rawBase;
   let baseHost = "";
+
   try {
     const parsed = new URL(rawBase);
     baseOrigin = parsed.origin;
@@ -44,6 +45,7 @@ export function createAuth(
   } catch {
     // keep the raw value if it isn't a URL
   }
+
   // Local origins are only trusted for local base URLs (dev + local Docker),
   // never on a production deployment with a real hostname.
   const localOrigins =
@@ -52,6 +54,7 @@ export function createAuth(
           [3000, 5173, 8080].map((port) => `http://${host}:${port}`),
         )
       : [];
+
   const trustedProxies = opts.trustedProxies ?? [];
   const sessionDays = opts.sessionDays ?? 30;
 

@@ -45,6 +45,7 @@ async function resolveAuth(
 ): Promise<AuthInfo | null> {
   const header = c.req.header("authorization");
   let bearer: string | undefined;
+
   if (header?.toLowerCase().startsWith("bearer ")) bearer = header.slice(7).trim();
 
   // EventSource can't set headers; the API key query parameter is accepted
@@ -55,7 +56,9 @@ async function resolveAuth(
 
   if (bearer) {
     const key = await verifyApiKey(storage, bearer);
+
     if (!key) return null;
+
     return {
       kind: "key",
       keyId: key.id,
@@ -72,12 +75,16 @@ async function resolveAuth(
     headers: c.req.raw.headers,
     ...(forceFreshSession ? { query: { disableCookieCache: true } } : {}),
   });
+
   if (!session?.user) return null;
   const role = isRole(session.user.role) ? session.user.role : "viewer";
+
   const createdAt =
     session.user.createdAt instanceof Date ? session.user.createdAt.getTime() : Date.now();
+
   const updatedAt =
     session.user.updatedAt instanceof Date ? session.user.updatedAt.getTime() : createdAt;
+
   return userAuth({
     id: String(session.user.id),
     email: session.user.email,
@@ -93,6 +100,7 @@ export function authMiddleware(storage: Storage, auth: KingletAuth): MiddlewareH
     const method = c.req.method;
     const forceFreshSession = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
     const info = await resolveAuth(c, storage, auth, forceFreshSession);
+
     if (!info) return c.json({ error: "unauthorized" }, 401);
     c.set("auth", info);
     await next();
@@ -110,14 +118,18 @@ export function can(auth: AuthInfo, permission: Permission): boolean {
 
 export function requirePermission(c: Context<AppEnv>, permission: Permission): Response | null {
   const auth = getAuth(c);
+
   if (can(auth, permission)) return null;
+
   return c.json({ error: "forbidden" }, 403);
 }
 
 /** The authenticated user for user-only routes (403 for API keys). */
 export function requireUser(c: Context<AppEnv>): AuthUser | Response {
   const auth = getAuth(c);
+
   if (auth.kind !== "user") return c.json({ error: "user session required" }, 403);
+
   return auth.user;
 }
 
@@ -127,6 +139,7 @@ export async function defaultProjectId(storage: Storage): Promise<string | null>
     .from(schema.projects)
     .orderBy(schema.projects.id)
     .limit(1);
+
   return rows[0]?.id ?? null;
 }
 
@@ -136,6 +149,7 @@ export async function projectExists(storage: Storage, id: string): Promise<boole
     .from(schema.projects)
     .where(eq(schema.projects.id, id))
     .limit(1);
+
   return rows.length > 0;
 }
 
@@ -151,7 +165,9 @@ export async function canAccessProject(
   projectId: string,
 ): Promise<boolean> {
   if (auth.kind === "key") return auth.projectId === projectId;
+
   if (auth.user.role === "admin") return true;
+
   const rows = await storage.db
     .select({ id: schema.projectMembers.id })
     .from(schema.projectMembers)
@@ -162,6 +178,7 @@ export async function canAccessProject(
       ),
     )
     .limit(1);
+
   return rows.length > 0;
 }
 
@@ -177,9 +194,12 @@ export async function canClearProjectLogs(
   projectId: string,
 ): Promise<boolean> {
   if (auth.kind !== "user") return false;
+
   if (auth.user.role === "admin") return true;
+
   // A member demoted to viewer must not keep the grant.
   if (auth.user.role === "viewer") return false;
+
   const rows = await storage.db
     .select({ canClearLogs: schema.projectMembers.canClearLogs })
     .from(schema.projectMembers)
@@ -190,6 +210,7 @@ export async function canClearProjectLogs(
       ),
     )
     .limit(1);
+
   return rows[0]?.canClearLogs === true;
 }
 
@@ -203,18 +224,24 @@ export async function resolveProjectId(
   storage: Storage,
 ): Promise<string | Response> {
   const auth = getAuth(c);
+
   if (auth.kind === "key") return auth.projectId;
   const raw = c.req.query("project");
+
   if (raw !== undefined) {
     if (!isUuid(raw)) return c.json({ error: "invalid project id" }, 400);
     const id = raw.toLowerCase();
+
     if (!(await projectExists(storage, id))) return c.json({ error: "project not found" }, 404);
+
     // 404 (not 403) so non-members cannot probe which project ids exist.
     if (!(await canAccessProject(auth, storage, id))) {
       return c.json({ error: "project not found" }, 404);
     }
+
     return id;
   }
+
   if (auth.kind === "user" && auth.user.role !== "admin") {
     const rows = await storage.db
       .select({ id: schema.projects.id })
@@ -223,11 +250,17 @@ export async function resolveProjectId(
       .where(eq(schema.projectMembers.userId, auth.user.id))
       .orderBy(schema.projects.id)
       .limit(1);
+
     const first = rows[0];
+
     if (!first) return c.json({ error: "no projects are assigned to your account" }, 409);
+
     return first.id;
   }
+
   const fallback = await defaultProjectId(storage);
+
   if (fallback === null) return c.json({ error: "no projects exist" }, 409);
+
   return fallback;
 }

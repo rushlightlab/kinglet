@@ -34,17 +34,22 @@ function RootComponent() {
       const { projects } = await fetchProjects();
       const storedRaw = localStorage.getItem("kinglet.project");
       const urlRaw = new URLSearchParams(window.location.search).get("project");
+
       const valid = (id: string | null): id is string =>
         id !== null && projects.some((p) => p.id === id);
+
       const chosen = [urlRaw, storedRaw].find(valid) ?? projects[0]?.id;
+
       if (chosen === undefined) {
         setState({
           phase: "offline",
           error:
             "No project is available for your account. An administrator can assign you to one in Settings → Projects.",
         });
+
         return;
       }
+
       localStorage.setItem("kinglet.project", String(chosen));
       setState({
         phase: "ready",
@@ -56,8 +61,10 @@ function RootComponent() {
     } catch (err) {
       if (err instanceof UnauthorizedError) {
         setState({ phase: "login" });
+
         return;
       }
+
       setState({
         phase: "offline",
         error: err instanceof Error ? err.message : "could not reach the Kinglet API",
@@ -74,7 +81,9 @@ function RootComponent() {
     const onUnauthorized = (): void => {
       setState({ phase: "login", error: "Your session expired — sign in again." });
     };
+
     window.addEventListener("kinglet:unauthorized", onUnauthorized);
+
     return () => window.removeEventListener("kinglet:unauthorized", onUnauthorized);
   }, []);
 
@@ -136,12 +145,15 @@ function RootComponent() {
         setState((prev) => {
           if (prev.phase !== "ready") return prev;
           const stillExists = projects.some((p) => p.id === prev.currentProjectId);
+
           const currentProjectId = stillExists
             ? prev.currentProjectId
             : (projects[0]?.id ?? prev.currentProjectId);
+
           if (currentProjectId !== prev.currentProjectId) {
             localStorage.setItem("kinglet.project", currentProjectId);
           }
+
           return { ...prev, projects, currentProjectId };
         });
       } catch {

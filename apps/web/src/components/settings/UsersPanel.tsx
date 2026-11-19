@@ -77,14 +77,17 @@ export default function UsersPanel() {
   const [name, setName] = useState("");
   const [role, setRole] = useState("member");
   const [password, setPassword] = useState("");
+
   const [createdPassword, setCreatedPassword] = useState<{
     email: string;
     password: string;
   } | null>(null);
+
   const [pendingUser, setPendingUser] = useState<{
     type: "delete" | "reset" | "disable";
     user: AppUser;
   } | null>(null);
+
   const [roleTarget, setRoleTarget] = useState<AppUser | null>(null);
   const [roleValue, setRoleValue] = useState("member");
   const [actionBusy, setActionBusy] = useState(false);
@@ -104,13 +107,17 @@ export default function UsersPanel() {
 
   const add = async (): Promise<void> => {
     if (!email.trim()) return;
+
     if (password) {
       const problem = passwordProblem(password);
+
       if (problem) {
         setError(problem);
+
         return;
       }
     }
+
     try {
       const result = await createUser({
         email: email.trim(),
@@ -118,6 +125,7 @@ export default function UsersPanel() {
         role,
         ...(password ? { password } : {}),
       });
+
       if (result.password)
         setCreatedPassword({ email: result.user.email, password: result.password });
       setEmail("");
@@ -135,20 +143,24 @@ export default function UsersPanel() {
       await updateUser(target.id, { role: nextRole });
       await load();
       toast.success("Role updated");
+
       return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+
       return false;
     }
   };
 
   const saveRole = async (): Promise<void> => {
     if (!roleTarget) return;
+
     if (await changeRole(roleTarget, roleValue)) setRoleTarget(null);
   };
 
   const remove = async (id: string): Promise<void> => {
     setActionBusy(true);
+
     try {
       await deleteUser(id);
       await load();
@@ -164,6 +176,7 @@ export default function UsersPanel() {
 
   const resetPassword = async (target: AppUser): Promise<void> => {
     setActionBusy(true);
+
     try {
       const result = await resetUserPassword(target.id);
       setCreatedPassword({ email: target.email, password: result.password });
@@ -179,6 +192,7 @@ export default function UsersPanel() {
 
   const setDisabled = async (target: AppUser, disabled: boolean): Promise<void> => {
     setActionBusy(true);
+
     try {
       await updateUser(target.id, { disabled });
       await load();
@@ -263,6 +277,7 @@ export default function UsersPanel() {
                   <TableCell className="text-right">
                     {(() => {
                       const isSelf = u.id === user.id;
+
                       const trigger = (
                         <DropdownMenuTrigger asChild>
                           <Button
@@ -275,6 +290,7 @@ export default function UsersPanel() {
                           </Button>
                         </DropdownMenuTrigger>
                       );
+
                       return (
                         <DropdownMenu>
                           {isSelf ? (
@@ -449,6 +465,7 @@ export default function UsersPanel() {
               disabled={actionBusy}
               onClick={() => {
                 if (!pendingUser) return;
+
                 if (pendingUser.type === "reset") void resetPassword(pendingUser.user);
                 else if (pendingUser.type === "disable") void setDisabled(pendingUser.user, true);
                 else void remove(pendingUser.user.id);
