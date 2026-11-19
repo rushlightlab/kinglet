@@ -10,6 +10,7 @@ import {
   RotateCcwIcon,
   SlidersHorizontalIcon,
   Trash2Icon,
+  UserCogIcon,
   UserPlusIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -1019,6 +1020,8 @@ function UsersPanel() {
     type: "delete" | "reset" | "disable";
     user: AppUser;
   } | null>(null);
+  const [roleTarget, setRoleTarget] = useState<AppUser | null>(null);
+  const [roleValue, setRoleValue] = useState("member");
   const [actionBusy, setActionBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -1061,14 +1064,21 @@ function UsersPanel() {
     }
   };
 
-  const changeRole = async (target: AppUser, nextRole: string): Promise<void> => {
+  const changeRole = async (target: AppUser, nextRole: string): Promise<boolean> => {
     try {
       await updateUser(target.id, { role: nextRole });
       await load();
       toast.success("Role updated");
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      return false;
     }
+  };
+
+  const saveRole = async (): Promise<void> => {
+    if (!roleTarget) return;
+    if (await changeRole(roleTarget, roleValue)) setRoleTarget(null);
   };
 
   const remove = async (id: string): Promise<void> => {
@@ -1163,28 +1173,28 @@ function UsersPanel() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    {u.role === "admin" ? (
-                      <Badge>admin</Badge>
-                    ) : (
-                      <Select value={u.role} onValueChange={(value) => void changeRole(u, value)}>
-                        <SelectTrigger size="sm" className="w-28">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            <SelectLabel>Role</SelectLabel>
-                            <SelectItem value="member">member</SelectItem>
-                            <SelectItem value="viewer">viewer</SelectItem>
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                    )}
+                    <Badge
+                      variant={u.role === "admin" ? "default" : "outline"}
+                      className="text-[10px] normal-case tracking-normal"
+                    >
+                      {u.role}
+                    </Badge>
                   </TableCell>
                   <TableCell>
                     {u.disabled ? (
-                      <Badge variant="destructive">disabled</Badge>
+                      <Badge
+                        variant="destructive"
+                        className="text-[10px] normal-case tracking-normal"
+                      >
+                        disabled
+                      </Badge>
                     ) : (
-                      <Badge variant="ghost">active</Badge>
+                      <Badge
+                        variant="ghost"
+                        className="text-[10px] normal-case tracking-normal"
+                      >
+                        active
+                      </Badge>
                     )}
                   </TableCell>
                   <TableCell className="text-right">
@@ -1207,6 +1217,16 @@ function UsersPanel() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuLabel>User actions</DropdownMenuLabel>
                         <DropdownMenuGroup>
+                          <DropdownMenuItem
+                            disabled={u.role === "admin"}
+                            onSelect={() => {
+                              setRoleTarget(u);
+                              setRoleValue(u.role === "viewer" ? "viewer" : "member");
+                            }}
+                          >
+                            <UserCogIcon />
+                            Change role
+                          </DropdownMenuItem>
                           <DropdownMenuItem
                             disabled={u.id === user.id}
                             onSelect={() => setPendingUser({ type: "reset", user: u })}
@@ -1360,6 +1380,45 @@ function UsersPanel() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog
+        open={roleTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRoleTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change role</DialogTitle>
+            <DialogDescription>
+              Choose the role for {roleTarget?.email ?? "this user"}.
+            </DialogDescription>
+          </DialogHeader>
+          <Field>
+            <FieldLabel htmlFor="change-role">role</FieldLabel>
+            <Select value={roleValue} onValueChange={setRoleValue}>
+              <SelectTrigger id="change-role" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel>Role</SelectLabel>
+                  <SelectItem value="member">member — logs, monitors, keys</SelectItem>
+                  <SelectItem value="viewer">viewer — read only</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setRoleTarget(null)}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={() => void saveRole()}>
+              Save role
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
