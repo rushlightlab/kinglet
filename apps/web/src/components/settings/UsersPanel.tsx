@@ -119,12 +119,13 @@ export default function UsersPanel() {
     }
 
     try {
-      const result = await createUser({
+      const newUser = {
         email: email.trim(),
         name: name.trim(),
         role,
-        ...(password ? { password } : {}),
-      });
+      };
+
+      const result = await createUser(password ? { ...newUser, password } : newUser);
 
       if (result.password)
         setCreatedPassword({ email: result.user.email, password: result.password });

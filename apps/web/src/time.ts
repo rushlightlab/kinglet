@@ -6,19 +6,19 @@
 export const DEFAULT_WINDOW_KEY = "1h";
 
 /** Preset width in milliseconds. Keys are stable and used in component state. */
-export const WINDOWS: Record<string, number> = {
-  "5m": 5 * 60_000,
-  "15m": 15 * 60_000,
-  "30m": 30 * 60_000,
-  "1h": 60 * 60_000,
-  "3h": 3 * 60 * 60_000,
-  "6h": 6 * 60 * 60_000,
-  "1d": 24 * 60 * 60_000,
-  "2d": 2 * 24 * 60 * 60_000,
-  "7d": 7 * 24 * 60 * 60_000,
-  "15d": 15 * 24 * 60 * 60_000,
-  "30d": 30 * 24 * 60 * 60_000,
-};
+export const WINDOWS = new Map<string, number>([
+  ["5m", 5 * 60_000],
+  ["15m", 15 * 60_000],
+  ["30m", 30 * 60_000],
+  ["1h", 60 * 60_000],
+  ["3h", 3 * 60 * 60_000],
+  ["6h", 6 * 60 * 60_000],
+  ["1d", 24 * 60 * 60_000],
+  ["2d", 2 * 24 * 60 * 60_000],
+  ["7d", 7 * 24 * 60 * 60_000],
+  ["15d", 15 * 24 * 60 * 60_000],
+  ["30d", 30 * 24 * 60 * 60_000],
+]);
 
 /** The backend clamps ranges to the last 31 days. */
 export const MAX_RANGE_MS = 31 * 24 * 60 * 60_000;

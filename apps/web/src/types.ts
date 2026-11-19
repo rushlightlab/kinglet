@@ -1,3 +1,6 @@
+import { isJsonObject, isString } from "./json";
+import type { JsonObject } from "./json";
+
 export const LEVEL_NAMES = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
 
 /* Kinglet palette: faint greys for quiet levels, crown gold for warn,
@@ -20,7 +23,26 @@ export interface KingletEvent {
   service: string | null;
   env: string | null;
   message: string;
-  fields: Record<string, unknown> | null;
+  fields: JsonObject | null;
+}
+
+export function isKingletEvent(value: unknown): value is KingletEvent {
+  if (!isJsonObject(value)) return false;
+
+  return (
+    typeof value.id === "number" &&
+    Number.isFinite(value.id) &&
+    (value.uid === null || isString(value.uid)) &&
+    (value.apiKeyId === null || isString(value.apiKeyId)) &&
+    typeof value.ts === "number" &&
+    Number.isFinite(value.ts) &&
+    typeof value.level === "number" &&
+    Number.isFinite(value.level) &&
+    (value.service === null || isString(value.service)) &&
+    (value.env === null || isString(value.env)) &&
+    isString(value.message) &&
+    (value.fields === null || isJsonObject(value.fields))
+  );
 }
 
 export interface Service {

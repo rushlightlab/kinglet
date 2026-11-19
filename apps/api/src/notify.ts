@@ -1,6 +1,7 @@
 import { lookup } from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
+import type { RequestOptions as HttpsRequestOptions } from "node:https";
 import { isIP } from "node:net";
 
 /**
@@ -270,40 +271,41 @@ async function postJson(url: URL, body: string, allowPrivate: boolean): Promise<
 
   const secure = url.protocol === "https:";
   const transport = secure ? https : http;
+
+  const requestOptions: HttpsRequestOptions = {
+    hostname: address,
+    port: url.port !== "" ? Number(url.port) : secure ? 443 : 80,
+    path: url.pathname + url.search,
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "content-length": Buffer.byteLength(body),
+      host: url.host,
+    },
+    timeout: 10_000,
+  };
+
+  if (secure) requestOptions.servername = url.hostname;
+
   await new Promise<void>((resolve, reject) => {
-    const req = transport.request(
-      {
-        hostname: address,
-        port: url.port !== "" ? Number(url.port) : secure ? 443 : 80,
-        path: url.pathname + url.search,
-        method: "POST",
-        ...(secure ? { servername: url.hostname } : {}),
-        headers: {
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(body),
-          host: url.host,
-        },
-        timeout: 10_000,
-      },
-      (res) => {
-        res.resume();
-        const status = res.statusCode ?? 0;
+    const req = transport.request(requestOptions, (res) => {
+      res.resume();
+      const status = res.statusCode ?? 0;
 
-        if (status >= 300 && status < 400) {
-          reject(new Error("channel redirected — configure its final URL"));
+      if (status >= 300 && status < 400) {
+        reject(new Error("channel redirected — configure its final URL"));
 
-          return;
-        }
+        return;
+      }
 
-        if (status < 200 || status >= 300) {
-          reject(new Error(`channel returned HTTP ${status}`));
+      if (status < 200 || status >= 300) {
+        reject(new Error(`channel returned HTTP ${status}`));
 
-          return;
-        }
+        return;
+      }
 
-        resolve();
-      },
-    );
+      resolve();
+    });
 
     req.on("timeout", () => req.destroy(new Error("channel timed out")));
     req.on("error", reject);
@@ -335,6 +337,40 @@ interface NoticeField {
   name: string;
   value: string;
   inline: boolean;
+}
+
+interface DiscordEmbed {
+  title: string;
+  color: number;
+  fields: NoticeField[];
+  timestamp: string;
+  footer: { text: string };
+  description?: string;
+}
+
+interface DiscordPayload {
+  username: string;
+  embeds: DiscordEmbed[];
+}
+
+interface SlackField {
+  title: string;
+  value: string;
+  short: boolean;
+}
+
+interface SlackAttachment {
+  color: string;
+  title: string;
+  text: string;
+  fields: SlackField[];
+  footer: string;
+  ts: number;
+}
+
+interface SlackPayload {
+  text: string;
+  attachments: SlackAttachment[];
 }
 
 const STATE_META: Record<
@@ -430,7 +466,7 @@ function noticeFields(n: AlertNotice, formatLink: (url: string) => string): Noti
   return fields.map((field) => ({ ...field, value: truncate(field.value, 1000) }));
 }
 
-export function discordPayload(n: AlertNotice): Record<string, unknown> {
+export function discordPayload(n: AlertNotice): DiscordPayload {
   const meta = STATE_META[n.state];
   const fields = noticeFields(n, (url) => `[Open in Kinglet](${url})`);
 
@@ -447,7 +483,7 @@ export function discordPayload(n: AlertNotice): Record<string, unknown> {
     else fields.push(sample);
   }
 
-  const embed: Record<string, unknown> = {
+  const embed: DiscordEmbed = {
     title: `${meta.emoji} ${meta.title}`,
     color: meta.color,
     fields,
@@ -460,7 +496,7 @@ export function discordPayload(n: AlertNotice): Record<string, unknown> {
   return { username: "Kinglet", embeds: [embed] };
 }
 
-export function slackPayload(n: AlertNotice): Record<string, unknown> {
+export function slackPayload(n: AlertNotice): SlackPayload {
   const meta = STATE_META[n.state];
   const textParts: string[] = [];
 

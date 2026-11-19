@@ -11,6 +11,9 @@
  *   fields           arbitrary JSON object (<= 32KB serialized)
  */
 
+import { isFiniteNumber, isJsonObject, isString } from "./json.js";
+import type { JsonValue } from "./json.js";
+
 export interface Normalized {
   ts: number;
   level: number;
@@ -20,20 +23,20 @@ export interface Normalized {
   fields: string | null;
 }
 
-const LEVEL_MAP: Record<string, number> = {
-  trace: 0,
-  debug: 1,
-  info: 2,
-  warn: 3,
-  warning: 3,
-  error: 4,
-  err: 4,
-  fatal: 5,
-  critical: 5,
-};
+const LEVEL_MAP = new Map<string, number>([
+  ["trace", 0],
+  ["debug", 1],
+  ["info", 2],
+  ["warn", 3],
+  ["warning", 3],
+  ["error", 4],
+  ["err", 4],
+  ["fatal", 5],
+  ["critical", 5],
+]);
 
 function levelFromName(name: string): number | null {
-  return Object.hasOwn(LEVEL_MAP, name) ? (LEVEL_MAP[name] ?? null) : null;
+  return LEVEL_MAP.get(name) ?? null;
 }
 
 const MAX_MESSAGE = 8000;
@@ -43,16 +46,16 @@ const MAX_PAST_MS = 31 * 24 * 3_600_000;
 
 export type NormalizedResult = { ok: true; value: Normalized } | { ok: false; error: string };
 
-export function normalizeEvent(raw: unknown): NormalizedResult {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+export function normalizeEvent(raw: JsonValue): NormalizedResult {
+  if (!isJsonObject(raw)) {
     return { ok: false, error: "event must be an object" };
   }
 
-  const obj = raw as Record<string, unknown>;
+  const obj = raw;
 
   const rawMessage = obj.message ?? obj.msg;
 
-  if (typeof rawMessage !== "string" || rawMessage.trim().length === 0) {
+  if (!isString(rawMessage) || rawMessage.trim().length === 0) {
     return { ok: false, error: "missing message" };
   }
 
@@ -61,9 +64,9 @@ export function normalizeEvent(raw: unknown): NormalizedResult {
   let level = 2; // info
   const rawLevel = obj.level;
 
-  if (typeof rawLevel === "number" && Number.isFinite(rawLevel)) {
+  if (isFiniteNumber(rawLevel)) {
     level = Math.min(5, Math.max(0, Math.trunc(rawLevel)));
-  } else if (typeof rawLevel === "string") {
+  } else if (isString(rawLevel)) {
     level = levelFromName(rawLevel.trim().toLowerCase()) ?? 2;
   }
 
@@ -72,10 +75,10 @@ export function normalizeEvent(raw: unknown): NormalizedResult {
   let ts = Date.now();
   const rawTs = obj.ts ?? obj.time ?? obj.timestamp;
 
-  if (typeof rawTs === "number" && Number.isFinite(rawTs) && rawTs > 0) {
+  if (isFiniteNumber(rawTs) && rawTs > 0) {
     // Auto-detect seconds vs milliseconds.
     ts = rawTs < 1e11 ? Math.trunc(rawTs * 1000) : Math.trunc(rawTs);
-  } else if (typeof rawTs === "string") {
+  } else if (isString(rawTs)) {
     const parsed = Date.parse(rawTs);
 
     if (!Number.isNaN(parsed)) ts = parsed;
@@ -87,19 +90,22 @@ export function normalizeEvent(raw: unknown): NormalizedResult {
   ts = Math.min(now + MAX_FUTURE_SKEW_MS, Math.max(now - MAX_PAST_MS, ts));
 
   const service =
-    typeof obj.service === "string" && obj.service.trim()
+    isString(obj.service) && obj.service.trim()
       ? obj.service.trim().toLowerCase().slice(0, 128)
       : null;
 
   const env =
-    typeof obj.env === "string" && obj.env.trim()
-      ? obj.env.trim().toLowerCase().slice(0, 64)
-      : null;
+    isString(obj.env) && obj.env.trim() ? obj.env.trim().toLowerCase().slice(0, 64) : null;
 
   let fields: string | null = null;
+  const rawFields = obj.fields;
 
-  if (obj.fields !== undefined && obj.fields !== null && typeof obj.fields === "object") {
-    const serialized = JSON.stringify(obj.fields);
+  if (
+    rawFields !== undefined &&
+    rawFields !== null &&
+    (isJsonObject(rawFields) || Array.isArray(rawFields))
+  ) {
+    const serialized = JSON.stringify(rawFields);
     fields =
       serialized.length > MAX_FIELDS ? JSON.stringify({ _kinglet_truncated: true }) : serialized;
   }

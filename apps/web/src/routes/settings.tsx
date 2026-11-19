@@ -18,6 +18,10 @@ export const Route = createFileRoute("/settings")({
 
 type Tab = "projects" | "users";
 
+function isTab(value: string): value is Tab {
+  return value === "projects" || value === "users";
+}
+
 function SettingsPage() {
   const { permissions } = useApp();
   const canUsers = hasPermission(permissions, "users.read");
@@ -30,7 +34,13 @@ function SettingsPage() {
       description="Projects and people across this Kinglet instance."
     >
       {canUsers ? (
-        <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="mt-6 gap-4">
+        <Tabs
+          value={tab}
+          onValueChange={(value) => {
+            if (isTab(value)) setTab(value);
+          }}
+          className="mt-6 gap-4"
+        >
           <TabsList>
             <TabsTrigger value="projects">projects</TabsTrigger>
             <TabsTrigger value="users">users</TabsTrigger>

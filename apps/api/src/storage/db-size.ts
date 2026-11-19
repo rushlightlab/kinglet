@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 
-let dbSizeCache: { bytes: number | null; checkedAt: number } = { bytes: null, checkedAt: 0 };
+interface DbSizeCache {
+  bytes: number | null;
+  checkedAt: number;
+}
+
+let dbSizeCache: DbSizeCache = { bytes: null, checkedAt: 0 };
 
 /** Size of a local libSQL store, WAL included; null for remote stores. */
 export function localDbBytes(dbPath: string): number | null {

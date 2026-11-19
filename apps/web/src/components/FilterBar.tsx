@@ -3,6 +3,7 @@ import type { RefObject } from "react";
 import { LinkIcon, RefreshCwIcon, StarIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isJsonObject, isString } from "../json";
 import { LEVEL_COLORS, LEVEL_NAMES } from "../types";
 
 const SAVED_KEY = "kinglet.saved";
@@ -12,12 +13,16 @@ interface SavedSearch {
   q: string;
 }
 
+function isSavedSearch(value: unknown): value is SavedSearch {
+  return isJsonObject(value) && isString(value.name) && isString(value.q);
+}
+
 function loadSaved(): SavedSearch[] {
   try {
     const raw = localStorage.getItem(SAVED_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
 
-    return Array.isArray(parsed) ? (parsed as SavedSearch[]) : [];
+    return Array.isArray(parsed) ? parsed.filter(isSavedSearch) : [];
   } catch {
     return [];
   }

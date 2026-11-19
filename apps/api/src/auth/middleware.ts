@@ -33,6 +33,11 @@ export interface AuthUser {
 
 export type AppEnv = { Variables: { auth: AuthInfo } };
 
+interface SessionRequest {
+  headers: Headers;
+  query?: { disableCookieCache: boolean };
+}
+
 export function userAuth(user: AuthUser): AuthInfo {
   return { kind: "user", user, permissions: new Set(permissionsForRole(user.role)) };
 }
@@ -71,10 +76,13 @@ async function resolveAuth(
   // Better Auth session — cookieCache makes this a signed-cookie read in the
   // common case, no database round trip. Mutations bypass the cache so a
   // demoted/deleted user cannot keep writing for the cache TTL.
-  const session = await auth.api.getSession({
-    headers: c.req.raw.headers,
-    ...(forceFreshSession ? { query: { disableCookieCache: true } } : {}),
-  });
+  const sessionRequest: SessionRequest = { headers: c.req.raw.headers };
+
+  if (forceFreshSession) {
+    sessionRequest.query = { disableCookieCache: true };
+  }
+
+  const session = await auth.api.getSession(sessionRequest);
 
   if (!session?.user) return null;
   const role = isRole(session.user.role) ? session.user.role : "viewer";

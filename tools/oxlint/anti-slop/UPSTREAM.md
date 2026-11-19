@@ -11,7 +11,13 @@ Installed: 2026-11-19
 - Entry point: `tools/oxlint/anti-slop/index.ts`
 - Registered through `jsPlugins` as `anti-slop` in `.oxlintrc.json`
 - Runtime: `oxlint` 1.94.0 with `@oxlint/plugins` 1.94.0 (exact)
-- Intentional deviations: none
+- Configuration: `anti-slop/no-runtime-typeof` runs with
+  `allowInTypeGuards: true`; runtime probes are centralized in
+  `apps/api/src/json.ts` and the web type guards
+- Intentional deviations: added `package.json` with `"type": "module"` so Node
+  loads the TypeScript plugin as ESM without a typeless-package warning
+- Verification: `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, and
+  `pnpm build` pass after the source cleanup
 
 The bundled third-party rule under `vendor/eslint-stylistic/` keeps its own
 `UPSTREAM.md` and `LICENSE` (ESLint Stylistic commit

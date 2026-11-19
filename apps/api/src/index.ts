@@ -17,6 +17,8 @@ import { startMonitorEngine } from "./monitors.js";
 import type { MonitorEngine } from "./monitors.js";
 import { startRetentionJob } from "./retention.js";
 import { registerRoutes } from "./routes.js";
+import { isJsonObject, isString } from "./json.js";
+import type { JsonValue } from "./json.js";
 import * as schema from "./storage/schema.js";
 import { createStorage } from "./storage/index.js";
 import type { Storage } from "./storage/index.js";
@@ -89,8 +91,7 @@ async function main(): Promise<void> {
   // X-Forwarded-For cannot rotate around the limit.
   if (config.trustedProxies.length === 0) {
     app.use("/api/auth/*", async (c, next) => {
-      const env = c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined;
-      const address = env?.incoming?.socket?.remoteAddress;
+      const address = remoteAddressFromEnv(c.env);
 
       if (address) c.req.raw.headers.set("x-kinglet-client-ip", address);
       await next();
@@ -184,12 +185,12 @@ async function main(): Promise<void> {
       return;
     }
 
-    const body = (await c.req.raw
+    const body = await c.req.raw
       .clone()
       .json()
-      .catch(() => null)) as { newPassword?: unknown } | null;
+      .catch(() => null);
 
-    if (body && typeof body.newPassword === "string") {
+    if (isJsonObject(body) && isString(body.newPassword)) {
       const problem = passwordProblem(body.newPassword);
 
       if (problem) return c.json({ error: problem }, 400);
@@ -236,7 +237,7 @@ async function main(): Promise<void> {
   process.on("SIGTERM", shutdown);
 }
 
-main().catch((err: unknown) => {
+main().catch((err) => {
   console.error("");
   console.error("  ✖ Kinglet failed to start");
   console.error("");
@@ -251,8 +252,22 @@ function isRemoteDbPath(dbPath: string): boolean {
   return /^(libsql:\/\/|https?:\/\/|wss?:\/\/)/i.test(dbPath);
 }
 
+function remoteAddressFromEnv<T>(env: T): string | undefined {
+  if (!isJsonObject(env)) return undefined;
+
+  const incoming = env.incoming;
+
+  if (!isJsonObject(incoming)) return undefined;
+
+  const socket = incoming.socket;
+
+  if (!isJsonObject(socket)) return undefined;
+
+  return isString(socket.remoteAddress) ? socket.remoteAddress : undefined;
+}
+
 function apiNotFound(
-  c: { json: (body: unknown, status: 404) => Response },
+  c: { json: (body: JsonValue, status: 404) => Response },
   pathname: string,
 ): Response {
   return c.json({ error: "not found", path: pathname }, 404);
@@ -278,19 +293,19 @@ function registerStaticUi(app: Hono<AppEnv>): void {
     return;
   }
 
-  const mimeTypes: Record<string, string> = {
-    ".html": "text/html; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".svg": "image/svg+xml",
-    ".json": "application/json",
-    ".png": "image/png",
-    ".ico": "image/x-icon",
-    ".map": "application/json",
-    ".woff2": "font/woff2",
-    ".woff": "font/woff",
-    ".txt": "text/plain; charset=utf-8",
-  };
+  const mimeTypes = new Map<string, string>([
+    [".html", "text/html; charset=utf-8"],
+    [".js", "text/javascript; charset=utf-8"],
+    [".css", "text/css; charset=utf-8"],
+    [".svg", "image/svg+xml"],
+    [".json", "application/json"],
+    [".png", "image/png"],
+    [".ico", "image/x-icon"],
+    [".map", "application/json"],
+    [".woff2", "font/woff2"],
+    [".woff", "font/woff"],
+    [".txt", "text/plain; charset=utf-8"],
+  ]);
 
   app.get("*", (c) => {
     let pathname = "/";
@@ -316,19 +331,17 @@ function registerStaticUi(app: Hono<AppEnv>): void {
     if (!fs.existsSync(filePath)) return c.notFound();
     const body = fs.readFileSync(filePath);
 
-    const headers: Record<string, string> = {
-      "content-type": mimeTypes[path.extname(filePath)] ?? "application/octet-stream",
-    };
+    c.header("content-type", mimeTypes.get(path.extname(filePath)) ?? "application/octet-stream");
 
     // Hashed build assets never change; the HTML entrypoint must always be
     // revalidated so a new deploy cannot keep loading an old bundle.
     if (pathname.startsWith("/assets/")) {
-      headers["cache-control"] = "public, max-age=31536000, immutable";
+      c.header("cache-control", "public, max-age=31536000, immutable");
     } else {
-      headers["cache-control"] = "no-cache";
+      c.header("cache-control", "no-cache");
     }
 
-    return c.body(body, 200, headers);
+    return c.body(body);
   });
 }
 

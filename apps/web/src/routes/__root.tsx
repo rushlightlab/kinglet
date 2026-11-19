@@ -165,7 +165,7 @@ function RootComponent() {
       // cookie is only cleared by the server.
       void logout()
         .then(() => setState({ phase: "login" }))
-        .catch((err: unknown) => {
+        .catch((err) => {
           const message = err instanceof Error ? err.message : "could not sign out";
           toast.error("Sign-out failed", {
             description: `${message}. Your session is still active — check that KINGLET_BASE_URL matches this origin.`,

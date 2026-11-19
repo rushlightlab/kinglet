@@ -27,7 +27,13 @@ export interface LoggerOptions {
   onError?: (error: Error) => void;
 }
 
-export type LogFields = Record<string, unknown>;
+export type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
+
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
+
+export type LogFields = JsonObject;
 
 export interface Logger {
   trace(message: string, fields?: LogFields): void;
@@ -64,7 +70,7 @@ export function createLogger(opts: LoggerOptions): Logger {
     if (timer) return;
     timer = setInterval(() => void flush(), flushMs);
     // Don't keep the process alive just for log flushing.
-    (timer as unknown as { unref?: () => void }).unref?.();
+    timer.unref?.();
   }
 
   async function flush(): Promise<void> {

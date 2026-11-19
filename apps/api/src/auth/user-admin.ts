@@ -62,6 +62,10 @@ export async function countAdmins(storage: Storage): Promise<number> {
   return rows.filter((row) => row.banned !== true).length;
 }
 
+function betterAuthRole(role: Role): "admin" | "user" {
+  return role === "admin" ? "admin" : "user";
+}
+
 export async function createManagedUser(
   storage: Storage,
   auth: KingletAuth,
@@ -76,15 +80,15 @@ export async function createManagedUser(
 
   const password = input.password ?? generatePassword();
 
-  const created = (await auth.api.createUser({
+  const created = await auth.api.createUser({
     body: {
       email: input.email.toLowerCase(),
       password,
       name: input.name || input.email,
-      role: input.role as "admin" | "user",
+      role: betterAuthRole(input.role),
     },
     headers,
-  })) as unknown as { user?: { id?: string; email?: string; name?: string } };
+  });
 
   const userId = created.user?.id;
 
@@ -96,7 +100,9 @@ export async function createManagedUser(
 
   if (!user) throw new Error("created user not found");
 
-  return { user, ...(input.password ? {} : { password }) };
+  if (input.password) return { user };
+
+  return { user, password };
 }
 
 export async function setUserRole(
@@ -107,7 +113,7 @@ export async function setUserRole(
   role: Role,
 ): Promise<void> {
   await auth.api.setRole({
-    body: { userId, role: role as "admin" | "user" },
+    body: { userId, role: betterAuthRole(role) },
     headers,
   });
   await storage.db.update(schema.user).set({ role }).where(eq(schema.user.id, userId));

@@ -65,7 +65,7 @@ export async function ensureBootstrapAdmin(
       body: { email, password, name: "Administrator" },
     });
 
-    userId = (result as { user?: { id?: string } }).user?.id;
+    userId = result.user?.id;
   } catch (err) {
     // Concurrent boot or a pre-existing account with this email: promote it
     // instead of failing the whole process.

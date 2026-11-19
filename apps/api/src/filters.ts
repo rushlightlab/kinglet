@@ -57,9 +57,27 @@ function tokenize(input: string): string[] {
 }
 
 function levelIndex(value: string): number | null {
-  const idx = (LEVEL_NAMES as readonly string[]).indexOf(value.toLowerCase());
+  const idx = LEVEL_NAMES.findIndex((name) => name === value.toLowerCase());
 
   return idx === -1 ? null : idx;
+}
+
+function parseLevelOperator(value: string): ParsedFilters["levelOp"] {
+  switch (value) {
+    case ":":
+    case "=":
+      return "=";
+    case ">":
+      return ">";
+    case ">=":
+      return ">=";
+    case "<":
+      return "<";
+    case "<=":
+      return "<=";
+    default:
+      return null;
+  }
 }
 
 export function parseFilters(q: string): ParsedFilters {
@@ -92,8 +110,10 @@ export function parseFilters(q: string): ParsedFilters {
       const value = levelIndex(levelMatch[2] ?? "");
 
       if (value !== null) {
-        const op = levelMatch[1] ?? "=";
-        f.levelOp = op === ":" ? "=" : (op as ParsedFilters["levelOp"]);
+        const op = parseLevelOperator(levelMatch[1] ?? "=");
+
+        if (op === null) continue;
+        f.levelOp = op;
         f.levelValue = value;
         continue;
       }

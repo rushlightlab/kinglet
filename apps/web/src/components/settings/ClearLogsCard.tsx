@@ -31,6 +31,13 @@ import {
 
 type ClearRange = "1h" | "6h" | "24h" | "7d" | "30d" | "all" | "custom";
 
+const CLEAR_RANGES: readonly ClearRange[] = ["1h", "6h", "24h", "7d", "30d", "all", "custom"];
+const CLEAR_RANGE_SET = new Set<string>(CLEAR_RANGES);
+
+function isClearRange(value: string): value is ClearRange {
+  return CLEAR_RANGE_SET.has(value);
+}
+
 const CLEAR_RANGE_MS: Record<Exclude<ClearRange, "all" | "custom">, number> = {
   "1h": 60 * 60_000,
   "6h": 6 * 60 * 60_000,
@@ -141,7 +148,12 @@ export default function ClearLogsCard({
 
             <Field>
               <FieldLabel htmlFor="clear-range">range</FieldLabel>
-              <Select value={range} onValueChange={(value) => setRange(value as ClearRange)}>
+              <Select
+                value={range}
+                onValueChange={(value) => {
+                  if (isClearRange(value)) setRange(value);
+                }}
+              >
                 <SelectTrigger id="clear-range" className="w-full">
                   <SelectValue />
                 </SelectTrigger>

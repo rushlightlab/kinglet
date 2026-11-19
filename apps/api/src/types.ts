@@ -1,3 +1,6 @@
+import { isJsonObject } from "./json.js";
+import type { JsonObject } from "./json.js";
+
 export const LEVEL_NAMES = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
 
 /** Row shape as stored in a Kinglet store (fields is a JSON string). */
@@ -25,15 +28,16 @@ export interface ClientEvent {
   service: string | null;
   env: string | null;
   message: string;
-  fields: Record<string, unknown> | null;
+  fields: JsonObject | null;
 }
 
 export function toClientEvent(row: StoredEvent): ClientEvent {
-  let fields: Record<string, unknown> | null = null;
+  let fields: JsonObject | null = null;
 
   if (row.fields) {
     try {
-      fields = JSON.parse(row.fields) as Record<string, unknown>;
+      const parsed: unknown = JSON.parse(row.fields);
+      fields = isJsonObject(parsed) ? parsed : null;
     } catch {
       fields = null;
     }

@@ -47,6 +47,8 @@ import { passwordProblem } from "./auth/password.js";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
 import type { Normalized } from "./ingest.js";
 import { normalizeEvent } from "./ingest.js";
+import { isBoolean, isJsonObject, isString } from "./json.js";
+import type { JsonObject, JsonValue } from "./json.js";
 import { validateQueryString } from "./query-validation.js";
 import { eventSizeBytes } from "./storage/events.js";
 import type { MonitorEngine } from "./monitors.js";
@@ -174,13 +176,11 @@ function parseProjectQuery(raw: string | undefined): string | null {
   return parseId(raw);
 }
 
-async function readJson(c: Context<AppEnv>): Promise<Record<string, unknown> | null> {
+async function readJson(c: Context<AppEnv>): Promise<JsonObject | null> {
   try {
     const body: unknown = await c.req.json();
 
-    return body !== null && typeof body === "object" && !Array.isArray(body)
-      ? (body as Record<string, unknown>)
-      : null;
+    return isJsonObject(body) ? body : null;
   } catch {
     return null;
   }
@@ -189,12 +189,19 @@ async function readJson(c: Context<AppEnv>): Promise<Record<string, unknown> | n
 /** Strict body parser for mutations: distinguishes malformed JSON from bad fields. */
 async function readJsonStrict(
   c: Context<AppEnv>,
-): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; error: string }> {
+): Promise<{ ok: true; body: JsonObject } | { ok: false; error: string }> {
   const body = await readJson(c);
 
   if (!body) return { ok: false, error: "invalid JSON body" };
 
   return { ok: true, body };
+}
+
+interface IngestResponse {
+  accepted: number;
+  rejected: number;
+  truncated?: true;
+  errors?: string[];
 }
 
 function uniqueSlug(name: string): string {
@@ -297,7 +304,7 @@ export function registerRoutes(
 
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
-    const name = typeof body?.name === "string" ? body.name.trim().slice(0, 64) : "";
+    const name = isString(body.name) ? body.name.trim().slice(0, 64) : "";
 
     if (!name) return c.json({ error: "name is required" }, 400);
     const base = uniqueSlug(name);
@@ -350,8 +357,7 @@ export function registerRoutes(
 
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
 
-    const name =
-      typeof parsedBody.body?.name === "string" ? parsedBody.body.name.trim().slice(0, 64) : "";
+    const name = isString(parsedBody.body.name) ? parsedBody.body.name.trim().slice(0, 64) : "";
 
     if (!name) return c.json({ error: "name is required" }, 400);
 
@@ -429,15 +435,15 @@ export function registerRoutes(
 
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
-    const email = typeof body?.email === "string" ? body.email.trim() : "";
+    const email = isString(body.email) ? body.email.trim() : "";
 
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
       return c.json({ error: "a valid email is required" }, 400);
-    const role: Role = isRole(body?.role) ? body.role : "member";
-    const name = typeof body?.name === "string" ? body.name.trim().slice(0, 80) : "";
+    const role: Role = isRole(body.role) ? body.role : "member";
+    const name = isString(body.name) ? body.name.trim().slice(0, 80) : "";
 
     const password =
-      typeof body?.password === "string" && body.password.length > 0 ? body.password : undefined;
+      isString(body.password) && body.password.length > 0 ? body.password : undefined;
 
     if (password !== undefined) {
       const problem = passwordProblem(password);
@@ -477,7 +483,7 @@ export function registerRoutes(
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
 
-    const disabled = typeof body?.disabled === "boolean" ? body.disabled : undefined;
+    const disabled = isBoolean(body.disabled) ? body.disabled : undefined;
     let role: Role | undefined;
 
     if (body?.role !== undefined) {
@@ -527,7 +533,7 @@ export function registerRoutes(
       }
     }
 
-    const name = typeof body?.name === "string" ? body.name.trim().slice(0, 80) : undefined;
+    const name = isString(body.name) ? body.name.trim().slice(0, 80) : undefined;
 
     if (name !== undefined) await updateUserName(storage, userId, name);
 
@@ -664,10 +670,10 @@ export function registerRoutes(
 
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
-    const name = typeof body?.name === "string" ? body.name.trim().slice(0, 80) : "";
+    const name = isString(body.name) ? body.name.trim().slice(0, 80) : "";
 
     if (!name) return c.json({ error: "name is required" }, 400);
-    const rawScopes: unknown = body?.scopes;
+    const rawScopes = body.scopes;
     let scopes: KeyScope[];
 
     if (rawScopes === undefined) {
@@ -676,16 +682,16 @@ export function registerRoutes(
     } else if (!Array.isArray(rawScopes) || rawScopes.length === 0) {
       return c.json({ error: "scopes must be a non-empty array of: ingest, query" }, 400);
     } else {
-      const unknown = rawScopes.filter((s) => !isKeyScope(s));
+      const unknownScopes = rawScopes.filter((s) => !isKeyScope(s));
 
-      if (unknown.length > 0) {
+      if (unknownScopes.length > 0) {
         return c.json(
-          { error: `unknown scope(s): ${unknown.join(", ")} — use ingest and/or query` },
+          { error: `unknown scope(s): ${unknownScopes.join(", ")} — use ingest and/or query` },
           400,
         );
       }
 
-      scopes = [...new Set(rawScopes as KeyScope[])];
+      scopes = [...new Set(rawScopes.filter(isKeyScope))];
     }
 
     const me = getAuth(c);
@@ -753,22 +759,22 @@ export function registerRoutes(
     const parsedBody = await readJsonStrict(c);
 
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
-    const rawScopes: unknown = parsedBody.body?.scopes;
+    const rawScopes = parsedBody.body.scopes;
 
     if (!Array.isArray(rawScopes) || rawScopes.length === 0) {
       return c.json({ error: "scopes must be a non-empty array of: ingest, query" }, 400);
     }
 
-    const unknown = rawScopes.filter((scope) => !isKeyScope(scope));
+    const unknownScopes = rawScopes.filter((scope) => !isKeyScope(scope));
 
-    if (unknown.length > 0) {
+    if (unknownScopes.length > 0) {
       return c.json(
-        { error: `unknown scope(s): ${unknown.join(", ")} — use ingest and/or query` },
+        { error: `unknown scope(s): ${unknownScopes.join(", ")} — use ingest and/or query` },
         400,
       );
     }
 
-    const scopes = [...new Set(rawScopes as KeyScope[])];
+    const scopes = [...new Set(rawScopes.filter(isKeyScope))];
     const updated = await updateApiKeyScopes(storage, id, projectId, scopes);
 
     if (!updated) return c.json({ error: "key not found" }, 404);
@@ -862,7 +868,7 @@ export function registerRoutes(
     const parsedBody = await readJsonStrict(c);
 
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
-    const userId = typeof parsedBody.body?.userId === "string" ? parsedBody.body.userId : "";
+    const userId = isString(parsedBody.body.userId) ? parsedBody.body.userId : "";
 
     if (!userId) return c.json({ error: "userId is required" }, 400);
     const target = await getUserById(storage, userId);
@@ -902,7 +908,7 @@ export function registerRoutes(
 
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
 
-    if (typeof parsedBody.body?.canClearLogs !== "boolean") {
+    if (!isBoolean(parsedBody.body.canClearLogs)) {
       return c.json({ error: "canClearLogs must be a boolean" }, 400);
     }
 
@@ -1009,11 +1015,11 @@ export function registerRoutes(
 
     const contentType = (c.req.header("content-type") ?? "").toLowerCase();
     const text = await c.req.text();
-    const raws: unknown[] = [];
+    const raws: JsonValue[] = [];
     let parseErrors = 0;
     let truncated = false;
 
-    const pushRaw = (value: unknown): void => {
+    const pushRaw = (value: JsonValue): void => {
       if (raws.length < MAX_BATCH) raws.push(value);
       else truncated = true;
     };
@@ -1036,7 +1042,7 @@ export function registerRoutes(
         }
       }
     } else {
-      let parsed: unknown;
+      let parsed: JsonValue;
 
       try {
         parsed = JSON.parse(text);
@@ -1047,16 +1053,20 @@ export function registerRoutes(
       if (Array.isArray(parsed)) {
         truncated = parsed.length > MAX_BATCH;
 
-        for (let i = 0; i < Math.min(parsed.length, MAX_BATCH); i++) pushRaw(parsed[i]);
-      } else if (
-        parsed !== null &&
-        typeof parsed === "object" &&
-        Array.isArray((parsed as { events?: unknown }).events)
-      ) {
-        const list = (parsed as { events: unknown[] }).events;
+        for (let i = 0; i < Math.min(parsed.length, MAX_BATCH); i++) {
+          const value = parsed[i];
+
+          if (value !== undefined) pushRaw(value);
+        }
+      } else if (isJsonObject(parsed) && Array.isArray(parsed.events)) {
+        const list = parsed.events;
         truncated = list.length > MAX_BATCH;
 
-        for (let i = 0; i < Math.min(list.length, MAX_BATCH); i++) pushRaw(list[i]);
+        for (let i = 0; i < Math.min(list.length, MAX_BATCH); i++) {
+          const value = list[i];
+
+          if (value !== undefined) pushRaw(value);
+        }
       } else {
         pushRaw(parsed);
       }
@@ -1111,12 +1121,16 @@ export function registerRoutes(
       );
     }
 
-    return c.json({
+    const response: IngestResponse = {
       accepted: rows.length,
       rejected: errors.length + parseErrors,
-      ...(truncated ? { truncated: true } : {}),
-      ...(errors.length > 0 ? { errors: errors.slice(0, 3) } : {}),
-    });
+    };
+
+    if (truncated) response.truncated = true;
+
+    if (errors.length > 0) response.errors = errors.slice(0, 3);
+
+    return c.json(response);
   });
 
   // Destructive and project-scoped: admins, or a member explicitly granted
@@ -1334,7 +1348,7 @@ export function registerRoutes(
         unsubscribe();
       };
 
-      const fail = (err: unknown): void => {
+      const fail = (err: Error | string): void => {
         if (closed) return;
         console.warn("[kinglet] SSE closed:", err instanceof Error ? err.message : err);
         cleanup();
@@ -1472,7 +1486,7 @@ export function registerRoutes(
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
     const type = body.type;
-    const url = typeof body.url === "string" ? body.url.trim() : "";
+    const url = isString(body.url) ? body.url.trim() : "";
 
     if (type !== "webhook" && type !== "discord" && type !== "slack") {
       return c.json({ error: "type must be webhook, discord, or slack" }, 400);
@@ -1664,7 +1678,9 @@ export function registerRoutes(
           // Internal reachability details are admin-only.
           console.warn(`[kinglet] test notification failed (${channel.type}):`, message);
 
-          return { type: channel.type, ok: false, ...(detailed ? { error: message } : {}) };
+          return detailed
+            ? { type: channel.type, ok: false, error: message }
+            : { type: channel.type, ok: false };
         }
       }),
     );

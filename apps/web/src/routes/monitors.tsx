@@ -614,7 +614,14 @@ function MonitorForm({
 
         <Field>
           <FieldLabel htmlFor="monitor-kind">condition</FieldLabel>
-          <Select value={form.kind} onValueChange={(value) => set("kind", value as MonitorKind)}>
+          <Select
+            value={form.kind}
+            onValueChange={(value) => {
+              if (value === "match" || value === "count_above" || value === "count_below") {
+                set("kind", value);
+              }
+            }}
+          >
             <SelectTrigger id="monitor-kind" className="w-full">
               <SelectValue />
             </SelectTrigger>
@@ -694,7 +701,11 @@ function MonitorForm({
               <div key={i} className="flex flex-wrap gap-2">
                 <Select
                   value={c.type}
-                  onValueChange={(value) => setChannel(i, { type: value as NotifyChannel["type"] })}
+                  onValueChange={(value) => {
+                    if (value === "webhook" || value === "discord" || value === "slack") {
+                      setChannel(i, { type: value });
+                    }
+                  }}
                 >
                   <SelectTrigger className="w-28">
                     <SelectValue />

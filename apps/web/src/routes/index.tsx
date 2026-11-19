@@ -2,6 +2,8 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchEvents, fetchHistogram, fetchServices, openStream, UnauthorizedError } from "../api";
 import { useApp } from "../app-context";
+import { isString } from "../json";
+import { isKingletEvent } from "../types";
 import type { Histogram, KingletEvent, Service } from "../types";
 import EventDrawer from "../components/EventDrawer";
 import FilterBar from "../components/FilterBar";
@@ -13,8 +15,8 @@ import { DEFAULT_WINDOW_KEY, recommendedRefreshKey, refreshMsFor, WINDOWS } from
 import type { RefreshKey } from "../time";
 
 export const Route = createFileRoute("/")({
-  validateSearch: (search: Record<string, unknown>) => ({
-    q: typeof search.q === "string" ? search.q.slice(0, 500) : undefined,
+  validateSearch: (search) => ({
+    q: isString(search.q) ? search.q.slice(0, 500) : undefined,
     from:
       Number.isFinite(Number(search.from)) && Number(search.from) > 0
         ? Number(search.from)
@@ -52,7 +54,7 @@ function Explorer() {
 
   const windowMs = customRange
     ? customRange.to - customRange.from
-    : (WINDOWS[rangeKey] ?? 60 * 60_000);
+    : (WINDOWS.get(rangeKey) ?? 60 * 60_000);
 
   const refreshMs = refreshMsFor(refreshKey);
 
@@ -99,7 +101,7 @@ function Explorer() {
       }
 
       const to = Date.now();
-      const width = WINDOWS[rangeKey] ?? 60 * 60_000;
+      const width = WINDOWS.get(rangeKey) ?? 60 * 60_000;
       void loadRange(to - width, to, silent);
     },
     [customRange, rangeKey, loadRange],
@@ -142,8 +144,10 @@ function Explorer() {
 
     const onMessage = (msg: MessageEvent): void => {
       try {
-        const event = JSON.parse(msg.data) as KingletEvent;
-        setEvents((prev) => [event, ...prev].slice(0, 5000));
+        const parsed: unknown = JSON.parse(msg.data);
+
+        if (!isKingletEvent(parsed)) return;
+        setEvents((prev) => [parsed, ...prev].slice(0, 5000));
 
         if (followRef.current && scrollRef.current) {
           scrollRef.current.scrollTo({ top: 0 });
@@ -187,7 +191,7 @@ function Explorer() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      const target = e.target as HTMLElement | null;
+      const target = e.target instanceof HTMLElement ? e.target : null;
 
       const typing =
         target instanceof HTMLInputElement ||
@@ -239,7 +243,7 @@ function Explorer() {
   // Freeze the current view into a shareable URL and copy it.
   const copyLink = useCallback(() => {
     const now = Date.now();
-    const cur = customRange ?? { from: now - (WINDOWS[rangeKey] ?? 60 * 60_000), to: now };
+    const cur = customRange ?? { from: now - (WINDOWS.get(rangeKey) ?? 60 * 60_000), to: now };
     const url = new URL(window.location.origin + "/");
     url.searchParams.set("project", String(currentProjectId));
 
@@ -263,7 +267,7 @@ function Explorer() {
           refreshKey={refreshKey}
           customRange={customRange}
           onRangeChange={(value) => {
-            const width = WINDOWS[value] ?? 60 * 60_000;
+            const width = WINDOWS.get(value) ?? 60 * 60_000;
             setRangeKey(value);
             setCustomRange(null);
 

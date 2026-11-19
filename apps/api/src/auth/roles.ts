@@ -41,8 +41,10 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   viewer: ["logs.read", "monitors.read", "projects.read"],
 };
 
+const ROLE_SET = new Set<string>(ROLES);
+
 export function isRole(value: unknown): value is Role {
-  return typeof value === "string" && (ROLES as readonly string[]).includes(value);
+  return typeof value === "string" && ROLE_SET.has(value);
 }
 
 export function permissionsForRole(role: Role): Permission[] {
@@ -53,6 +55,8 @@ export const KEY_SCOPES = ["ingest", "query"] as const;
 
 export type KeyScope = (typeof KEY_SCOPES)[number];
 
+const KEY_SCOPE_SET = new Set<string>(KEY_SCOPES);
+
 export function isKeyScope(value: unknown): value is KeyScope {
-  return typeof value === "string" && (KEY_SCOPES as readonly string[]).includes(value);
+  return typeof value === "string" && KEY_SCOPE_SET.has(value);
 }

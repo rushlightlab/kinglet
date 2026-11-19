@@ -1,4 +1,5 @@
 import { Toaster as Sonner, type ToasterProps } from "sonner";
+import type { CSSProperties } from "react";
 import {
   CircleCheckIcon,
   InfoIcon,
@@ -8,6 +9,8 @@ import {
 } from "lucide-react";
 
 const Toaster = ({ ...props }: ToasterProps) => {
+  // SAFETY: Sonner reads these keys as CSS custom properties; React's
+  // CSSProperties type does not model custom property names.
   return (
     <Sonner
       theme="dark"
@@ -25,7 +28,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           "--normal-text": "var(--popover-foreground)",
           "--normal-border": "var(--border)",
           "--border-radius": "5px",
-        } as React.CSSProperties
+        } as CSSProperties
       }
       toastOptions={{
         classNames: {

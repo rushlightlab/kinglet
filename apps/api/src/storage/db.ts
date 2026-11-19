@@ -57,10 +57,9 @@ export async function openDatabase(opts: {
     }
   }
 
-  const client = createClient({
-    url: opts.url,
-    ...(opts.authToken ? { authToken: opts.authToken } : {}),
-  });
+  const client = createClient(
+    opts.authToken ? { url: opts.url, authToken: opts.authToken } : { url: opts.url },
+  );
 
   if (isFile) {
     try {

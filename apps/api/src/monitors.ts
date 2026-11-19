@@ -3,6 +3,8 @@ import type { SQL } from "drizzle-orm";
 import { subscribeEvents } from "./bus.js";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
 import type { ParsedFilters } from "./filters.js";
+import { isJsonObject, isString } from "./json.js";
+import type { JsonValue } from "./json.js";
 import { validateQueryString } from "./query-validation.js";
 import { sendNotice, validateWebhookUrl } from "./notify.js";
 import type { AlertNotice, NotifyChannel } from "./notify.js";
@@ -66,6 +68,12 @@ export interface AlertRecord {
   notifyError: string | null;
 }
 
+const NOTIFY_STATUS_SET = new Set<string>(["sent", "partial", "failed", "none"]);
+
+function isNotifyStatus(value: string | null): value is AlertRecord["notifyStatus"] {
+  return value !== null && NOTIFY_STATUS_SET.has(value);
+}
+
 interface MonitorInput {
   name: string;
   query: string;
@@ -78,9 +86,18 @@ interface MonitorInput {
   channels: NotifyChannel[];
 }
 
-const CHANNEL_TYPES: readonly string[] = ["webhook", "discord", "slack"];
+const MONITOR_KIND_SET = new Set<string>(MONITOR_KINDS);
+const CHANNEL_TYPE_SET = new Set<string>(["webhook", "discord", "slack"]);
 
-function clampInt(raw: unknown, fallback: number, min: number, max: number): number {
+function isMonitorKind(value: unknown): value is MonitorKind {
+  return isString(value) && MONITOR_KIND_SET.has(value);
+}
+
+function isChannelType(value: unknown): value is NotifyChannel["type"] {
+  return isString(value) && CHANNEL_TYPE_SET.has(value);
+}
+
+function clampInt(raw: JsonValue | undefined, fallback: number, min: number, max: number): number {
   const n = Math.trunc(Number(raw));
 
   if (!Number.isFinite(n)) return fallback;
@@ -89,20 +106,20 @@ function clampInt(raw: unknown, fallback: number, min: number, max: number): num
 }
 
 export function parseMonitorInput(
-  raw: unknown,
+  raw: JsonValue,
   opts: { allowPrivateWebhooks: boolean },
 ): { ok: true; value: MonitorInput } | { ok: false; error: string } {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+  if (!isJsonObject(raw)) {
     return { ok: false, error: "monitor must be an object" };
   }
 
-  const o = raw as Record<string, unknown>;
+  const o = raw;
 
-  const name = typeof o.name === "string" ? o.name.trim() : "";
+  const name = isString(o.name) ? o.name.trim() : "";
 
   if (!name || name.length > 128) return { ok: false, error: "name must be 1-128 characters" };
 
-  const query = typeof o.query === "string" ? o.query.trim().slice(0, 500) : "";
+  const query = isString(o.query) ? o.query.trim().slice(0, 500) : "";
 
   if (/\n|\r/.test(query))
     return { ok: false, error: "query must be a single-line filter expression" };
@@ -110,24 +127,20 @@ export function parseMonitorInput(
 
   if (queryProblem) return { ok: false, error: queryProblem };
 
-  const kind =
-    typeof o.kind === "string" && (MONITOR_KINDS as readonly string[]).includes(o.kind)
-      ? (o.kind as MonitorKind)
-      : "count_above";
+  const kind = isMonitorKind(o.kind) ? o.kind : "count_above";
 
   const channels: NotifyChannel[] = [];
   const rawChannels = Array.isArray(o.channels) ? o.channels.slice(0, 8) : [];
 
   for (const [index, c] of rawChannels.entries()) {
-    if (c === null || typeof c !== "object") {
+    if (!isJsonObject(c)) {
       return { ok: false, error: `channel ${index + 1} must be an object` };
     }
 
-    const cc = c as Record<string, unknown>;
-    const type = cc.type;
-    const url = typeof cc.url === "string" ? cc.url.trim() : "";
+    const type = c.type;
+    const url = isString(c.url) ? c.url.trim() : "";
 
-    if (typeof type !== "string" || !CHANNEL_TYPES.includes(type)) {
+    if (!isChannelType(type)) {
       return { ok: false, error: `channel ${index + 1}: type must be webhook, discord, or slack` };
     }
 
@@ -137,7 +150,7 @@ export function parseMonitorInput(
       return { ok: false, error: `channel ${index + 1}: ${urlError}` };
     }
 
-    channels.push({ type: type as NotifyChannel["type"], url });
+    channels.push({ type, url });
   }
 
   return {
@@ -160,7 +173,16 @@ function parseChannels(raw: string): NotifyChannel[] {
   try {
     const parsed: unknown = JSON.parse(raw);
 
-    return Array.isArray(parsed) ? (parsed as NotifyChannel[]) : [];
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed.flatMap((value): NotifyChannel[] => {
+      if (!isJsonObject(value)) return [];
+
+      const type = value.type;
+      const url = value.url;
+
+      return isChannelType(type) && isString(url) ? [{ type, url }] : [];
+    });
   } catch {
     return [];
   }
@@ -172,9 +194,7 @@ function rowToMonitor(row: typeof schema.monitors.$inferSelect): Monitor {
     projectId: row.projectId,
     name: row.name,
     query: row.query,
-    kind: (MONITOR_KINDS as readonly string[]).includes(row.kind)
-      ? (row.kind as MonitorKind)
-      : "count_above",
+    kind: isMonitorKind(row.kind) ? row.kind : "count_above",
     threshold: Number(row.threshold),
     windowMs: Number(row.windowMs),
     intervalMs: Number(row.intervalMs),
@@ -221,7 +241,7 @@ export type MonitorResult = { ok: true; monitor: Monitor } | { ok: false; error:
 export async function createMonitorFromRaw(
   storage: Storage,
   projectId: string,
-  raw: unknown,
+  raw: JsonValue,
   opts: { allowPrivateWebhooks: boolean },
 ): Promise<MonitorResult> {
   const input = parseMonitorInput(raw, opts);
@@ -258,7 +278,7 @@ export async function updateMonitorFromRaw(
   storage: Storage,
   id: string,
   projectId: string,
-  raw: unknown,
+  raw: JsonValue,
   opts: { allowPrivateWebhooks: boolean },
 ): Promise<MonitorResult | { ok: false; error: string; notFound: true }> {
   const input = parseMonitorInput(raw, opts);
@@ -342,7 +362,7 @@ export async function listAlerts(
     sampleMessage: row.sampleMessage ?? null,
     firedAt: Number(row.firedAt),
     resolvedAt: row.resolvedAt === null ? null : Number(row.resolvedAt),
-    notifyStatus: (row.notifyStatus as AlertRecord["notifyStatus"]) ?? null,
+    notifyStatus: isNotifyStatus(row.notifyStatus) ? row.notifyStatus : null,
     notifyError: row.notifyError ?? null,
   }));
 }

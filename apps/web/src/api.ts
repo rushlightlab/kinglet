@@ -1,3 +1,4 @@
+import { isJsonObject, isString } from "./json";
 import type {
   AlertRecord,
   ApiKeyInfo,
@@ -60,13 +61,15 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
     if (contentType.includes("application/json")) {
       try {
-        const body = (await res.json()) as { error?: string; requestId?: string };
+        const body: unknown = await res.json();
 
-        if (body.error) message = body.error;
+        if (isJsonObject(body)) {
+          if (isString(body.error)) message = body.error;
 
-        if (body.requestId) requestId = body.requestId;
+          if (isString(body.requestId)) requestId = body.requestId;
+        }
       } catch {
-        // body wasn't valid JSON — keep the status message
+        // body wasn't valid JSON - keep the status message
       }
     } else if (res.status >= 500) {
       message =
@@ -80,6 +83,8 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error("the Kinglet API returned a non-JSON response (likely a proxy error page)");
   }
 
+  // SAFETY: the Kinglet server owns this response contract; `T` is the
+  // caller's declaration of the endpoint payload and the API version is pinned.
   return (await res.json()) as T;
 }
 
