@@ -88,7 +88,12 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className="gap-2 px-2" aria-label="Account menu">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2 rounded-[5px] border-white/[0.08] bg-ink-900 px-2 hover:bg-ink-900"
+              aria-label="Account menu"
+            >
               <Avatar size="sm" className="border border-white/[0.1]">
                 <AvatarFallback className="bg-ink-800 font-mono text-[10px] text-gold">
                   {initials}
