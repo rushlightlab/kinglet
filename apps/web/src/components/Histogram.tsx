@@ -2,6 +2,7 @@ import { useRef } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { LEVEL_COLORS } from "../types";
 import type { Histogram } from "../types";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
  * Volume-by-level histogram. Drag across it to zoom into a time range.
@@ -46,30 +47,38 @@ export default function HistogramChart({ data, onSelectRange }: {
       onMouseDown={onMouseDown}
       onMouseUp={onMouseUp}
       className="flex h-20 cursor-col-resize items-stretch gap-px border-b border-white/[0.08] px-2 py-1"
-      title="Drag across the histogram to zoom into that time range"
     >
       {data.points.map((point, i) => {
         const total = totals[i] ?? 0;
         const fill = (total / max) * 100;
-        const tooltip = `${new Date(point.ts).toLocaleTimeString()} · ${total} events`;
         return (
-          <div
-            key={point.ts}
-            title={tooltip}
-            className="flex h-full w-full flex-col-reverse justify-start rounded-t-[2px]"
-            style={{ opacity: total === 0 ? 0.1 : 1 }}
-          >
-            {point.counts.map((count, level) => {
-              if (count === 0) return null;
-              const share = (count / total) * fill;
-              return (
-                <div
-                  key={level}
-                  style={{ height: `${share}%`, backgroundColor: LEVEL_COLORS[level] ?? "#6b756c" }}
-                />
-              );
-            })}
-          </div>
+          <Tooltip key={point.ts}>
+            <TooltipTrigger asChild>
+              <div
+                className="flex h-full w-full flex-col-reverse justify-start rounded-t-[2px]"
+                style={{ opacity: total === 0 ? 0.1 : 1 }}
+              >
+                {point.counts.map((count, level) => {
+                  if (count === 0) return null;
+                  const share = (count / total) * fill;
+                  return (
+                    <div
+                      key={level}
+                      style={{ height: `${share}%`, backgroundColor: LEVEL_COLORS[level] ?? "#6b756c" }}
+                    />
+                  );
+                })}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              <span className="flex flex-col gap-0.5">
+                <span>{new Date(point.ts).toLocaleTimeString()}</span>
+                <span className="text-mist-faint">
+                  {total.toLocaleString()} event{total === 1 ? "" : "s"}
+                </span>
+              </span>
+            </TooltipContent>
+          </Tooltip>
         );
       })}
     </div>

@@ -13,7 +13,7 @@ import "./index.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <TooltipProvider>
+    <TooltipProvider delayDuration={500} skipDelayDuration={200}>
       <RouterProvider router={router} />
       <Toaster position="bottom-right" richColors closeButton />
     </TooltipProvider>

@@ -4,6 +4,7 @@ import type { RefObject } from "react";
 import type { KingletEvent } from "../types";
 import Crown from "./Crown";
 import { LevelBadge } from "./LevelBadge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface LogTableProps {
   events: KingletEvent[];
@@ -66,9 +67,14 @@ export default function LogTable({ events, scrollRef, onSelect, selectedId, curs
               }`}
               style={{ height: item.size, transform: `translateY(${item.start}px)` }}
             >
-              <span className="w-20 shrink-0 text-mist-faint" title={new Date(event.ts).toISOString()}>
-                {formatTime(event.ts)}
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="w-20 shrink-0 text-mist-faint">
+                    {formatTime(event.ts)}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>{new Date(event.ts).toISOString()}</TooltipContent>
+              </Tooltip>
               <LevelBadge level={event.level} />
               <span className="w-24 shrink-0 truncate text-mist-dim">{event.service ?? "—"}</span>
               <span className="truncate text-mist">{event.message}</span>

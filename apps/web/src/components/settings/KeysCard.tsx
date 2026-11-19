@@ -56,6 +56,7 @@ import {
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -216,12 +217,14 @@ export default function KeysCard({
                 <TableRow key={key.id}>
                   <TableCell className="text-mist">{key.name}</TableCell>
                   <TableCell>
-                    <span
-                      className="inline-flex items-center rounded-[3px] border border-white/[0.08] bg-white/[0.025] px-1.5 py-0.5 font-mono text-[10px] text-mist-dim"
-                      title={`key:${key.id}`}
-                    >
-                      {key.prefix}
-                    </span>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex items-center rounded-[3px] border border-white/[0.08] bg-white/[0.025] px-1.5 py-0.5 font-mono text-[10px] text-mist-dim">
+                          {key.prefix}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent className="font-mono">key:{key.id}</TooltipContent>
+                    </Tooltip>
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">

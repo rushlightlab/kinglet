@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   MAX_RANGE_MS,
   REFRESH_OPTIONS,
@@ -137,35 +138,39 @@ export default function LogControls(props: LogControlsProps) {
       className="flex h-7 items-stretch overflow-hidden rounded-[5px] border border-white/[0.09] bg-ink-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
     >
       <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className={`${segmentClass} ${
-              props.customRange
-                ? "text-gold hover:bg-gold/[0.06]"
-                : "text-mist-dim hover:bg-white/[0.025] hover:text-mist"
-            } data-[state=open]:bg-white/[0.03] data-[state=open]:text-mist`}
-            title={
-              props.customRange
-                ? `Custom range: ${customRangeTitle(props.customRange)}`
-                : `Time window: ${windowLabel(props.rangeKey)}`
-            }
-          >
-            <Clock3Icon
-              className={`size-3 ${props.customRange ? "text-gold/70" : "text-mist-faint"}`}
-            />
-            <span className="whitespace-nowrap">
-              {props.customRange ? "custom" : windowLabel(props.rangeKey)}
-            </span>
-            {props.refreshKey !== "off" && (
-              <span className="flex items-center gap-0.5 text-[9px] text-gold/60">
-                <RefreshCwIcon className="size-2.5" />
-                {refreshLabel(props.refreshKey)}
-              </span>
-            )}
-            <ChevronDownIcon className="size-3 text-mist-faint" />
-          </button>
-        </PopoverTrigger>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className={`${segmentClass} ${
+                  props.customRange
+                    ? "text-gold hover:bg-gold/[0.06]"
+                    : "text-mist-dim hover:bg-white/[0.025] hover:text-mist"
+                } data-[state=open]:bg-white/[0.03] data-[state=open]:text-mist`}
+              >
+                <Clock3Icon
+                  className={`size-3 ${props.customRange ? "text-gold/70" : "text-mist-faint"}`}
+                />
+                <span className="whitespace-nowrap">
+                  {props.customRange ? "custom" : windowLabel(props.rangeKey)}
+                </span>
+                {props.refreshKey !== "off" && (
+                  <span className="flex items-center gap-0.5 text-[9px] text-gold/60">
+                    <RefreshCwIcon className="size-2.5" />
+                    {refreshLabel(props.refreshKey)}
+                  </span>
+                )}
+                <ChevronDownIcon className="size-3 text-mist-faint" />
+              </button>
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent>
+            {props.customRange
+              ? `Custom range: ${customRangeTitle(props.customRange)}`
+              : `Time window: ${windowLabel(props.rangeKey)}`}
+          </TooltipContent>
+        </Tooltip>
         <PopoverContent align="start" className="w-[19rem] p-0">
           <div className="p-3">
             <p className="text-[11px] font-medium text-mist">Quick range</p>
@@ -267,78 +272,100 @@ export default function LogControls(props: LogControlsProps) {
 
       <span aria-hidden="true" className="my-1 w-px bg-white/[0.07]" />
 
-      <button
-        type="button"
-        role="switch"
-        aria-checked={props.live}
-        onClick={props.onToggleLive}
-        className={`${segmentClass} ${
-          props.live
-            ? "bg-gold/[0.07] text-gold"
-            : "text-mist-dim hover:bg-white/[0.025] hover:text-mist"
-        }`}
-        title={
-          props.live
-            ? "Pause the live tail (l). New events stop arriving over SSE."
-            : "Resume the live tail (l). New events appear as they arrive."
-        }
-      >
-        {props.live ? (
-          <span className="k-live-dot" aria-hidden="true" />
-        ) : (
-          <span
-            aria-hidden="true"
-            className="size-[5px] rounded-full border border-mist-faint"
-          />
-        )}
-        live
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={props.live}
+            onClick={props.onToggleLive}
+            className={`${segmentClass} ${
+              props.live
+                ? "bg-gold/[0.07] text-gold"
+                : "text-mist-dim hover:bg-white/[0.025] hover:text-mist"
+            }`}
+          >
+            {props.live ? (
+              <span className="k-live-dot" aria-hidden="true" />
+            ) : (
+              <span
+                aria-hidden="true"
+                className="size-[5px] rounded-full border border-mist-faint"
+              />
+            )}
+            live
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>
+          {props.live
+            ? "Pause the live tail (l). New events stop arriving."
+            : "Resume the live tail (l). New events appear as they arrive."}
+        </TooltipContent>
+      </Tooltip>
 
       <span aria-hidden="true" className="my-1 w-px bg-white/[0.07]" />
 
-      <button
-        type="button"
-        role="switch"
-        aria-checked={props.follow}
-        onClick={props.onToggleFollow}
-        disabled={!props.live}
-        className={`${segmentClass} ${
-          props.follow && props.live
-            ? "text-gold hover:bg-gold/[0.04]"
-            : "text-mist-dim hover:bg-white/[0.025] hover:text-mist"
-        } disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-mist-dim`}
-        title={
-          props.live
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className="flex rounded-[4px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gold/40"
+            tabIndex={props.live ? -1 : 0}
+          >
+            <button
+              type="button"
+              role="switch"
+              aria-checked={props.follow}
+              onClick={props.onToggleFollow}
+              disabled={!props.live}
+              className={`${segmentClass} ${
+                props.follow && props.live
+                  ? "text-gold hover:bg-gold/[0.04]"
+                  : "text-mist-dim hover:bg-white/[0.025] hover:text-mist"
+              } disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-mist-dim`}
+            >
+              <ArrowDownToLineIcon className="size-3" />
+              follow
+            </button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          {props.live
             ? props.follow
               ? "Stop staying pinned to the newest event (f)"
               : "Stay pinned to the newest event (f)"
-            : "Live tail must be running to follow"
-        }
-      >
-        <ArrowDownToLineIcon className="size-3" />
-        follow
-      </button>
+            : "Live tail must be running to follow"}
+        </TooltipContent>
+      </Tooltip>
 
       <span aria-hidden="true" className="my-1 w-px bg-white/[0.07]" />
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            disabled={props.services.length === 0}
-            className={`${segmentClass} text-mist-faint hover:bg-white/[0.025] hover:text-mist data-[state=open]:bg-white/[0.03] data-[state=open]:text-mist disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-mist-faint`}
-            title={
-              props.services.length > 0
-                ? "Filter by a service seen in this project"
-                : "No services have reported events yet"
-            }
-          >
-            <ActivityIcon className="size-3" />
-            <span className={props.services.length > 0 ? "text-mist" : undefined}>
-              {props.services.length}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className="flex rounded-[4px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gold/40"
+              tabIndex={props.services.length === 0 ? 0 : -1}
+            >
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  disabled={props.services.length === 0}
+                  className={`${segmentClass} text-mist-faint hover:bg-white/[0.025] hover:text-mist data-[state=open]:bg-white/[0.03] data-[state=open]:text-mist disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-mist-faint`}
+                >
+                  <ActivityIcon className="size-3" />
+                  <span className={props.services.length > 0 ? "text-mist" : undefined}>
+                    {props.services.length}
+                  </span>
+                  services
+                </button>
+              </DropdownMenuTrigger>
             </span>
-            services
-          </button>
-        </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent>
+            {props.services.length > 0
+              ? "Filter by a service seen in this project"
+              : "No services have reported events yet"}
+          </TooltipContent>
+        </Tooltip>
         {props.services.length > 0 && (
           <DropdownMenuContent align="end" className="min-w-52">
             <DropdownMenuLabel>Filter by service</DropdownMenuLabel>

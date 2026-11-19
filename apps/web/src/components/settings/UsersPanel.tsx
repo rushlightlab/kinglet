@@ -56,6 +56,7 @@ import {
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -267,64 +268,83 @@ export default function UsersPanel() {
                     )}
                   </TableCell>
                   <TableCell className="text-right">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          disabled={u.id === user.id}
-                          aria-label={`Actions for ${u.email}`}
-                          title={
-                            u.id === user.id
-                              ? "Use Account settings to change your own account"
-                              : undefined
-                          }
-                        >
-                          <MoreHorizontalIcon />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>User actions</DropdownMenuLabel>
-                        <DropdownMenuGroup>
-                          <DropdownMenuItem
-                            disabled={u.role === "admin"}
-                            onSelect={() => {
-                              setRoleTarget(u);
-                              setRoleValue(u.role === "viewer" ? "viewer" : "member");
-                            }}
+                    {(() => {
+                      const isSelf = u.id === user.id;
+                      const trigger = (
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            disabled={isSelf}
+                            aria-label={`Actions for ${u.email}`}
                           >
-                            <UserCogIcon />
-                            Change role
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={u.id === user.id}
-                            onSelect={() => setPendingUser({ type: "reset", user: u })}
-                          >
-                            <KeyRoundIcon />
-                            Reset password
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={u.role === "admin"}
-                            onSelect={() => {
-                              if (u.disabled) void setDisabled(u, false);
-                              else setPendingUser({ type: "disable", user: u });
-                            }}
-                          >
-                            {u.disabled ? <CircleCheckIcon /> : <BanIcon />}
-                            {u.disabled ? "Enable user" : "Disable user"}
-                          </DropdownMenuItem>
-                        </DropdownMenuGroup>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          variant="destructive"
-                          disabled={u.role === "admin"}
-                          onSelect={() => setPendingUser({ type: "delete", user: u })}
-                        >
-                          <Trash2Icon />
-                          Delete user
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                            <MoreHorizontalIcon />
+                          </Button>
+                        </DropdownMenuTrigger>
+                      );
+                      return (
+                        <DropdownMenu>
+                          {isSelf ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span
+                                  tabIndex={0}
+                                  className="inline-flex rounded-[4px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gold/40"
+                                >
+                                  {trigger}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                Use Account settings to change your own account
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            trigger
+                          )}
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuLabel>User actions</DropdownMenuLabel>
+                            <DropdownMenuGroup>
+                              <DropdownMenuItem
+                                disabled={u.role === "admin"}
+                                onSelect={() => {
+                                  setRoleTarget(u);
+                                  setRoleValue(u.role === "viewer" ? "viewer" : "member");
+                                }}
+                              >
+                                <UserCogIcon />
+                                Change role
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                disabled={isSelf}
+                                onSelect={() => setPendingUser({ type: "reset", user: u })}
+                              >
+                                <KeyRoundIcon />
+                                Reset password
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                disabled={u.role === "admin"}
+                                onSelect={() => {
+                                  if (u.disabled) void setDisabled(u, false);
+                                  else setPendingUser({ type: "disable", user: u });
+                                }}
+                              >
+                                {u.disabled ? <CircleCheckIcon /> : <BanIcon />}
+                                {u.disabled ? "Enable user" : "Disable user"}
+                              </DropdownMenuItem>
+                            </DropdownMenuGroup>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant="destructive"
+                              disabled={u.role === "admin"}
+                              onSelect={() => setPendingUser({ type: "delete", user: u })}
+                            >
+                              <Trash2Icon />
+                              Delete user
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      );
+                    })()}
                   </TableCell>
                 </TableRow>
               ))}

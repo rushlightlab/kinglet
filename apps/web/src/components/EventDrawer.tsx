@@ -2,6 +2,7 @@ import type { KingletEvent } from "../types";
 import { LevelBadge } from "./LevelBadge";
 import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import CopyButton from "./CopyButton";
 
 export default function EventDrawer({ event, onClose }: { event: KingletEvent; onClose: () => void }) {
@@ -9,9 +10,14 @@ export default function EventDrawer({ event, onClose }: { event: KingletEvent; o
     <aside className="absolute right-0 top-0 z-10 flex h-full w-[26rem] flex-col overflow-y-auto border-l border-white/[0.08] bg-ink-900 p-4">
       <div className="flex items-center justify-between">
         <LevelBadge level={event.level} />
-        <Button variant="chip" size="icon-xs" onClick={onClose} title="Close (Esc)" aria-label="Close">
-          <XIcon />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="chip" size="icon-xs" onClick={onClose} aria-label="Close">
+              <XIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Close (Esc)</TooltipContent>
+        </Tooltip>
       </div>
       <dl className="mt-4 flex flex-col gap-2 font-mono text-xs">
         <Row label="time" value={new Date(event.ts).toISOString()} />

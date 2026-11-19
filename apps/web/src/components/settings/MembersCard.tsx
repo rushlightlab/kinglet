@@ -34,6 +34,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -148,19 +149,28 @@ export default function MembersCard({
                     <Badge variant="outline">{m.role}</Badge>
                   </TableCell>
                   <TableCell>
-                    <Switch
-                      checked={m.canClearLogs}
-                      onCheckedChange={(checked) => void setMemberClearLogs(m, checked)}
-                      disabled={m.role === "viewer"}
-                      title={
-                        m.role === "viewer"
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span
+                          className="inline-flex rounded-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gold/40"
+                          tabIndex={m.role === "viewer" ? 0 : -1}
+                        >
+                          <Switch
+                            checked={m.canClearLogs}
+                            onCheckedChange={(checked) => void setMemberClearLogs(m, checked)}
+                            disabled={m.role === "viewer"}
+                            aria-label={`Allow ${m.email} to clear logs`}
+                          />
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {m.role === "viewer"
                           ? "Viewers cannot be granted clear logs"
                           : m.canClearLogs
                             ? "Revoke clear logs"
-                            : "Allow clear logs"
-                      }
-                      aria-label={`Allow ${m.email} to clear logs`}
-                    />
+                            : "Allow clear logs"}
+                      </TooltipContent>
+                    </Tooltip>
                   </TableCell>
                   <TableCell className="text-right">
                     <AlertDialog>

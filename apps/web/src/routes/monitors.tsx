@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { PencilIcon, PlusIcon, RefreshCwIcon, SendIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -197,15 +198,16 @@ function MonitorsPage() {
           <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
             {monitors.length} monitor{monitors.length === 1 ? "" : "s"}
           </span>
-          <Button
-            size="sm"
-            disabled={!canWrite}
-            title={canWrite ? undefined : "Requires the monitors.write permission"}
-            onClick={() => setEditing("new")}
-          >
-            <PlusIcon data-icon="inline-start" />
-            new monitor
-          </Button>
+          <WriteGuard allowed={canWrite}>
+            <Button
+              size="sm"
+              disabled={!canWrite}
+              onClick={() => setEditing("new")}
+            >
+              <PlusIcon data-icon="inline-start" />
+              new monitor
+            </Button>
+          </WriteGuard>
         </div>
 
         <div className="flex flex-col gap-3">
@@ -229,19 +231,14 @@ function MonitorsPage() {
                     </div>
                     <CardDescription>{describe(m)}</CardDescription>
                   </div>
-                  <Switch
-                    checked={m.enabled}
-                    onCheckedChange={() => void toggleEnabled(m)}
-                    disabled={!canWrite}
-                    title={
-                      canWrite
-                        ? m.enabled
-                          ? "Pause monitor"
-                          : "Enable monitor"
-                        : "Requires the monitors.write permission"
-                    }
-                    aria-label={m.enabled ? "Pause monitor" : "Enable monitor"}
-                  />
+                  <WriteGuard allowed={canWrite}>
+                    <Switch
+                      checked={m.enabled}
+                      onCheckedChange={() => void toggleEnabled(m)}
+                      disabled={!canWrite}
+                      aria-label={m.enabled ? "Pause monitor" : "Enable monitor"}
+                    />
+                  </WriteGuard>
                 </div>
               </CardHeader>
               <CardContent className="flex flex-col gap-2">
@@ -257,39 +254,42 @@ function MonitorsPage() {
                 </p>
               </CardContent>
               <CardFooter className="gap-2">
-                <Button
-                  variant="chip"
-                  size="xs"
-                  onClick={() => void runTest(m)}
-                  disabled={!canWrite}
-                  title={canWrite ? undefined : "Requires the monitors.write permission"}
-                >
-                  <SendIcon data-icon="inline-start" />
-                  test
-                </Button>
-                <Button
-                  variant="chip"
-                  size="xs"
-                  onClick={() => setEditing(m.id)}
-                  disabled={!canWrite}
-                  title={canWrite ? undefined : "Requires the monitors.write permission"}
-                >
-                  <PencilIcon data-icon="inline-start" />
-                  edit
-                </Button>
+                <WriteGuard allowed={canWrite}>
+                  <Button
+                    variant="chip"
+                    size="xs"
+                    onClick={() => void runTest(m)}
+                    disabled={!canWrite}
+                  >
+                    <SendIcon data-icon="inline-start" />
+                    test
+                  </Button>
+                </WriteGuard>
+                <WriteGuard allowed={canWrite}>
+                  <Button
+                    variant="chip"
+                    size="xs"
+                    onClick={() => setEditing(m.id)}
+                    disabled={!canWrite}
+                  >
+                    <PencilIcon data-icon="inline-start" />
+                    edit
+                  </Button>
+                </WriteGuard>
                 <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button
-                      variant="destructive"
-                      size="xs"
-                      className="ml-auto"
-                      disabled={!canWrite}
-                      title={canWrite ? undefined : "Requires the monitors.write permission"}
-                    >
-                      <Trash2Icon data-icon="inline-start" />
-                      delete
-                    </Button>
-                  </AlertDialogTrigger>
+                  <WriteGuard allowed={canWrite}>
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        variant="destructive"
+                        size="xs"
+                        className="ml-auto"
+                        disabled={!canWrite}
+                      >
+                        <Trash2Icon data-icon="inline-start" />
+                        delete
+                      </Button>
+                    </AlertDialogTrigger>
+                  </WriteGuard>
                   <AlertDialogContent>
                     <AlertDialogHeader>
                       <AlertDialogTitle>Delete {m.name}?</AlertDialogTitle>
@@ -317,16 +317,17 @@ function MonitorsPage() {
                 Watch for <span className="text-gold">level:fatal</span>, spike rates, or a cron
                 that went quiet.
               </p>
-              <Button
-                size="sm"
-                className="mt-1"
-                disabled={!canWrite}
-                title={canWrite ? undefined : "Requires the monitors.write permission"}
-                onClick={() => setEditing("new")}
-              >
-                <PlusIcon data-icon="inline-start" />
-                Create your first monitor
-              </Button>
+              <WriteGuard allowed={canWrite}>
+                <Button
+                  size="sm"
+                  className="mt-1"
+                  disabled={!canWrite}
+                  onClick={() => setEditing("new")}
+                >
+                  <PlusIcon data-icon="inline-start" />
+                  Create your first monitor
+                </Button>
+              </WriteGuard>
             </Card>
           )}
         </div>
@@ -362,28 +363,36 @@ function MonitorsPage() {
                       <TableCell className="max-w-36 truncate text-mist-dim">
                         {a.monitorName ?? "monitor"}
                       </TableCell>
-                      <TableCell
-                        className="max-w-[24rem] truncate text-mist"
-                        title={a.summary}
-                      >
-                        {a.summary}
+                      <TableCell className="max-w-[24rem] text-mist">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="block truncate">{a.summary}</span>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-sm">{a.summary}</TooltipContent>
+                        </Tooltip>
                       </TableCell>
                       <TableCell className="hidden sm:table-cell">
                         {a.state === "fired" &&
                         a.notifyStatus &&
                         a.notifyStatus !== "none" ? (
-                          <Badge
-                            variant={
-                              a.notifyStatus === "sent"
-                                ? "ghost"
-                                : a.notifyStatus === "partial"
-                                  ? "outline"
-                                  : "destructive"
-                            }
-                            title={a.notifyError ?? "Notification delivery"}
-                          >
-                            {a.notifyStatus}
-                          </Badge>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Badge
+                                variant={
+                                  a.notifyStatus === "sent"
+                                    ? "ghost"
+                                    : a.notifyStatus === "partial"
+                                      ? "outline"
+                                      : "destructive"
+                                }
+                              >
+                                {a.notifyStatus}
+                              </Badge>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              {a.notifyError ?? "Notification delivery"}
+                            </TooltipContent>
+                          </Tooltip>
                         ) : (
                           <span className="text-[10px] text-mist-faint">—</span>
                         )}
@@ -447,6 +456,23 @@ interface FormState {
   intervalSec: number;
   cooldownMin: number;
   channels: NotifyChannel[];
+}
+
+function WriteGuard({ allowed, children }: { allowed: boolean; children: ReactNode }) {
+  if (allowed) return <>{children}</>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          className="inline-flex rounded-[4px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gold/40"
+        >
+          {children}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Requires the monitors.write permission</TooltipContent>
+    </Tooltip>
+  );
 }
 
 function MonitorForm({
@@ -680,22 +706,26 @@ function MonitorForm({
                   spellCheck={false}
                   className="min-w-0 flex-1"
                 />
-                <Button
-                  type="button"
-                  variant="chip"
-                  size="sm"
-                  className="h-9"
-                  disabled={testingChannel !== null || !c.url.trim()}
-                  onClick={() => void testRow(c, i)}
-                  title="Send a test notification to this channel"
-                >
-                  {testingChannel === i ? (
-                    <Spinner />
-                  ) : (
-                    <SendIcon data-icon="inline-start" />
-                  )}
-                  {testingChannel === i ? "sending" : "test"}
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="chip"
+                      size="sm"
+                      className="h-9"
+                      disabled={testingChannel !== null || !c.url.trim()}
+                      onClick={() => void testRow(c, i)}
+                    >
+                      {testingChannel === i ? (
+                        <Spinner />
+                      ) : (
+                        <SendIcon data-icon="inline-start" />
+                      )}
+                      {testingChannel === i ? "sending" : "test"}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Send a test notification to this channel</TooltipContent>
+                </Tooltip>
                 <Button
                   type="button"
                   variant="chip"

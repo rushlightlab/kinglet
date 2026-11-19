@@ -22,6 +22,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export function ProjectRenameCard({ project }: { project: Project }) {
   const { refreshProjects } = useApp();
@@ -125,17 +126,30 @@ export function ProjectDangerCard({ project }: { project: Project }) {
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-3">
           <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={isOnlyProject || deleting}
-                title={isOnlyProject ? "The only project cannot be deleted" : undefined}
-              >
-                <Trash2Icon data-icon="inline-start" />
-                delete project
-              </Button>
-            </AlertDialogTrigger>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="inline-flex rounded-[4px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gold/40"
+                  tabIndex={isOnlyProject ? 0 : -1}
+                >
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      disabled={isOnlyProject || deleting}
+                    >
+                      <Trash2Icon data-icon="inline-start" />
+                      delete project
+                    </Button>
+                  </AlertDialogTrigger>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                {isOnlyProject
+                  ? "The only project cannot be deleted"
+                  : "Delete this project"}
+              </TooltipContent>
+            </Tooltip>
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>Delete {project.name}?</AlertDialogTitle>
