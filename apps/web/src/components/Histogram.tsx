@@ -45,8 +45,13 @@ export default function HistogramChart({
   };
 
   return (
+    // Drag-to-zoom is a pointer gesture; the filter bar has keyboard-accessible
+    // start/end inputs for the same action.
+    // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
     <div
       ref={ref}
+      role="application"
+      aria-label="Select a time range"
       onMouseDown={onMouseDown}
       onMouseUp={onMouseUp}
       className="flex h-20 cursor-col-resize items-stretch gap-px border-b border-white/[0.08] px-2 py-1"

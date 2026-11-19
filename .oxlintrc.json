@@ -12,20 +12,33 @@
   },
   "rules": {
     "no-console": "off",
-    "no-control-regex": "off",
+    "no-underscore-dangle": ["error", { "allow": ["__dirname", "__filename"] }],
     "react/react-in-jsx-scope": "off",
     "react/set-state-in-effect": "off",
     "react/refs": "off",
     "react/purity": "off",
     "react/incompatible-library": "off",
-    "import/no-unassigned-import": "off",
+    "jsx-a11y/prefer-tag-over-role": "off",
+    "jsx-a11y/no-noninteractive-tabindex": "off",
     "jsx-a11y/no-static-element-interactions": "warn",
     "jsx-a11y/click-events-have-key-events": "warn",
-    "jsx-a11y/prefer-tag-over-role": "warn",
     "jsx-a11y/no-autofocus": "warn",
-    "jsx-a11y/label-has-associated-control": "warn",
-    "jsx-a11y/no-noninteractive-tabindex": "warn"
+    "jsx-a11y/label-has-associated-control": "warn"
   },
+  "overrides": [
+    {
+      "files": ["apps/web/**", "packages/**"],
+      "rules": {
+        "no-console": "warn"
+      }
+    },
+    {
+      "files": ["apps/web/src/main.tsx"],
+      "rules": {
+        "import/no-unassigned-import": "off"
+      }
+    }
+  ],
   "ignorePatterns": [
     "**/node_modules/**",
     "**/dist/**",

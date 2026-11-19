@@ -64,7 +64,6 @@ export default function Login({
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                autoFocus
                 autoComplete="username"
                 placeholder="admin@kinglet.local"
               />

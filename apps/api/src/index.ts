@@ -133,8 +133,8 @@ async function main(): Promise<void> {
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
         "connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     );
-    const path = c.req.path;
-    if (path.startsWith("/v1/") || path.startsWith("/api/auth/")) {
+    const requestPath = c.req.path;
+    if (requestPath.startsWith("/v1/") || requestPath.startsWith("/api/auth/")) {
       c.header("cache-control", "no-store");
     }
   });
@@ -193,6 +193,8 @@ async function main(): Promise<void> {
     console.error(`  ✖ Kinglet could not listen on port ${config.port}: ${err.message}`);
     console.error("    Is another process using that port? Set KINGLET_PORT to change it.");
     console.error("");
+    // Fire-and-forget cleanup: the process exits once the store closes.
+    // oxlint-disable-next-line promise/no-promise-in-callback
     void storage.close().finally(() => process.exit(1));
   });
   startRetentionJob(storage, config.retentionDays, config.alertRetentionDays);
@@ -221,13 +223,16 @@ function isRemoteDbPath(dbPath: string): boolean {
   return /^(libsql:\/\/|https?:\/\/|wss?:\/\/)/i.test(dbPath);
 }
 
+function apiNotFound(
+  c: { json: (body: unknown, status: 404) => Response },
+  pathname: string,
+): Response {
+  return c.json({ error: "not found", path: pathname }, 404);
+}
+
 /** Serves the built web UI from ../web/dist (single-container deploy). */
 function registerStaticUi(app: Hono<AppEnv>): void {
   const webDist = path.resolve(__dirname, "../../web/dist");
-  const apiNotFound = (
-    c: { json: (body: unknown, status: 404) => Response },
-    pathname: string,
-  ): Response => c.json({ error: "not found", path: pathname }, 404);
 
   if (!fs.existsSync(webDist)) {
     app.get("*", (c) => {

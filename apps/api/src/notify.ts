@@ -313,6 +313,8 @@ function codeBlock(text: string): string {
 function notificationText(value: string, max: number): string {
   const flattened = value
     .replace(/[\r\n]+/g, " ")
+    // Control characters are stripped from untrusted event text.
+    // oxlint-disable-next-line no-control-regex
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
     .replace(/@everyone/gi, "@\u200beveryone")
     .replace(/@here/gi, "@\u200bhere")

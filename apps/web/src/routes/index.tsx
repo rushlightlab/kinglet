@@ -130,7 +130,7 @@ function Explorer() {
   useEffect(() => {
     if (!live) return;
     const es = openStream(currentProjectId, q);
-    es.onmessage = (msg) => {
+    const onMessage = (msg: MessageEvent): void => {
       try {
         const event = JSON.parse(msg.data) as KingletEvent;
         setEvents((prev) => [event, ...prev].slice(0, 5000));
@@ -141,7 +141,11 @@ function Explorer() {
         // ignore malformed frames
       }
     };
-    return () => es.close();
+    es.addEventListener("message", onMessage);
+    return () => {
+      es.removeEventListener("message", onMessage);
+      es.close();
+    };
   }, [live, q, currentProjectId]);
 
   // Keep the filter in the URL (without clobbering a shared range).

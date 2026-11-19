@@ -82,10 +82,14 @@ export function windowLabel(key: string): string {
   return WINDOW_PRESETS.find((preset) => preset.key === key)?.label ?? `last ${key}`;
 }
 
+/** Zero-pad a number for `datetime-local` formatting. */
+export function pad(n: number, width = 2): string {
+  return String(n).padStart(width, "0");
+}
+
 /** `datetime-local` expects `YYYY-MM-DDTHH:mm` in local time. */
 export function toDatetimeLocal(ts: number): string {
   const date = new Date(ts);
-  const pad = (n: number): string => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
     date.getHours(),
   )}:${pad(date.getMinutes())}`;

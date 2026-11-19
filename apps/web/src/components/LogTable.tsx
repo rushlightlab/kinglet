@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { RefObject } from "react";
 import type { KingletEvent } from "../types";
+import { pad } from "../time";
 import Crown from "./Crown";
 import { LevelBadge } from "./LevelBadge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -62,6 +63,15 @@ export default function LogTable({
             <div
               key={event.id}
               onClick={() => onSelect(event)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(event_) => {
+                if (event_.key === "Enter" || event_.key === " ") {
+                  event_.preventDefault();
+                  onSelect(event);
+                }
+              }}
+              aria-label={`Open event: ${event.message.slice(0, 80)}`}
               className={`absolute left-0 top-0 flex w-full cursor-pointer items-center gap-3 border-b border-l-2 border-b-white/[0.04] px-4 ${
                 isCursor
                   ? "border-l-gold bg-ink-800"
@@ -90,6 +100,5 @@ export default function LogTable({
 
 function formatTime(ts: number): string {
   const d = new Date(ts);
-  const pad = (n: number, w = 2): string => String(n).padStart(w, "0");
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
 }

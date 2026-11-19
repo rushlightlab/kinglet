@@ -575,7 +575,6 @@ function MonitorForm({
             value={form.name}
             onChange={(e) => set("name", e.target.value)}
             placeholder="Payment failures"
-            autoFocus
           />
         </Field>
 

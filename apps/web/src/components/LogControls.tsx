@@ -63,15 +63,17 @@ function toggleTerm(q: string, term: string): string {
   return parts.join(" ");
 }
 
+function formatShortTime(ts: number): string {
+  return new Date(ts).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function customRangeTitle(range: { from: number; to: number }): string {
-  const fmt = (ts: number): string =>
-    new Date(ts).toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  return `${fmt(range.from)} to ${fmt(range.to)}`;
+  return `${formatShortTime(range.from)} to ${formatShortTime(range.to)}`;
 }
 
 const segmentClass =
@@ -198,18 +200,20 @@ export default function LogControls(props: LogControlsProps) {
 
           <div className="border-t border-white/[0.07] p-3">
             <div className="flex flex-col gap-2">
-              <label className="flex flex-col gap-1">
+              <label htmlFor="range-start" className="flex flex-col gap-1">
                 <span className="text-[10px] text-mist-dim">start</span>
                 <Input
+                  id="range-start"
                   type="datetime-local"
                   value={fromDraft}
                   onChange={(e) => setFromDraft(e.target.value)}
                   className="h-7 px-2 text-[10px] [color-scheme:dark]"
                 />
               </label>
-              <label className="flex flex-col gap-1">
+              <label htmlFor="range-end" className="flex flex-col gap-1">
                 <span className="text-[10px] text-mist-dim">end</span>
                 <Input
+                  id="range-end"
                   type="datetime-local"
                   value={toDraft}
                   onChange={(e) => setToDraft(e.target.value)}

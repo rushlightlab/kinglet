@@ -187,6 +187,18 @@ function uniqueSlug(name: string): string {
   );
 }
 
+function canManageApiKey(info: AuthInfo, key: { createdBy: string | null }): boolean {
+  return info.kind === "user" && (info.user.role === "admin" || key.createdBy === info.user.id);
+}
+
+function monitorGuard(c: Context<AppEnv>, write: boolean): Response | null {
+  const authInfo = getAuth(c);
+  if (authInfo.kind === "key") return c.json({ error: "keys cannot manage monitors" }, 403);
+  return can(authInfo, write ? "monitors.write" : "monitors.read")
+    ? null
+    : c.json({ error: "forbidden" }, 403);
+}
+
 export function registerRoutes(
   app: Hono<AppEnv>,
   storage: Storage,
@@ -512,9 +524,6 @@ export function registerRoutes(
   });
 
   // ================= API keys =================
-
-  const canManageApiKey = (auth: AuthInfo, key: { createdBy: string | null }): boolean =>
-    auth.kind === "user" && (auth.user.role === "admin" || key.createdBy === auth.user.id);
 
   app.get("/v1/projects/:id/keys", async (c) => {
     const denied = requirePermission(c, "keys.read");
@@ -1075,6 +1084,7 @@ export function registerRoutes(
         if (closed) return;
         console.warn("[kinglet] SSE closed:", err instanceof Error ? err.message : err);
         cleanup();
+        // oxlint-disable-next-line promise/no-promise-in-callback
         void stream.close().catch(() => undefined);
       };
       // Revalidate credentials at least once a minute: a revoked key or a
@@ -1169,14 +1179,6 @@ export function registerRoutes(
   });
 
   // ================= monitors =================
-
-  const monitorGuard = (c: Context<AppEnv>, write: boolean): Response | null => {
-    const authInfo = getAuth(c);
-    if (authInfo.kind === "key") return c.json({ error: "keys cannot manage monitors" }, 403);
-    return can(authInfo, write ? "monitors.write" : "monitors.read")
-      ? null
-      : c.json({ error: "forbidden" }, 403);
-  };
 
   app.post("/v1/monitors/test-channel", async (c) => {
     const denied = monitorGuard(c, true);
