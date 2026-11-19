@@ -92,7 +92,7 @@ export default function FilterBar(props: FilterBarProps) {
             if (e.key === "Enter") props.onEnter();
           }}
           spellCheck={false}
-          placeholder={`level:error service:api "timeout" -healthcheck`}
+          placeholder="level:error service:api"
           className="min-w-0 flex-1 bg-transparent font-mono text-xs text-mist outline-none placeholder:text-mist-faint"
         />
         {props.appliedQ.trim() && (

@@ -391,7 +391,7 @@ function KeysPanel() {
                   id="key-name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="api-prod"
+                  placeholder="production-ingest"
                 />
               </Field>
               <Field orientation="horizontal" className="h-9 w-auto">
@@ -530,7 +530,7 @@ function KeysPanel() {
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <Select value={memberToAdd} onValueChange={setMemberToAdd}>
                     <SelectTrigger className="w-64">
-                      <SelectValue placeholder="select a user…" />
+                      <SelectValue placeholder="Select a user" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
@@ -577,7 +577,7 @@ function KeysPanel() {
                   id="project-name"
                   value={projectName}
                   onChange={(e) => setProjectName(e.target.value)}
-                  placeholder="acme-production"
+                  placeholder="production"
                 />
               </Field>
               <Button type="submit" variant="outline" size="sm" className="h-9" disabled={!projectName.trim()}>
@@ -1005,7 +1005,7 @@ function UsersPanel() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="teammate@example.com"
+                placeholder="name@example.com"
               />
             </Field>
             <Field>
@@ -1014,7 +1014,7 @@ function UsersPanel() {
                 id="user-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Sam"
+                placeholder="Jane Doe"
               />
             </Field>
             <Field>
@@ -1037,7 +1037,7 @@ function UsersPanel() {
                 id="user-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="optional"
+                placeholder="Leave blank to generate"
               />
               {password && <PasswordRequirements value={password} />}
             </Field>

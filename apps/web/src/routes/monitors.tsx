@@ -76,7 +76,7 @@ const KIND_LABELS: Record<MonitorKind, string> = {
 };
 
 const CHANNEL_PLACEHOLDERS: Record<NotifyChannel["type"], string> = {
-  webhook: "https://your-endpoint.example/hook",
+  webhook: "https://example.com/webhooks/kinglet",
   discord: "https://discord.com/api/webhooks/…",
   slack: "https://hooks.slack.com/services/…",
 };
@@ -541,7 +541,7 @@ function MonitorForm({
             id="monitor-name"
             value={form.name}
             onChange={(e) => set("name", e.target.value)}
-            placeholder="payment errors"
+            placeholder="Payment failures"
             autoFocus
           />
         </Field>
@@ -552,7 +552,7 @@ function MonitorForm({
             id="monitor-query"
             value={form.query}
             onChange={(e) => set("query", e.target.value)}
-            placeholder="level>=error service:billing"
+            placeholder="level:error service:checkout"
             spellCheck={false}
           />
         </Field>

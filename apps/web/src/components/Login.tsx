@@ -79,7 +79,7 @@ export default function Login({
                   if (e.key === "Enter") void submit();
                 }}
                 autoComplete="current-password"
-                placeholder="••••••••"
+                placeholder="Enter your password"
               />
             </Field>
           </FieldGroup>
