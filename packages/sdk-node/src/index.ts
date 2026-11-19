@@ -10,7 +10,10 @@
 export interface LoggerOptions {
   /** Kinglet base URL, e.g. "https://logs.example.com" */
   url: string;
-  /** Ingest token */
+  /**
+   * Project API key (`kl_…`) with the ingest scope. The key is bound to a
+   * project on the server, so this also selects where events are stored.
+   */
   token: string;
   /** Tag every event with a service name */
   service?: string;

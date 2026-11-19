@@ -11,7 +11,7 @@ import { createLogger } from "@kinglet/sdk-node";
 
 const log = createLogger({
   url: "http://localhost:8080",   // your Kinglet server
-  token: "kl_...",                // API key with the ingest scope
+  token: "kl_...",                // project key with the ingest scope
   service: "my-app",
   env: "prod",
 });
