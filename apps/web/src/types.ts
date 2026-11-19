@@ -115,6 +115,7 @@ export interface AppUser {
   email: string;
   name: string;
   role: UserRole;
+  disabled: boolean;
   createdAt: number;
   updatedAt: number;
 }

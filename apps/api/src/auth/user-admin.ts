@@ -19,6 +19,7 @@ export interface AdminUser {
   email: string;
   name: string;
   role: Role;
+  disabled: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -31,6 +32,7 @@ function toAdminUser(row: UserRow): AdminUser {
     email: row.email,
     name: row.name,
     role: isRole(row.role) ? row.role : "viewer",
+    disabled: row.banned === true,
     createdAt: new Date(row.createdAt).getTime(),
     updatedAt: new Date(row.updatedAt).getTime(),
   };
@@ -111,4 +113,37 @@ export async function removeManagedUser(
   userId: string
 ): Promise<void> {
   await auth.api.removeUser({ body: { userId }, headers });
+}
+
+export async function setManagedUserDisabled(
+  storage: Storage,
+  auth: KingletAuth,
+  headers: Headers,
+  userId: string,
+  disabled: boolean
+): Promise<AdminUser> {
+  if (disabled) {
+    await auth.api.banUser({
+      body: { userId, banReason: "Disabled by an administrator" },
+      headers,
+    });
+  } else {
+    await auth.api.unbanUser({ body: { userId }, headers });
+  }
+  const user = await getUserById(storage, userId);
+  if (!user) throw new Error("user not found after status update");
+  return user;
+}
+
+/** Generates a compliant password, sets it, and signs the user out everywhere. */
+export async function resetManagedUserPassword(
+  storage: Storage,
+  auth: KingletAuth,
+  headers: Headers,
+  userId: string
+): Promise<string> {
+  const password = generatePassword();
+  await auth.api.setUserPassword({ body: { userId, newPassword: password }, headers });
+  await storage.db.delete(schema.session).where(eq(schema.session.userId, userId));
+  return password;
 }

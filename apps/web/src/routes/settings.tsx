@@ -1,6 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
-import { KeyRoundIcon, PlusIcon, Trash2Icon, UserPlusIcon } from "lucide-react";
+import {
+  BanIcon,
+  CircleCheckIcon,
+  KeyRoundIcon,
+  MoreHorizontalIcon,
+  PlusIcon,
+  RotateCcwIcon,
+  SlidersHorizontalIcon,
+  Trash2Icon,
+  UserPlusIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   addProjectMember,
@@ -16,6 +26,9 @@ import {
   fetchProjectMembers,
   fetchUsers,
   removeProjectMember,
+  resetUserPassword,
+  rotateKey,
+  updateKeyScopes,
   updateProjectMember,
   updateUser,
 } from "../api";
@@ -43,6 +56,23 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -132,6 +162,14 @@ function KeysPanel() {
   const [scopeQuery, setScopeQuery] = useState(true);
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pendingKey, setPendingKey] = useState<{
+    type: "revoke" | "rotate";
+    key: ApiKeyInfo;
+  } | null>(null);
+  const [editKey, setEditKey] = useState<ApiKeyInfo | null>(null);
+  const [editIngest, setEditIngest] = useState(true);
+  const [editQuery, setEditQuery] = useState(true);
+  const [actionBusy, setActionBusy] = useState(false);
 
   const [projectName, setProjectName] = useState("");
   const [members, setMembers] = useState<ProjectMember[]>([]);
@@ -234,13 +272,51 @@ function KeysPanel() {
     }
   };
 
-  const revoke = async (key: ApiKeyInfo): Promise<void> => {
+  const openKeyScopes = (key: ApiKeyInfo): void => {
+    setEditKey(key);
+    setEditIngest(key.scopes.includes("ingest"));
+    setEditQuery(key.scopes.includes("query"));
+  };
+
+  const saveKeyScopes = async (): Promise<void> => {
+    if (!editKey) return;
+    const scopes = [editIngest ? "ingest" : null, editQuery ? "query" : null].filter(
+      (scope): scope is string => scope !== null
+    );
+    if (scopes.length === 0) return;
+    setActionBusy(true);
     try {
-      await deleteKey(key.id, currentProjectId);
+      await updateKeyScopes(editKey.id, currentProjectId, scopes);
       await load();
-      toast.success("Key revoked");
+      setEditKey(null);
+      toast.success("Key permissions updated");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      setEditKey(null);
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const runKeyAction = async (): Promise<void> => {
+    if (!pendingKey) return;
+    setActionBusy(true);
+    try {
+      if (pendingKey.type === "rotate") {
+        const rotated = await rotateKey(pendingKey.key.id, currentProjectId);
+        setCreatedKey(rotated.plaintext);
+        toast.success("Key rerolled");
+      } else {
+        await deleteKey(pendingKey.key.id, currentProjectId);
+        toast.success("Key revoked");
+      }
+      await load();
+      setPendingKey(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setPendingKey(null);
+    } finally {
+      setActionBusy(false);
     }
   };
 
@@ -330,41 +406,44 @@ function KeysPanel() {
                     </div>
                   </TableCell>
                   <TableCell className="text-right">
-                    {canWriteKeys ? (
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button variant="destructive" size="xs">
-                            revoke
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Revoke {key.name}?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              Anything still using this key will start receiving 401s.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction
-                              variant="destructive"
-                              onClick={() => void revoke(key)}
-                            >
-                              Revoke key
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    ) : (
-                      <Button
-                        variant="destructive"
-                        size="xs"
-                        disabled
-                        title="Requires the keys.write permission"
-                      >
-                        revoke
-                      </Button>
-                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          disabled={!canWriteKeys}
+                          aria-label={`Actions for ${key.name}`}
+                          title={
+                            canWriteKeys ? undefined : "Requires the keys.write permission"
+                          }
+                        >
+                          <MoreHorizontalIcon />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuLabel>Key actions</DropdownMenuLabel>
+                        <DropdownMenuGroup>
+                          <DropdownMenuItem onSelect={() => openKeyScopes(key)}>
+                            <SlidersHorizontalIcon />
+                            Edit permissions
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() => setPendingKey({ type: "rotate", key })}
+                          >
+                            <RotateCcwIcon />
+                            Reroll key
+                          </DropdownMenuItem>
+                        </DropdownMenuGroup>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onSelect={() => setPendingKey({ type: "revoke", key })}
+                        >
+                          <Trash2Icon />
+                          Revoke key
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </TableCell>
                 </TableRow>
               ))}
@@ -618,6 +697,107 @@ function KeysPanel() {
         projectName={project?.name ?? "this project"}
         canClear={project?.canClearLogs === true}
       />
+
+      <AlertDialog
+        open={pendingKey !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingKey(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingKey?.type === "rotate"
+                ? `Reroll ${pendingKey.key.name}?`
+                : `Revoke ${pendingKey?.key.name ?? "this key"}?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingKey?.type === "rotate"
+                ? "A new key is generated and shown once. The current key stops working immediately."
+                : "Anything still using this key will start receiving 401s."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={actionBusy}>Cancel</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={actionBusy}
+              onClick={() => void runKeyAction()}
+            >
+              {actionBusy && <Spinner data-icon="inline-start" />}
+              {actionBusy
+                ? "working…"
+                : pendingKey?.type === "rotate"
+                  ? "Reroll key"
+                  : "Revoke key"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog
+        open={editKey !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditKey(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit permissions</DialogTitle>
+            <DialogDescription>
+              Choose what <span className="text-mist">{editKey?.name ?? "this key"}</span> is
+              allowed to do. At least one scope is required.
+            </DialogDescription>
+          </DialogHeader>
+          <FieldGroup>
+            <Field orientation="horizontal">
+              <Checkbox
+                id="edit-ingest"
+                checked={editIngest}
+                onCheckedChange={(checked) => setEditIngest(checked === true)}
+              />
+              <FieldLabel
+                htmlFor="edit-ingest"
+                className="normal-case tracking-normal text-xs text-mist-dim"
+              >
+                ingest — write events
+              </FieldLabel>
+            </Field>
+            <Field orientation="horizontal">
+              <Checkbox
+                id="edit-query"
+                checked={editQuery}
+                onCheckedChange={(checked) => setEditQuery(checked === true)}
+              />
+              <FieldLabel
+                htmlFor="edit-query"
+                className="normal-case tracking-normal text-xs text-mist-dim"
+              >
+                query — read events
+              </FieldLabel>
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={actionBusy}
+              onClick={() => setEditKey(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={actionBusy || (!editIngest && !editQuery)}
+              onClick={() => void saveKeyScopes()}
+            >
+              {actionBusy && <Spinner data-icon="inline-start" />}
+              Save permissions
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -818,6 +998,11 @@ function UsersPanel() {
   const [createdPassword, setCreatedPassword] = useState<{ email: string; password: string } | null>(
     null
   );
+  const [pendingUser, setPendingUser] = useState<{
+    type: "delete" | "reset" | "disable";
+    user: AppUser;
+  } | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -870,12 +1055,47 @@ function UsersPanel() {
   };
 
   const remove = async (id: string): Promise<void> => {
+    setActionBusy(true);
     try {
       await deleteUser(id);
       await load();
+      setPendingUser(null);
       toast.success("User deleted");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      setPendingUser(null);
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const resetPassword = async (target: AppUser): Promise<void> => {
+    setActionBusy(true);
+    try {
+      const result = await resetUserPassword(target.id);
+      setCreatedPassword({ email: target.email, password: result.password });
+      setPendingUser(null);
+      toast.success("Password reset");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setPendingUser(null);
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const setDisabled = async (target: AppUser, disabled: boolean): Promise<void> => {
+    setActionBusy(true);
+    try {
+      await updateUser(target.id, { disabled });
+      await load();
+      setPendingUser(null);
+      toast.success(disabled ? "User disabled" : "User enabled");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setPendingUser(null);
+    } finally {
+      setActionBusy(false);
     }
   };
 
@@ -912,6 +1132,7 @@ function UsersPanel() {
               <TableRow>
                 <TableHead>user</TableHead>
                 <TableHead>role</TableHead>
+                <TableHead>status</TableHead>
                 <TableHead className="text-right">actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -942,52 +1163,68 @@ function UsersPanel() {
                       </Select>
                     )}
                   </TableCell>
-                  <TableCell className="text-right">
-                    {u.id !== user.id && u.role !== "admin" ? (
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button variant="destructive" size="xs">
-                            delete
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Delete {u.email}?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              The account and its sessions are removed immediately.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction
-                              variant="destructive"
-                              onClick={() => void remove(u.id)}
-                            >
-                              Delete user
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
+                  <TableCell>
+                    {u.disabled ? (
+                      <Badge variant="destructive">disabled</Badge>
                     ) : (
-                      <Button
-                        variant="destructive"
-                        size="xs"
-                        disabled
-                        title={
-                          u.role === "admin"
-                            ? "Administrators cannot be deleted"
-                            : "You cannot delete your own account"
-                        }
-                      >
-                        delete
-                      </Button>
+                      <Badge variant="ghost">active</Badge>
                     )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          disabled={u.id === user.id}
+                          aria-label={`Actions for ${u.email}`}
+                          title={
+                            u.id === user.id
+                              ? "Use the Account tab to change your own account"
+                              : undefined
+                          }
+                        >
+                          <MoreHorizontalIcon />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuLabel>User actions</DropdownMenuLabel>
+                        <DropdownMenuGroup>
+                          <DropdownMenuItem
+                            disabled={u.id === user.id}
+                            onSelect={() => setPendingUser({ type: "reset", user: u })}
+                          >
+                            <KeyRoundIcon />
+                            Reset password
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={u.role === "admin"}
+                            onSelect={() => {
+                              if (u.disabled) void setDisabled(u, false);
+                              else setPendingUser({ type: "disable", user: u });
+                            }}
+                          >
+                            {u.disabled ? <CircleCheckIcon /> : <BanIcon />}
+                            {u.disabled ? "Enable user" : "Disable user"}
+                          </DropdownMenuItem>
+                        </DropdownMenuGroup>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          variant="destructive"
+                          disabled={u.role === "admin"}
+                          onSelect={() => setPendingUser({ type: "delete", user: u })}
+                        >
+                          <Trash2Icon />
+                          Delete user
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </TableCell>
                 </TableRow>
               ))}
               {users.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={3} className="py-4 text-center text-mist-faint">
+                  <TableCell colSpan={4} className="py-4 text-center text-mist-faint">
                     No users loaded.
                   </TableCell>
                 </TableRow>
@@ -1059,6 +1296,53 @@ function UsersPanel() {
           </form>
         </CardContent>
       </Card>
+
+      <AlertDialog
+        open={pendingUser !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingUser(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingUser?.type === "reset"
+                ? `Reset password for ${pendingUser.user.email}?`
+                : pendingUser?.type === "disable"
+                  ? `Disable ${pendingUser.user.email}?`
+                  : `Delete ${pendingUser?.user.email ?? "this user"}?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingUser?.type === "reset"
+                ? "A new password is generated and shown once. Their current password and all sessions stop working."
+                : pendingUser?.type === "disable"
+                  ? "They are signed out immediately and cannot sign in until you enable them again."
+                  : "The account and its sessions are removed immediately. This cannot be undone."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={actionBusy}>Cancel</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={actionBusy}
+              onClick={() => {
+                if (!pendingUser) return;
+                if (pendingUser.type === "reset") void resetPassword(pendingUser.user);
+                else if (pendingUser.type === "disable") void setDisabled(pendingUser.user, true);
+                else void remove(pendingUser.user.id);
+              }}
+            >
+              {actionBusy && <Spinner data-icon="inline-start" />}
+              {pendingUser?.type === "reset"
+                ? "Reset password"
+                : pendingUser?.type === "disable"
+                  ? "Disable user"
+                  : "Delete user"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

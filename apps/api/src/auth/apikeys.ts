@@ -104,6 +104,36 @@ export async function deleteProjectApiKeys(storage: Storage, projectId: number):
   await storage.db.delete(schema.apiKeys).where(eq(schema.apiKeys.projectId, projectId));
 }
 
+/** Change a key's scopes without changing the key itself. */
+export async function updateApiKeyScopes(
+  storage: Storage,
+  id: number,
+  projectId: number,
+  scopes: KeyScope[]
+): Promise<boolean> {
+  const result = await storage.db
+    .update(schema.apiKeys)
+    .set({ scopes: JSON.stringify(scopes) })
+    .where(and(eq(schema.apiKeys.id, id), eq(schema.apiKeys.projectId, projectId)));
+  return Number(result.rowsAffected ?? 0) > 0;
+}
+
+/** Replace the key material; the old plaintext stops working immediately. */
+export async function rotateApiKey(
+  storage: Storage,
+  id: number,
+  projectId: number
+): Promise<{ plaintext: string; prefix: string } | null> {
+  const plaintext = KEY_PREFIX + randomToken();
+  const prefix = `${plaintext.slice(0, 11)}…${plaintext.slice(-4)}`;
+  const result = await storage.db
+    .update(schema.apiKeys)
+    .set({ keyHash: sha256hex(plaintext), prefix, lastUsedAt: null })
+    .where(and(eq(schema.apiKeys.id, id), eq(schema.apiKeys.projectId, projectId)));
+  if (Number(result.rowsAffected ?? 0) === 0) return null;
+  return { plaintext, prefix };
+}
+
 /**
  * Offboarding: keys minted by a user are revoked when that user is demoted or
  * deleted. Returns how many were removed (useful for logs/audit output).

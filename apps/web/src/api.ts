@@ -171,12 +171,16 @@ export function createUser(input: {
 
 export function updateUser(
   id: string,
-  patch: { name?: string; role?: string; password?: string }
+  patch: { name?: string; role?: string; disabled?: boolean }
 ): Promise<{ user: AppUser }> {
   return api<{ user: AppUser }>(`/v1/users/${id}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
   });
+}
+
+export function resetUserPassword(id: string): Promise<{ password: string }> {
+  return api<{ password: string }>(`/v1/users/${id}/reset-password`, { method: "POST" });
 }
 
 export function deleteUser(id: string): Promise<{ ok: true }> {
@@ -201,6 +205,27 @@ export function createKey(
 
 export function deleteKey(id: number, projectId: number): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/keys/${id}?project=${projectId}`, { method: "DELETE" });
+}
+
+export function updateKeyScopes(
+  id: number,
+  projectId: number,
+  scopes: string[]
+): Promise<{ ok: true; scopes: string[] }> {
+  return api<{ ok: true; scopes: string[] }>(`/v1/keys/${id}?project=${projectId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ scopes }),
+  });
+}
+
+export function rotateKey(
+  id: number,
+  projectId: number
+): Promise<{ plaintext: string; prefix: string }> {
+  return api<{ plaintext: string; prefix: string }>(
+    `/v1/keys/${id}/rotate?project=${projectId}`,
+    { method: "POST" }
+  );
 }
 
 // ---------- events ----------

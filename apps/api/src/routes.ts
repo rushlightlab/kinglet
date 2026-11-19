@@ -7,7 +7,15 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { Context } from "hono";
 import type { Config } from "./env.js";
-import { createApiKey, deleteApiKey, deleteApiKeysByOwner, listApiKeys, verifyApiKey } from "./auth/apikeys.js";
+import {
+  createApiKey,
+  deleteApiKey,
+  deleteApiKeysByOwner,
+  listApiKeys,
+  rotateApiKey,
+  updateApiKeyScopes,
+  verifyApiKey,
+} from "./auth/apikeys.js";
 import type { KingletAuth } from "./auth/auth.js";
 import {
   can,
@@ -28,6 +36,8 @@ import {
   getUserById,
   listUsers,
   removeManagedUser,
+  resetManagedUserPassword,
+  setManagedUserDisabled,
   setUserRole,
   updateUserName,
 } from "./auth/user-admin.js";
@@ -364,6 +374,24 @@ export function registerRoutes(
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
 
+    const disabled = typeof body?.disabled === "boolean" ? body.disabled : undefined;
+    if (disabled !== undefined) {
+      if (disabled && target.role === "admin") {
+        return c.json({ error: "administrators cannot be disabled" }, 400);
+      }
+      if (disabled && userId === me.id) {
+        return c.json({ error: "you cannot disable your own account" }, 400);
+      }
+      try {
+        await setManagedUserDisabled(storage, auth, c.req.raw.headers, userId, disabled);
+      } catch (err) {
+        return c.json(
+          { error: err instanceof Error ? err.message : "could not update user status" },
+          400
+        );
+      }
+    }
+
     let role: Role | undefined;
     if (body?.role !== undefined) {
       if (!isRole(body.role)) return c.json({ error: "invalid role" }, 400);
@@ -389,6 +417,34 @@ export function registerRoutes(
     }
     const updated = await getUserById(storage, userId);
     return c.json({ user: updated });
+  });
+
+  app.post("/v1/users/:id/reset-password", async (c) => {
+    const denied = requirePermission(c, "users.write");
+    if (denied) return denied;
+    const me = requireUser(c);
+    if (me instanceof Response) return me;
+    const userId = c.req.param("id");
+    if (!userId) return c.json({ error: "invalid user id" }, 400);
+    if (userId === me.id) {
+      return c.json({ error: "use the account page to change your own password" }, 400);
+    }
+    const target = await getUserById(storage, userId);
+    if (!target) return c.json({ error: "user not found" }, 404);
+    try {
+      const password = await resetManagedUserPassword(
+        storage,
+        auth,
+        c.req.raw.headers,
+        userId
+      );
+      return c.json({ password });
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "could not reset password" },
+        400
+      );
+    }
   });
 
   app.delete("/v1/users/:id", async (c) => {
@@ -477,6 +533,54 @@ export function registerRoutes(
     const deleted = await deleteApiKey(storage, id, projectId);
     if (!deleted) return c.json({ error: "key not found" }, 404);
     return c.json({ ok: true });
+  });
+
+  app.patch("/v1/keys/:id", async (c) => {
+    const denied = requirePermission(c, "keys.write");
+    if (denied) return denied;
+    const id = parseId(c.req.param("id"));
+    if (id === null) return c.json({ error: "invalid key id" }, 400);
+    const projectId = Math.trunc(Number(c.req.query("project")));
+    if (!Number.isFinite(projectId) || projectId <= 0) {
+      return c.json({ error: "project is required" }, 400);
+    }
+    if (!(await canAccessProject(getAuth(c), storage, projectId))) {
+      return c.json({ error: "project not found" }, 404);
+    }
+    const parsedBody = await readJsonStrict(c);
+    if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
+    const rawScopes: unknown = parsedBody.body?.scopes;
+    if (!Array.isArray(rawScopes) || rawScopes.length === 0) {
+      return c.json({ error: "scopes must be a non-empty array of: ingest, query" }, 400);
+    }
+    const unknown = rawScopes.filter((scope) => !isKeyScope(scope));
+    if (unknown.length > 0) {
+      return c.json(
+        { error: `unknown scope(s): ${unknown.join(", ")} — use ingest and/or query` },
+        400
+      );
+    }
+    const scopes = [...new Set(rawScopes as KeyScope[])];
+    const updated = await updateApiKeyScopes(storage, id, projectId, scopes);
+    if (!updated) return c.json({ error: "key not found" }, 404);
+    return c.json({ ok: true, scopes });
+  });
+
+  app.post("/v1/keys/:id/rotate", async (c) => {
+    const denied = requirePermission(c, "keys.write");
+    if (denied) return denied;
+    const id = parseId(c.req.param("id"));
+    if (id === null) return c.json({ error: "invalid key id" }, 400);
+    const projectId = Math.trunc(Number(c.req.query("project")));
+    if (!Number.isFinite(projectId) || projectId <= 0) {
+      return c.json({ error: "project is required" }, 400);
+    }
+    if (!(await canAccessProject(getAuth(c), storage, projectId))) {
+      return c.json({ error: "project not found" }, 404);
+    }
+    const rotated = await rotateApiKey(storage, id, projectId);
+    if (!rotated) return c.json({ error: "key not found" }, 404);
+    return c.json(rotated);
   });
 
   // ================= project members =================
