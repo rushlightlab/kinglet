@@ -3,7 +3,7 @@
 # ---- build: install workspace + build api & web ----
 FROM node:26-bookworm-slim AS build
 WORKDIR /app
-RUN npm install -g pnpm@10.15.0
+RUN npm install -g pnpm@12.21.0
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json ./
 COPY apps ./apps
 COPY packages ./packages
