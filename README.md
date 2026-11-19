@@ -330,8 +330,8 @@ Then in `/monitors`, point a channel at `http://localhost:3999/hook` and hit
 ### Releasing images
 
 `.github/workflows/docker.yml` publishes multi-arch images (amd64 + arm64) to
-GHCR: pushes to `main` publish `:latest` / `:main` / `:sha-…`, and `v*` tags
-publish `:X.Y.Z` and `:X.Y`.
+GHCR: pushes to `main` publish `:latest` and `:main`, and `v*` tags publish
+`:X.Y.Z` and `:X.Y`.
 
 ```bash
 git tag v0.3.0 -m "Kinglet v0.3.0"

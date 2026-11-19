@@ -1,7 +1,7 @@
 name: Docker
 
 # Publishes multi-arch images to GitHub Container Registry:
-#   push to main  → :latest, :main, :sha-<commit>
+#   push to main  → :latest, :main
 #   tag vX.Y.Z    → :X.Y.Z, :X.Y, :latest
 #
 # First-time setup: after the first successful run, make the package public
@@ -58,7 +58,6 @@ jobs:
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-
           labels: |
             org.opencontainers.image.title=Kinglet
             org.opencontainers.image.description=Small. Light. King. — a tiny self-hostable log platform.
