@@ -5,6 +5,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   Clock3Icon,
+  RefreshCwIcon,
   XIcon,
 } from "lucide-react";
 import type { Service } from "../types";
@@ -156,6 +157,12 @@ export default function LogControls(props: LogControlsProps) {
             <span className="whitespace-nowrap">
               {props.customRange ? "custom" : windowLabel(props.rangeKey)}
             </span>
+            {props.refreshKey !== "off" && (
+              <span className="flex items-center gap-0.5 text-[9px] text-gold/60">
+                <RefreshCwIcon className="size-2.5" />
+                {refreshLabel(props.refreshKey)}
+              </span>
+            )}
             <ChevronDownIcon className="size-3 text-mist-faint" />
           </button>
         </PopoverTrigger>
@@ -268,8 +275,8 @@ export default function LogControls(props: LogControlsProps) {
         }`}
         title={
           props.live
-            ? `Pause live refresh (l). Refreshing every ${refreshLabel(props.refreshKey)}.`
-            : `Resume live refresh (l) at the recommended rate for this window.`
+            ? "Pause the live tail (l). New events stop arriving over SSE."
+            : "Resume the live tail (l). New events appear as they arrive."
         }
       >
         {props.live ? (
@@ -281,13 +288,6 @@ export default function LogControls(props: LogControlsProps) {
           />
         )}
         live
-        <span
-          className={`text-[9px] tabular-nums ${
-            props.live ? "text-gold/55" : "text-mist-faint"
-          }`}
-        >
-          {refreshLabel(props.refreshKey)}
-        </span>
       </button>
 
       <span aria-hidden="true" className="my-1 w-px bg-white/[0.07]" />

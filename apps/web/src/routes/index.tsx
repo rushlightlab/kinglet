@@ -40,11 +40,7 @@ function Explorer() {
   const [qDraft, setQDraft] = useState(() => search.q ?? "");
   const [q, setQ] = useState(() => search.q ?? "");
   const [rangeKey, setRangeKey] = useState(DEFAULT_WINDOW_KEY);
-  const [refreshKey, setRefreshKey] = useState<RefreshKey>(() =>
-    search.from !== undefined && search.to !== undefined
-      ? recommendedRefreshKey(search.to - search.from)
-      : recommendedRefreshKey(WINDOWS[DEFAULT_WINDOW_KEY] ?? 60 * 60_000)
-  );
+  const [refreshKey, setRefreshKey] = useState<RefreshKey>("off");
   const [customRange, setCustomRange] = useState<null | { from: number; to: number }>(() =>
     search.from !== undefined && search.to !== undefined ? { from: search.from, to: search.to } : null
   );
@@ -53,6 +49,7 @@ function Explorer() {
   const [services, setServices] = useState<Service[]>([]);
   const [selected, setSelected] = useState<KingletEvent | null>(null);
   const [cursorId, setCursorId] = useState<number | null>(null);
+  const [live, setLive] = useState(true);
   const [follow, setFollow] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +57,6 @@ function Explorer() {
   const windowMs = customRange
     ? customRange.to - customRange.from
     : WINDOWS[rangeKey] ?? 60 * 60_000;
-  const live = refreshKey !== "off";
   const refreshMs = refreshMsFor(refreshKey);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -125,12 +121,11 @@ function Explorer() {
   }, [follow]);
 
   const toggleLive = useCallback(() => {
-    setRefreshKey((current) =>
-      current === "off" ? recommendedRefreshKey(windowMs) : "off"
-    );
-  }, [windowMs]);
+    setLive((current) => !current);
+  }, []);
 
-  // While live, refresh the window at the selected rate.
+  // Refresh is separate from the live tail: it re-queries the window at the
+  // selected rate. Off means events arrive only through SSE or manual refresh.
   useEffect(() => {
     if (refreshMs === null) return;
     const id = setInterval(() => loadWindow(true), refreshMs);
