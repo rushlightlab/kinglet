@@ -356,8 +356,7 @@ export default function KeysCard({
               </Field>
               <Button
                 type="submit"
-                size="sm"
-                className="h-9"
+                className="shadow-none hover:translate-y-0 hover:shadow-none"
                 disabled={busy || !name.trim() || (!scopeIngest && !scopeQuery)}
               >
                 <PlusIcon data-icon="inline-start" />

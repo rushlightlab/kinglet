@@ -100,7 +100,6 @@ export default function AccountPanel() {
             <div className="sm:col-span-3">
               <Button
                 type="submit"
-                size="sm"
                 disabled={!current || nextProblem !== null || next !== confirm}
               >
                 update password

@@ -116,7 +116,7 @@ export default function ProjectsPanel() {
                   placeholder="production"
                 />
               </Field>
-              <Button type="submit" variant="outline" size="sm" className="h-9" disabled={!name.trim()}>
+              <Button type="submit" variant="outline" disabled={!name.trim()}>
                 <PlusIcon data-icon="inline-start" />
                 add project
               </Button>

@@ -79,8 +79,6 @@ export function ProjectRenameCard({ project }: { project: Project }) {
             </Field>
             <Button
               type="submit"
-              size="sm"
-              className="h-9"
               disabled={saving || !name.trim() || name.trim() === project.name}
             >
               {saving && <Spinner data-icon="inline-start" />}

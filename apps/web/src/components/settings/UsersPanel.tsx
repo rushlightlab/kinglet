@@ -392,7 +392,6 @@ export default function UsersPanel() {
             <div className="sm:col-span-2">
               <Button
                 type="submit"
-                size="sm"
                 disabled={!email.trim() || (password.length > 0 && passwordProblem(password) !== null)}
               >
                 <UserPlusIcon data-icon="inline-start" />
