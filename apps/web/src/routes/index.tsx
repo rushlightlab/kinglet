@@ -276,6 +276,18 @@ function Explorer() {
     setQ(nextQ);
   }, []);
 
+  const toggleLevelFilter = useCallback(
+    (level: string) => {
+      const term = `level:${level}`;
+      const parts = q.split(/\s+/).filter(Boolean);
+      const withoutLevel = parts.filter((part) => !/^-?level(?:[:<>=]|$)/i.test(part));
+      const hasLevel = parts.some((part) => part.toLowerCase() === term);
+
+      applyQuery((hasLevel ? withoutLevel : [...withoutLevel, term]).join(" "));
+    },
+    [q, applyQuery],
+  );
+
   // Freeze the current view into a shareable URL and copy it.
   const copyLink = useCallback(() => {
     const now = Date.now();
@@ -352,6 +364,7 @@ function Explorer() {
 
       {histogram && (
         <HistogramChart
+          key={`${histogram.from}:${histogram.to}:${q}`}
           data={histogram}
           onSelectRange={(from, to) => {
             setCustomRange({ from, to });
@@ -360,6 +373,7 @@ function Explorer() {
               setRefreshKey(recommendedRefreshKey(to - from));
             }
           }}
+          onFilterLevel={toggleLevelFilter}
           onReset={customRange ? clearCustomRange : undefined}
         />
       )}
