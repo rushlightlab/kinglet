@@ -12,18 +12,9 @@ import type { Histogram, KingletEvent, Service } from "../types";
 import EventDrawer from "../components/EventDrawer";
 import FilterBar from "../components/FilterBar";
 import HistogramChart from "../components/Histogram";
+import LogControls from "../components/LogControls";
 import LogTable from "../components/LogTable";
 import SiteHeader from "../components/SiteHeader";
-import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 const WINDOWS: Record<string, number> = {
   "15m": 15 * 60_000,
@@ -234,48 +225,22 @@ function Explorer() {
   return (
     <div className="flex h-screen flex-col bg-ink-950 text-mist">
       <SiteHeader>
-        <Select
-          value={rangeKey}
-          onValueChange={(value) => {
+        <LogControls
+          rangeKey={rangeKey}
+          customRange={customRange}
+          onRangeChange={(value) => {
             setRangeKey(value);
             setCustomRange(null);
           }}
-        >
-          <SelectTrigger size="sm" className="w-20" aria-label="Time window">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectLabel>Time window</SelectLabel>
-              {Object.keys(WINDOWS).map((k) => (
-                <SelectItem key={k} value={k}>
-                  {k}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-        <Button
-          variant={live ? "soft" : "outline"}
-          size="sm"
-          onClick={() => setLive((v) => !v)}
-          title="Toggle live tail (l)"
-        >
-          <span className={`size-1.5 rounded-full ${live ? "bg-gold" : "bg-mist-faint"}`} />
-          live
-        </Button>
-        <Button
-          variant={follow ? "soft" : "outline"}
-          size="sm"
-          onClick={() => setFollow((v) => !v)}
-          disabled={!live}
-          title="Follow the newest event (f)"
-        >
-          follow
-        </Button>
-        <span className="hidden font-mono text-[10px] text-mist-faint sm:inline">
-          {services.length} services
-        </span>
+          onClearCustom={() => setCustomRange(null)}
+          live={live}
+          follow={follow}
+          onToggleLive={() => setLive((v) => !v)}
+          onToggleFollow={() => setFollow((v) => !v)}
+          services={services}
+          appliedQ={q}
+          onApplyQuery={applyQuery}
+        />
       </SiteHeader>
 
       <FilterBar
