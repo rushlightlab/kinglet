@@ -67,7 +67,7 @@ export async function openDatabase(opts: {
   }
 
   const db = drizzle(client, { schema });
-  await ensureLegacyCompat(client);
+  await ensureProjectIdCompat(client);
   try {
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
   } catch (err) {
@@ -95,7 +95,7 @@ export async function openDatabase(opts: {
 }
 
 /** Adds project_id columns to databases that predate multi-project support. */
-async function ensureLegacyCompat(client: Client): Promise<void> {
+async function ensureProjectIdCompat(client: Client): Promise<void> {
   const hasTable = async (name: string): Promise<boolean> => {
     const result = await client.execute({
       sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
