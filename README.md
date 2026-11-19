@@ -58,9 +58,6 @@ docker run -d --name kinglet -p 8080:3000 -v kinglet-data:/data \
   ghcr.io/rushlightlab/kinglet:latest
 ```
 
-Legacy `tok_…` tokens (`KINGLET_TOKENS`) still work as workspace-wide
-superuser tokens — handy for quick curl tests, not for production shippers.
-
 ## Send logs
 
 Anything that can make an HTTP request can log to Kinglet.
@@ -125,7 +122,7 @@ your app never blocks on logging.
 
 Auth accepts either the `better-auth.session_token` cookie (the web UI) or
 `Authorization: Bearer kl_…` (API keys). Project-scoped routes take `?project=<id>`
-(sessions/legacy tokens); API keys are bound to their project. Cookie-authenticated
+(sessions); API keys are bound to their project. Cookie-authenticated
 mutations must send `X-Kinglet-Request: 1`; Bearer requests are exempt.
 
 | Route | What it does |
@@ -144,7 +141,7 @@ mutations must send `X-Kinglet-Request: 1`; Bearer requests are exempt.
 | `GET /v1/events` | Query. Params: `q` (filter grammar), `from`, `to` (epoch ms), `limit`, `cursor` |
 | `GET /v1/histogram` | Counts per level per bucket. Params: `from`, `to`, `buckets` |
 | `GET /v1/services` | Your known services and their event counts |
-| `GET /v1/stream` | SSE live tail. Params: `q` (cookie auth; `?key=`/`?token=` for shippers) |
+| `GET /v1/stream` | SSE live tail. Params: `q` (cookie auth; `?key=` for headerless clients) |
 | `GET/POST /v1/monitors` | List monitors / create one |
 | `PATCH/DELETE /v1/monitors/:id` | Update / delete a monitor |
 | `POST /v1/monitors/:id/test` | Send a test notification through every channel |
@@ -173,8 +170,7 @@ Combine freely: `level>=warn service:api -healthcheck`
 ## Alerts & monitors
 
 Monitors are standing queries evaluated against a project's stream (add
-`?project=<id>` — `kl_` keys can't manage monitors; use the UI, a session, or a
-legacy token):
+`?project=<id>` — `kl_` keys can't manage monitors; use the UI or a session):
 
 | Kind | Fires when | Example |
 | --- | --- | --- |
@@ -185,10 +181,10 @@ legacy token):
 Create one over HTTP, or in the UI at `/monitors`:
 
 ```bash
-# Requires a session cookie or a legacy KINGLET_TOKENS token;
-# project API keys cannot manage monitors.
+# Use the session cookie from a signed-in browser; kl_ keys can't manage monitors.
 curl -X POST http://localhost:8080/v1/monitors \
-  -H "Authorization: Bearer $KINGLET_TOKEN" \
+  -H "Cookie: better-auth.session_token=…" \
+  -H "X-Kinglet-Request: 1" \
   -H "Content-Type: application/json" \
   --data-binary '{ "name": "payment errors", "query": "level>=error service:billing", "kind": "count_above", "threshold": 10, "windowMs": 300000, "channels": [ { "type": "discord", "url": "https://discord.com/api/webhooks/…" } ] }'
 ```
@@ -216,9 +212,7 @@ your UI with the query and time range pre-filled.
 | `BETTER_AUTH_SECRET` | *(generated, persisted)* | Session signing secret; set explicitly for multi-instance installs |
 | `KINGLET_TRUSTED_PROXIES` | — | CIDRs allowed to set `X-Forwarded-For` |
 | `KINGLET_ALLOW_PRIVATE_WEBHOOKS` | — | Allow private/internal webhook targets (SSRF escape hatch) |
-| `KINGLET_DISABLE_LEGACY_TOKENS` | — | Disable workspace-wide `tok_…` superuser tokens |
 | `KINGLET_SESSION_DAYS` | `30` | Web session lifetime |
-| `KINGLET_TOKENS` | *(auto-generate)* | **Legacy** global tokens — all projects, full access |
 | `KINGLET_BASE_URL` | — | Public URL, used for deep links in alert notifications |
 | `KINGLET_RETENTION_DAYS` | `14` | Delete events older than this |
 | `KINGLET_MAX_EVENTS_PER_PROJECT` | `1000000` | Hard cap on retained events per project (`0` = unlimited) |
@@ -229,8 +223,7 @@ On first boot, or if the database has no administrator, Kinglet creates one from
 generated and printed to the console; for a local database it is also written to
 `admin-password.txt` next to the database. If an account with that email already
 exists, it is promoted and keeps its current password. Real ingest integrations
-should use project API keys (`kl_…`) created in **/settings**, not the legacy
-token.
+should use project API keys (`kl_…`) created in **/settings**.
 
 ## Storage backends
 
@@ -309,14 +302,14 @@ $env:KINGLET_PORT = "3100"; $env:KINGLET_API_URL = "http://localhost:3100"; pnpm
 See logs move — in a second terminal:
 
 ```bash
-pnpm demo:logs          # backfills an hour of events, then streams ~1 event/1.5s
-pnpm demo:logs --once   # backfill only, then exit
+KINGLET_KEY=kl_… pnpm demo:logs          # backfills an hour, then streams ~1 event/1.5s
+KINGLET_KEY=kl_… pnpm demo:logs --once   # backfill only, then exit
 ```
 
-(`demo:logs` authenticates with the legacy dev token from
-`apps/api/data/kinglet.token`, so it works without creating a key; for a custom
-port run `KINGLET_URL=http://localhost:3100 pnpm demo:logs` — or in PowerShell,
-`$env:KINGLET_URL = "http://localhost:3100"; pnpm demo:logs`.)
+`demo:logs` needs a project API key with the **ingest** scope — create one in
+**/settings → projects & keys**. For a custom port also set
+`KINGLET_URL=http://localhost:3100` (PowerShell:
+`$env:KINGLET_KEY = "kl_…"; $env:KINGLET_URL = "http://localhost:3100"; pnpm demo:logs`).
 
 Testing alert channels without Discord or Slack:
 

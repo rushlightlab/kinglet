@@ -1,14 +1,11 @@
 import { and, eq } from "drizzle-orm";
-import { getCookie } from "hono/cookie";
 import type { Context, MiddlewareHandler } from "hono";
-import type { Config } from "../env.js";
 import type { Storage } from "../storage/index.js";
 import * as schema from "../storage/schema.js";
 import { verifyApiKey } from "./apikeys.js";
 import type { KingletAuth } from "./auth.js";
 import type { KeyScope, Permission, Role } from "./roles.js";
 import { isRole, permissionsForRole } from "./roles.js";
-import { sha256hex } from "./tokens.js";
 
 export type AuthInfo =
   | {
@@ -22,10 +19,6 @@ export type AuthInfo =
       name: string;
       projectId: number;
       scopes: Set<KeyScope>;
-    }
-  | {
-      /** Legacy KINGLET_TOKENS / kinglet.token: all projects, full access. */
-      kind: "legacy";
     };
 
 export interface AuthUser {
@@ -46,7 +39,6 @@ export function userAuth(user: AuthUser): AuthInfo {
 async function resolveAuth(
   c: Context,
   storage: Storage,
-  config: Config,
   auth: KingletAuth,
   forceFreshSession: boolean
 ): Promise<AuthInfo | null> {
@@ -54,20 +46,16 @@ async function resolveAuth(
   let bearer: string | undefined;
   if (header?.toLowerCase().startsWith("bearer ")) bearer = header.slice(7).trim();
 
-  // EventSource can't set headers; query credentials are accepted ONLY for
-  // the SSE route so tokens don't leak into access logs elsewhere.
+  // EventSource can't set headers; the API key query parameter is accepted
+  // ONLY for the SSE route so keys don't leak into access logs elsewhere.
   if (!bearer && c.req.path === "/v1/stream") {
-    bearer = c.req.query("key") ?? c.req.query("token");
+    bearer = c.req.query("key");
   }
 
   if (bearer) {
     const key = await verifyApiKey(storage, bearer);
-    if (key) {
-      return { kind: "key", keyId: key.id, name: key.name, projectId: key.projectId, scopes: key.scopes };
-    }
-    const sha = sha256hex(bearer);
-    if (config.tokens.some((t) => sha256hex(t) === sha)) return { kind: "legacy" };
-    return null;
+    if (!key) return null;
+    return { kind: "key", keyId: key.id, name: key.name, projectId: key.projectId, scopes: key.scopes };
   }
 
   // Better Auth session — cookieCache makes this a signed-cookie read in the
@@ -93,13 +81,12 @@ async function resolveAuth(
 
 export function authMiddleware(
   storage: Storage,
-  config: Config,
   auth: KingletAuth
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const method = c.req.method;
     const forceFreshSession = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
-    const info = await resolveAuth(c, storage, config, auth, forceFreshSession);
+    const info = await resolveAuth(c, storage, auth, forceFreshSession);
     if (!info) return c.json({ error: "unauthorized" }, 401);
     c.set("auth", info);
     await next();
@@ -110,11 +97,9 @@ export function getAuth(c: Context<AppEnv>): AuthInfo {
   return c.get("auth");
 }
 
-/** Permission check for session users; legacy tokens are superusers. */
+/** Permission check for session users; API keys never inherit a human role. */
 export function can(auth: AuthInfo, permission: Permission): boolean {
-  if (auth.kind === "legacy") return true;
-  if (auth.kind === "key") return false;
-  return auth.permissions.has(permission);
+  return auth.kind === "user" && auth.permissions.has(permission);
 }
 
 export function requirePermission(c: Context<AppEnv>, permission: Permission): Response | null {
@@ -123,7 +108,7 @@ export function requirePermission(c: Context<AppEnv>, permission: Permission): R
   return c.json({ error: "forbidden" }, 403);
 }
 
-/** The authenticated user for user-only routes (403 for keys/legacy). */
+/** The authenticated user for user-only routes (403 for API keys). */
 export function requireUser(c: Context<AppEnv>): AuthUser | Response {
   const auth = getAuth(c);
   if (auth.kind !== "user") return c.json({ error: "user session required" }, 403);
@@ -150,7 +135,7 @@ export async function projectExists(storage: Storage, id: number): Promise<boole
 
 /**
  * Project access rules:
- *  - legacy tokens and admins: every project
+ *  - admins: every project
  *  - API keys: only the project they were minted for
  *  - everyone else: only projects with a project_members row
  */
@@ -159,7 +144,6 @@ export async function canAccessProject(
   storage: Storage,
   projectId: number
 ): Promise<boolean> {
-  if (auth.kind === "legacy") return true;
   if (auth.kind === "key") return auth.projectId === projectId;
   if (auth.user.role === "admin") return true;
   const rows = await storage.db
@@ -216,6 +200,3 @@ export async function resolveProjectId(
   if (fallback === null) return c.json({ error: "no projects exist" }, 409);
   return fallback;
 }
-
-/** Unused cookie import guard: Better Auth manages its own cookie names. */
-void getCookie;

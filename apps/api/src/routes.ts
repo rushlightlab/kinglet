@@ -18,7 +18,7 @@ import {
   requireUser,
   resolveProjectId,
 } from "./auth/middleware.js";
-import type { AppEnv } from "./auth/middleware.js";
+import type { AppEnv, AuthInfo } from "./auth/middleware.js";
 import { isKeyScope, isRole, permissionsForRole } from "./auth/roles.js";
 import type { KeyScope, Role } from "./auth/roles.js";
 import {
@@ -80,9 +80,8 @@ function validateQuery(q: string): string | null {
 
 /** Per-identity ingest rate limit: 600 batches / minute. */
 const ingestWindows = new Map<string, { count: number; resetAt: number }>();
-function allowIngest(auth: { kind: string; keyId?: number; user?: { id: string } }): boolean {
-  const id =
-    auth.kind === "key" ? `key:${auth.keyId ?? 0}` : auth.kind === "user" ? `user:${auth.user?.id ?? ""}` : "legacy";
+function allowIngest(auth: AuthInfo): boolean {
+  const id = auth.kind === "key" ? `key:${auth.keyId}` : `user:${auth.user.id}`;
   const now = Date.now();
   const window = ingestWindows.get(id);
   if (!window || now > window.resetAt) {
@@ -716,7 +715,7 @@ export function registerRoutes(
     }
     const f = parseFilters(q);
     const bearerRaw = (c.req.header("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-    const streamKey = bearerRaw || c.req.query("key") || c.req.query("token");
+    const streamKey = bearerRaw || c.req.query("key");
     return streamSSE(c, async (stream) => {
       let closed = false;
       let counted = true;
@@ -755,7 +754,7 @@ export function registerRoutes(
           if (!streamKey) return false;
           return Boolean(await verifyApiKey(storage, streamKey));
         }
-        return true; // legacy tokens are env-bound and rotate on restart
+        return false;
       };
       const unsubscribe = subscribeEvents((rows) => {
         if (closed) return;
@@ -806,7 +805,6 @@ export function registerRoutes(
 
   const monitorGuard = (c: Context<AppEnv>, write: boolean): Response | null => {
     const authInfo = getAuth(c);
-    if (authInfo.kind === "legacy") return null;
     if (authInfo.kind === "key") return c.json({ error: "keys cannot manage monitors" }, 403);
     return can(authInfo, write ? "monitors.write" : "monitors.read") ? null : c.json({ error: "forbidden" }, 403);
   };

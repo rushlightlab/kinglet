@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-/** SHA-256 hex used for API key and legacy token comparisons. */
+/** SHA-256 hex used for API key hashes. */
 export function sha256hex(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }

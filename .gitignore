@@ -6,7 +6,6 @@ data/
 *.db-shm
 *.db-wal
 .env
-kinglet.token
 admin-password.txt
 auth-secret.txt
 .DS_Store

@@ -4,28 +4,19 @@
  * histogram, filters, and monitors do their thing.
  *
  * Usage:
- *   pnpm demo:logs                      # dev API on :3000, token auto-read
+ *   pnpm demo:logs                      # dev API on :3000
  *   pnpm demo:logs --once               # backfill 40 events, then exit
- *   KINGLET_URL=http://localhost:8080 KINGLET_TOKEN=tok_x pnpm demo:logs
+ *   KINGLET_URL=http://localhost:8080 KINGLET_KEY=kl_... pnpm demo:logs
  *
- * The token is resolved from (in order): argv, KINGLET_TOKEN, or the dev
- * API's apps/api/data/kinglet.token file.
+ * The key is resolved from (in order): argv or KINGLET_KEY. It must be a
+ * project API key with the ingest scope.
  */
-import fs from "node:fs";
-
-function resolveToken(explicit) {
+function resolveKey(explicit) {
   if (explicit) return explicit;
-  if (process.env.KINGLET_TOKEN) return process.env.KINGLET_TOKEN;
-  for (const p of ["apps/api/data/kinglet.token", "data/kinglet.token"]) {
-    try {
-      return fs.readFileSync(p, "utf8").trim();
-    } catch {
-      // try the next location
-    }
-  }
+  if (process.env.KINGLET_KEY) return process.env.KINGLET_KEY;
   console.error(
-    "No token found. Pass one as an argument, set KINGLET_TOKEN, or run the dev API once " +
-      "(it writes apps/api/data/kinglet.token)."
+    "No API key. Create a project API key with the ingest scope in the UI, " +
+      "then pass it as an argument or set KINGLET_KEY."
   );
   process.exit(1);
 }
@@ -33,7 +24,7 @@ function resolveToken(explicit) {
 const positional = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const once = process.argv.includes("--once");
 const url = positional[0] ?? process.env.KINGLET_URL ?? "http://localhost:3000";
-const token = resolveToken(positional[1]);
+const key = resolveKey(positional[1]);
 const endpoint = url.replace(/\/+$/, "") + "/v1/events";
 
 const SERVICES = ["api", "web", "worker", "billing"];
@@ -76,7 +67,7 @@ function event(ts = Date.now()) {
 async function send(lines) {
   const res = await fetch(endpoint, {
     method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/x-ndjson" },
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/x-ndjson" },
     body: lines.join("\n"),
   });
   if (!res.ok) throw new Error(`ingest failed: HTTP ${res.status} ${await res.text()}`);

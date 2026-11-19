@@ -49,18 +49,6 @@ async function main(): Promise<void> {
   });
   const bootstrap = await ensureBootstrapAdmin(storage, config, auth);
 
-  // First boot with no KINGLET_TOKENS: keep a copy of the generated legacy
-  // token next to a local database so `cat kinglet.token` always works.
-  if (config.generatedToken && !isRemoteDbPath(config.dbPath)) {
-    try {
-      fs.writeFileSync(path.join(config.dataDir, "kinglet.token"), config.generatedToken + "\n", {
-        mode: 0o600,
-      });
-    } catch (err) {
-      console.warn("[kinglet] could not write kinglet.token:", err);
-    }
-  }
-
   const app = new Hono<AppEnv>();
 
   app.onError((err, c) => {
@@ -168,7 +156,7 @@ async function main(): Promise<void> {
   );
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
-  app.use("/v1/*", authMiddleware(storage, config, auth));
+  app.use("/v1/*", authMiddleware(storage, auth));
 
   const engine: MonitorEngine = startMonitorEngine(storage, {
     baseUrl: config.baseUrl,
@@ -276,7 +264,7 @@ function printBanner(
   console.log("  👑 Kinglet — small. light. king.");
   console.log("");
   console.log(`  API listening → http://localhost:${config.port}`);
-  console.log(`  Ingest        → POST /v1/events   (API key or legacy token)`);
+  console.log(`  Ingest        → POST /v1/events   (project API key)`);
   if (uiBuilt) console.log(`  UI            → http://localhost:${config.port}`);
   else console.log(`  UI            → not built; run "pnpm --filter @kinglet/web dev"`);
   console.log(`  Storage       → ${storage.description}`);
@@ -288,18 +276,6 @@ function printBanner(
         console.log(`                  also written to ${path.join(config.dataDir, "admin-password.txt")}`);
       }
     }
-  }
-  if (config.generatedToken) {
-    console.log(`  Token (legacy)→ ${config.generatedToken}`);
-    if (!isRemoteDbPath(config.dbPath)) {
-      console.log(`                  also written to ${path.join(config.dataDir, "kinglet.token")}`);
-    }
-  } else if (config.savedToken) {
-    console.log(`  Token (legacy)→ stored at ${path.join(config.dataDir, "kinglet.token")} (not printed)`);
-  } else if (config.tokens.length > 0) {
-    console.log(`  Tokens        → from KINGLET_TOKENS env (legacy)`);
-  } else {
-    console.log(`  Tokens        → legacy tokens disabled (use project API keys)`);
   }
   console.log("");
 }

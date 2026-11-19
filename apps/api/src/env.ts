@@ -19,12 +19,6 @@ export interface Config {
   trustedProxies: string[];
   /** Directory holding the database file (local stores only). */
   dataDir: string;
-  /** Legacy global ingest tokens (KINGLET_TOKENS) — all projects, full access. */
-  tokens: string[];
-  /** A token newly generated on this boot (no env tokens, no saved token file). */
-  generatedToken: string | null;
-  /** A token restored from kinglet.token so restarts don't invalidate clients. */
-  savedToken: string | null;
   retentionDays: number;
   /** Session lifetime for the web UI. */
   sessionDays: number;
@@ -93,36 +87,6 @@ export function loadConfig(): Config {
   const dataDir = path.dirname(path.resolve(localPath));
   const dbAuthToken = process.env.KINGLET_DB_AUTH_TOKEN?.trim() || undefined;
   const baseUrl = process.env.KINGLET_BASE_URL?.trim() || undefined;
-  const tokens = (process.env.KINGLET_TOKENS ?? "")
-    .split(",")
-    .map((t) => t.trim())
-    .filter(Boolean);
-  const legacyDisabled = ["1", "true", "yes"].includes(
-    (process.env.KINGLET_DISABLE_LEGACY_TOKENS ?? "").toLowerCase()
-  );
-  let generatedToken: string | null = null;
-  let savedToken: string | null = null;
-  if (legacyDisabled) {
-    // Machine access must go through scoped kl_ keys; the workspace-wide
-    // superuser token is opt-out.
-    tokens.length = 0;
-  } else if (tokens.length === 0) {
-    // Reuse the token from a previous boot so restarts (dev or Docker) don't
-    // invalidate clients that already saved it.
-    const tokenFile = path.join(dataDir, "kinglet.token");
-    try {
-      const raw = fs.readFileSync(tokenFile, "utf8").trim();
-      if (raw) savedToken = raw;
-    } catch {
-      // no saved token yet — generate below
-    }
-    if (savedToken) {
-      tokens.push(savedToken);
-    } else {
-      generatedToken = `tok_${randomBytes(24).toString("base64url")}`;
-      tokens.push(generatedToken);
-    }
-  }
   return {
     port,
     dbPath,
@@ -136,9 +100,6 @@ export function loadConfig(): Config {
       .map((v) => v.trim())
       .filter(Boolean),
     dataDir,
-    tokens,
-    generatedToken,
-    savedToken,
     retentionDays: intEnv("KINGLET_RETENTION_DAYS", 14),
     sessionDays: intEnv("KINGLET_SESSION_DAYS", 30),
     maxEventsPerProject: nonNegativeIntEnv("KINGLET_MAX_EVENTS_PER_PROJECT", 1_000_000),
