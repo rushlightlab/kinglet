@@ -7,6 +7,7 @@ import type {
   Histogram,
   KingletEvent,
   Monitor,
+  NotifyChannel,
   Project,
   ProjectMember,
   Service,
@@ -321,6 +322,14 @@ export function deleteMonitor(projectId: string, id: string): Promise<{ ok: true
 export function testMonitor(projectId: string, id: string): Promise<{ results: ChannelTestResult[] }> {
   return api<{ results: ChannelTestResult[] }>(withProject(`/v1/monitors/${id}/test`, projectId), {
     method: "POST",
+  });
+}
+
+/** Test an unsaved channel from the monitor form. */
+export function testChannel(channel: NotifyChannel): Promise<{ ok: true }> {
+  return api<{ ok: true }>("/v1/monitors/test-channel", {
+    method: "POST",
+    body: JSON.stringify(channel),
   });
 }
 

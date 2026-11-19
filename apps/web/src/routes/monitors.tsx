@@ -7,6 +7,7 @@ import {
   deleteMonitor,
   fetchAlerts,
   fetchMonitors,
+  testChannel,
   testMonitor,
   updateMonitor,
 } from "../api";
@@ -471,6 +472,7 @@ function MonitorForm({
   }));
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [testingChannel, setTestingChannel] = useState<number | null>(null);
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]): void => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -481,6 +483,18 @@ function MonitorForm({
       ...prev,
       channels: prev.channels.map((c, i) => (i === index ? { ...c, ...patch } : c)),
     }));
+  };
+
+  const testRow = async (channel: NotifyChannel, index: number): Promise<void> => {
+    setTestingChannel(index);
+    try {
+      await testChannel(channel);
+      toast.success(`Test sent to ${channel.type}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "test failed");
+    } finally {
+      setTestingChannel(null);
+    }
   };
 
   const save = async (): Promise<void> => {
@@ -666,6 +680,22 @@ function MonitorForm({
                   spellCheck={false}
                   className="min-w-0 flex-1"
                 />
+                <Button
+                  type="button"
+                  variant="chip"
+                  size="sm"
+                  className="h-9"
+                  disabled={testingChannel !== null || !c.url.trim()}
+                  onClick={() => void testRow(c, i)}
+                  title="Send a test notification to this channel"
+                >
+                  {testingChannel === i ? (
+                    <Spinner />
+                  ) : (
+                    <SendIcon data-icon="inline-start" />
+                  )}
+                  {testingChannel === i ? "sending" : "test"}
+                </Button>
                 <Button
                   type="button"
                   variant="chip"

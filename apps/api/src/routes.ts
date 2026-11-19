@@ -56,7 +56,7 @@ import {
   listMonitors,
   updateMonitorFromRaw,
 } from "./monitors.js";
-import { sendNotice } from "./notify.js";
+import { sendNotice, validateWebhookUrl } from "./notify.js";
 import type { AlertNotice } from "./notify.js";
 import { systemStatus } from "./status.js";
 import * as schema from "./storage/schema.js";
@@ -1070,6 +1070,43 @@ export function registerRoutes(
     if (authInfo.kind === "key") return c.json({ error: "keys cannot manage monitors" }, 403);
     return can(authInfo, write ? "monitors.write" : "monitors.read") ? null : c.json({ error: "forbidden" }, 403);
   };
+
+  app.post("/v1/monitors/test-channel", async (c) => {
+    const denied = monitorGuard(c, true);
+    if (denied) return denied;
+    const parsedBody = await readJsonStrict(c);
+    if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
+    const body = parsedBody.body;
+    const type = body.type;
+    const url = typeof body.url === "string" ? body.url.trim() : "";
+    if (type !== "webhook" && type !== "discord" && type !== "slack") {
+      return c.json({ error: "type must be webhook, discord, or slack" }, 400);
+    }
+    const urlError = validateWebhookUrl(url, config.allowPrivateWebhooks);
+    if (urlError) return c.json({ error: urlError }, 400);
+    try {
+      await sendNotice(
+        { type, url },
+        {
+          monitorId: "test",
+          monitorName: "Test channel",
+          query: "",
+          state: "test",
+          summary: "Test notification from Kinglet — your channel works.",
+          firedAt: Date.now(),
+        },
+        { allowPrivate: config.allowPrivateWebhooks }
+      );
+      return c.json({ ok: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[kinglet] test channel failed (${type}):`, message);
+      // Internal reachability details stay admin-only, matching monitor tests.
+      const authInfo = getAuth(c);
+      const detailed = authInfo.kind !== "user" || authInfo.user.role === "admin";
+      return c.json({ error: detailed ? message : "channel test failed" }, 502);
+    }
+  });
 
   app.get("/v1/monitors", async (c) => {
     const denied = monitorGuard(c, false);
