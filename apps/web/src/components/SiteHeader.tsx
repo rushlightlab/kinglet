@@ -4,7 +4,6 @@ import { ChevronDownIcon, LogOutIcon, SettingsIcon } from "lucide-react";
 import { useApp } from "../app-context";
 import Crown from "./Crown";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -91,11 +90,11 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
             <Button
               variant="outline"
               size="sm"
-              className="gap-2.5 rounded-[5px] border-white/[0.08] bg-ink-900 py-0 pr-2.5 pl-1.5 hover:bg-ink-900"
+              className="gap-2.5 rounded-[5px] border-white/[0.08] bg-ink-900 py-0 pr-2.5 pl-2 hover:bg-ink-900"
               aria-label="Account menu"
             >
-              <Avatar size="sm">
-                <AvatarFallback className="bg-gold/[0.08] font-mono text-[9px] font-semibold text-gold">
+              <Avatar size="sm" className="size-5 data-[size=sm]:size-5 after:hidden">
+                <AvatarFallback className="bg-gold/[0.08] font-mono text-[9px] font-semibold text-gold group-data-[size=sm]/avatar:text-[9px]">
                   {initials}
                 </AvatarFallback>
               </Avatar>
@@ -105,28 +104,39 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
               <ChevronDownIcon className="size-3 text-mist-faint" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-56">
-            <DropdownMenuLabel className="normal-case tracking-normal">
-              <div className="flex flex-col gap-1">
-                <span className="font-mono text-xs text-mist">{user.name || user.email}</span>
-                <span className="font-mono text-[10px] text-mist-faint">{user.email}</span>
-                <Badge
-                  variant="outline"
-                  className="w-fit text-[9px] normal-case tracking-normal"
-                >
+          <DropdownMenuContent align="end" className="w-64 p-1.5">
+            <DropdownMenuLabel className="p-0 font-normal normal-case tracking-normal">
+              <div className="flex items-center gap-2.5 px-2 py-2.5">
+                <Avatar size="sm" className="size-7 data-[size=sm]:size-7 after:hidden">
+                  <AvatarFallback className="bg-gold/[0.08] font-mono text-[10px] font-semibold text-gold group-data-[size=sm]/avatar:text-[10px]">
+                    {initials}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate font-mono text-xs font-medium text-mist">
+                    {user.name || user.email}
+                  </span>
+                  <span className="truncate font-mono text-[10px] text-mist-faint">
+                    {user.email}
+                  </span>
+                </div>
+                <span className="shrink-0 rounded-[3px] bg-white/[0.04] px-1.5 py-0.5 font-mono text-[9px] text-mist-dim">
                   {user.role}
-                </Badge>
+                </span>
               </div>
             </DropdownMenuLabel>
-            <DropdownMenuSeparator />
+            <DropdownMenuSeparator className="my-1.5" />
             <DropdownMenuGroup>
-              <DropdownMenuItem onSelect={() => void navigate({ to: "/settings" })}>
+              <DropdownMenuItem
+                className="px-2 py-2"
+                onSelect={() => void navigate({ to: "/settings" })}
+              >
                 <SettingsIcon />
                 Settings
               </DropdownMenuItem>
             </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={signOut}>
+            <DropdownMenuSeparator className="my-1.5" />
+            <DropdownMenuItem className="px-2 py-2" variant="destructive" onSelect={signOut}>
               <LogOutIcon />
               Sign out
             </DropdownMenuItem>
