@@ -4,6 +4,7 @@ export const LEVEL_NAMES = ["trace", "debug", "info", "warn", "error", "fatal"] 
 export interface StoredEvent {
   id: number;
   projectId: number;
+  apiKeyId: number | null;
   ts: number;
   level: number;
   service: string | null;
@@ -16,6 +17,7 @@ export interface StoredEvent {
 export interface ClientEvent {
   id: number;
   projectId: number;
+  apiKeyId: number | null;
   ts: number;
   level: number;
   service: string | null;
@@ -36,6 +38,7 @@ export function toClientEvent(row: StoredEvent): ClientEvent {
   return {
     id: row.id,
     projectId: row.projectId,
+    apiKeyId: row.apiKeyId,
     ts: row.ts,
     level: row.level,
     service: row.service,

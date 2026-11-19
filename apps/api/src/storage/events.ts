@@ -13,6 +13,7 @@ function mapEventRow(row: typeof schema.events.$inferSelect): StoredEvent {
   return {
     id: Number(row.id),
     projectId: Number(row.projectId),
+    apiKeyId: row.apiKeyId === null ? null : Number(row.apiKeyId),
     ts: Number(row.ts),
     level: Number(row.level),
     service: row.service,
@@ -25,7 +26,8 @@ function mapEventRow(row: typeof schema.events.$inferSelect): StoredEvent {
 export async function insertEvents(
   db: KingletDb,
   projectId: number,
-  events: Normalized[]
+  events: Normalized[],
+  apiKeyId: number | null
 ): Promise<StoredEvent[]> {
   if (events.length === 0) return [];
   const rows: StoredEvent[] = [];
@@ -37,6 +39,7 @@ export async function insertEvents(
         .values(
           chunk.map((e) => ({
             projectId,
+            apiKeyId,
             ts: e.ts,
             level: e.level,
             service: e.service,
@@ -52,6 +55,7 @@ export async function insertEvents(
         rows.push({
           id: Number(insertedRow.id),
           projectId,
+          apiKeyId,
           ts: event.ts,
           level: event.level,
           service: event.service,

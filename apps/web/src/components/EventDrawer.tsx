@@ -17,6 +17,7 @@ export default function EventDrawer({ event, onClose }: { event: KingletEvent; o
         <Row label="time" value={new Date(event.ts).toISOString()} />
         <Row label="service" value={event.service ?? "—"} />
         <Row label="env" value={event.env ?? "—"} />
+        <Row label="api key" value={event.apiKeyId ? `#${event.apiKeyId}` : "session"} />
         <Row label="id" value={String(event.id)} />
       </dl>
       <div className="mt-4">

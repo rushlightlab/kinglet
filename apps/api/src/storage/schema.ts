@@ -44,6 +44,7 @@ export const events = sqliteTable(
   {
     id: integer("id").primaryKey(),
     projectId: integer("project_id").notNull().default(1),
+    apiKeyId: integer("api_key_id"),
     ts: integer("ts").notNull(),
     level: integer("level").notNull(),
     service: text("service"),
@@ -54,6 +55,7 @@ export const events = sqliteTable(
   (table) => [
     index("idx_events_ts").on(table.ts),
     index("idx_events_project_ts").on(table.projectId, table.ts),
+    index("idx_events_project_key_ts").on(table.projectId, table.apiKeyId, table.ts),
     index("idx_events_service_ts").on(table.service, table.ts),
     index("idx_events_env_ts").on(table.env, table.ts),
   ]

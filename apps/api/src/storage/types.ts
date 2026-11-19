@@ -36,7 +36,11 @@ export interface Storage {
   readonly description: string;
   /** Typed Drizzle database for meta tables and ad-hoc queries. */
   readonly db: KingletDb;
-  insertEvents(projectId: number, events: Normalized[]): Promise<StoredEvent[]>;
+  insertEvents(
+    projectId: number,
+    events: Normalized[],
+    apiKeyId: number | null
+  ): Promise<StoredEvent[]>;
   queryEvents(opts: QueryOptions): Promise<StoredEvent[]>;
   histogramPoints(
     projectId: number,

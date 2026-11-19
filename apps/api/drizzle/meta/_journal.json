@@ -29,6 +29,13 @@
       "when": 1795071221151,
       "tag": "0003_premium_slyde",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1795074439390,
+      "tag": "0004_high_northstar",
+      "breakpoints": true
     }
   ]
 }

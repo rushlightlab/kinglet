@@ -1,7 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import {
   BanIcon,
+  BarChart3Icon,
   CircleCheckIcon,
   KeyRoundIcon,
   MoreHorizontalIcon,
@@ -151,6 +152,7 @@ function SettingsPage() {
 
 function KeysPanel() {
   const { currentProjectId, projects, permissions, refreshProjects } = useApp();
+  const navigate = useNavigate();
   const canWriteKeys = hasPermission(permissions, "keys.write");
   const canWriteProjects = hasPermission(permissions, "projects.write");
   const project = projects.find((p) => p.id === currentProjectId);
@@ -375,6 +377,7 @@ function KeysPanel() {
               <TableRow>
                 <TableHead>key</TableHead>
                 <TableHead>scopes</TableHead>
+                <TableHead className="hidden md:table-cell">created by</TableHead>
                 <TableHead className="hidden md:table-cell">activity</TableHead>
                 <TableHead className="text-right">actions</TableHead>
               </TableRow>
@@ -385,7 +388,9 @@ function KeysPanel() {
                   <TableCell>
                     <div className="flex min-w-0 flex-col gap-0.5">
                       <span className="truncate text-mist">{key.name}</span>
-                      <span className="text-[10px] text-mist-faint">{key.prefix}</span>
+                      <span className="text-[10px] text-mist-faint">
+                        {key.prefix} · #{key.id}
+                      </span>
                     </div>
                   </TableCell>
                   <TableCell>
@@ -396,14 +401,14 @@ function KeysPanel() {
                     </div>
                   </TableCell>
                   <TableCell className="hidden md:table-cell">
-                    <div className="flex flex-col gap-0.5 text-[10px] text-mist-faint">
-                      <span>
-                        {key.lastUsedAt
-                          ? `last used ${new Date(key.lastUsedAt).toLocaleDateString()}`
-                          : "never used"}
-                      </span>
-                      {key.createdByEmail && <span>by {key.createdByEmail}</span>}
-                    </div>
+                    <span className="text-[10px] text-mist-faint">{key.createdByEmail ?? "—"}</span>
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell">
+                    <span className="text-[10px] text-mist-faint">
+                      {key.lastUsedAt
+                        ? `last used ${new Date(key.lastUsedAt).toLocaleDateString()}`
+                        : "never used"}
+                    </span>
                   </TableCell>
                   <TableCell className="text-right">
                     <DropdownMenu>
@@ -411,11 +416,7 @@ function KeysPanel() {
                         <Button
                           variant="ghost"
                           size="icon-xs"
-                          disabled={!canWriteKeys}
                           aria-label={`Actions for ${key.name}`}
-                          title={
-                            canWriteKeys ? undefined : "Requires the keys.write permission"
-                          }
                         >
                           <MoreHorizontalIcon />
                         </Button>
@@ -423,11 +424,26 @@ function KeysPanel() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuLabel>Key actions</DropdownMenuLabel>
                         <DropdownMenuGroup>
-                          <DropdownMenuItem onSelect={() => openKeyScopes(key)}>
+                          <DropdownMenuItem
+                            onSelect={() =>
+                              void navigate({
+                                to: "/",
+                                search: { q: `key:${key.id}`, from: undefined, to: undefined },
+                              })
+                            }
+                          >
+                            <BarChart3Icon />
+                            View usage
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!canWriteKeys}
+                            onSelect={() => openKeyScopes(key)}
+                          >
                             <SlidersHorizontalIcon />
                             Edit permissions
                           </DropdownMenuItem>
                           <DropdownMenuItem
+                            disabled={!canWriteKeys}
                             onSelect={() => setPendingKey({ type: "rotate", key })}
                           >
                             <RotateCcwIcon />
@@ -437,6 +453,7 @@ function KeysPanel() {
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
                           variant="destructive"
+                          disabled={!canWriteKeys}
                           onSelect={() => setPendingKey({ type: "revoke", key })}
                         >
                           <Trash2Icon />
@@ -449,7 +466,7 @@ function KeysPanel() {
               ))}
               {keys.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={4} className="py-4 text-center text-mist-faint">
+                  <TableCell colSpan={5} className="py-4 text-center text-mist-faint">
                     No keys for this project yet.
                   </TableCell>
                 </TableRow>

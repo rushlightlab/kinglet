@@ -12,6 +12,7 @@ export const LEVEL_COLORS = [
 
 export interface KingletEvent {
   id: number;
+  apiKeyId: number | null;
   ts: number;
   level: number;
   service: string | null;

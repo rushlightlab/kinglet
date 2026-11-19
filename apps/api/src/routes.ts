@@ -795,7 +795,11 @@ export function registerRoutes(
       else errors.push(result.error);
     }
 
-    const rows = await storage.insertEvents(projectId, normalized);
+    const rows = await storage.insertEvents(
+      projectId,
+      normalized,
+      authInfo.kind === "key" ? authInfo.keyId : null
+    );
     bumpProjectCount(projectId, rows.length);
     publishEvents(rows);
 

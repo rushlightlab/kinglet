@@ -8,6 +8,7 @@ import { LEVEL_NAMES } from "./types.js";
  *   level>=warn        level comparisons
  *   service:api        service equals "api"
  *   env:prod           env equals "prod"
+ *   key:12             events ingested by API key #12
  *   "conn refused"     message contains phrase
  *   -healthcheck       message must NOT contain this
  *
@@ -19,6 +20,7 @@ export interface ParsedFilters {
   levelValue: number | null;
   service: string | null;
   env: string | null;
+  apiKeyId: number | null;
   includes: string[];
   excludes: string[];
 }
@@ -57,7 +59,15 @@ function levelIndex(value: string): number | null {
 }
 
 export function parseFilters(q: string): ParsedFilters {
-  const f: ParsedFilters = { levelOp: null, levelValue: null, service: null, env: null, includes: [], excludes: [] };
+  const f: ParsedFilters = {
+    levelOp: null,
+    levelValue: null,
+    service: null,
+    env: null,
+    apiKeyId: null,
+    includes: [],
+    excludes: [],
+  };
   for (const token of tokenize(q)) {
     let t = token;
     let negative = false;
@@ -67,6 +77,7 @@ export function parseFilters(q: string): ParsedFilters {
     }
     const levelMatch = /^level(>=|<=|>|<|=|:)(.+)$/i.exec(t);
     const kvMatch = /^(service|env):(.+)$/i.exec(t);
+    const keyMatch = /^(?:key|api_key):(\d+)$/i.exec(t);
     if (!negative && levelMatch) {
       const value = levelIndex(levelMatch[2] ?? "");
       if (value !== null) {
@@ -75,6 +86,10 @@ export function parseFilters(q: string): ParsedFilters {
         f.levelValue = value;
         continue;
       }
+    }
+    if (!negative && keyMatch) {
+      f.apiKeyId = Number(keyMatch[1]);
+      continue;
     }
     if (!negative && kvMatch) {
       const key = (kvMatch[1] ?? "").toLowerCase();
@@ -115,6 +130,7 @@ export function buildWhere(f: ParsedFilters, range: EventRange, projectId: numbe
   }
   if (f.service !== null) parts.push(sql`service = ${f.service}`);
   if (f.env !== null) parts.push(sql`env = ${f.env}`);
+  if (f.apiKeyId !== null) parts.push(sql`api_key_id = ${f.apiKeyId}`);
   for (const term of f.includes) parts.push(textClause(term));
   for (const term of f.excludes) parts.push(sql`NOT (${textClause(term)})`);
   return sql.join(parts, sql` AND `);
@@ -132,10 +148,20 @@ function compare(a: number, op: string, b: number): boolean {
 }
 
 /** In-memory equivalent of buildWhere, used to filter the SSE live tail. */
-export function matchesEvent(f: ParsedFilters, row: { level: number; service: string | null; env: string | null; message: string }): boolean {
+export function matchesEvent(
+  f: ParsedFilters,
+  row: {
+    level: number;
+    service: string | null;
+    env: string | null;
+    message: string;
+    apiKeyId?: number | null;
+  }
+): boolean {
   if (f.levelOp && f.levelValue !== null && !compare(row.level, f.levelOp, f.levelValue)) return false;
   if (f.service !== null && (row.service ?? "").toLowerCase() !== f.service) return false;
   if (f.env !== null && (row.env ?? "").toLowerCase() !== f.env) return false;
+  if (f.apiKeyId !== null && (row.apiKeyId ?? null) !== f.apiKeyId) return false;
   const message = row.message.toLowerCase();
   for (const term of f.includes) {
     if (!message.includes(term)) return false;
