@@ -266,9 +266,17 @@ function registerStaticUi(app: Hono<AppEnv>): void {
     if (!fs.existsSync(filePath)) filePath = path.join(webDist, "index.html"); // SPA fallback
     if (!fs.existsSync(filePath)) return c.notFound();
     const body = fs.readFileSync(filePath);
-    return c.body(body, 200, {
+    const headers: Record<string, string> = {
       "content-type": mimeTypes[path.extname(filePath)] ?? "application/octet-stream",
-    });
+    };
+    // Hashed build assets never change; the HTML entrypoint must always be
+    // revalidated so a new deploy cannot keep loading an old bundle.
+    if (pathname.startsWith("/assets/")) {
+      headers["cache-control"] = "public, max-age=31536000, immutable";
+    } else {
+      headers["cache-control"] = "no-cache";
+    }
+    return c.body(body, 200, headers);
   });
 }
 

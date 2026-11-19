@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { hasPermission, useApp } from "../app-context";
 import PageShell from "../components/PageShell";
 import ProjectsPanel from "../components/settings/ProjectsPanel";
@@ -7,6 +7,12 @@ import UsersPanel from "../components/settings/UsersPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export const Route = createFileRoute("/settings")({
+  beforeLoad: ({ location }) => {
+    // Keep old bookmarks and the previous user-menu link working.
+    if (new URLSearchParams(location.searchStr).get("tab") === "account") {
+      throw redirect({ to: "/account" });
+    }
+  },
   component: SettingsPage,
 });
 
