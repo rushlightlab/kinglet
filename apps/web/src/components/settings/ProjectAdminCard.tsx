@@ -79,6 +79,7 @@ export function ProjectRenameCard({ project }: { project: Project }) {
             </Field>
             <Button
               type="submit"
+              className="shadow-none hover:translate-y-0 hover:shadow-none"
               disabled={saving || !name.trim() || name.trim() === project.name}
             >
               {saving && <Spinner data-icon="inline-start" />}

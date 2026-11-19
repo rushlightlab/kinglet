@@ -100,6 +100,7 @@ export default function AccountPanel() {
             <div className="sm:col-span-3">
               <Button
                 type="submit"
+                className="shadow-none hover:translate-y-0 hover:shadow-none"
                 disabled={!current || nextProblem !== null || next !== confirm}
               >
                 update password

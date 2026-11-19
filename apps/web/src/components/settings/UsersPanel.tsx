@@ -392,6 +392,7 @@ export default function UsersPanel() {
             <div className="sm:col-span-2">
               <Button
                 type="submit"
+                className="shadow-none hover:translate-y-0 hover:shadow-none"
                 disabled={!email.trim() || (password.length > 0 && passwordProblem(password) !== null)}
               >
                 <UserPlusIcon data-icon="inline-start" />
