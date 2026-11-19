@@ -3,15 +3,18 @@
 #
 #   KINGLET_DOMAIN=logs.example.com \
 #   KINGLET_BASE_URL=https://logs.example.com \
-#   docker compose -f docker-compose.tls.yml up -d --build
+#   docker compose -f docker-compose.tls.yml up -d
+#
+# This uses the public image. For a local source build, replace the image with:
+#   build: ..
+#   image: kinglet:latest
 #
 # Set KINGLET_ADMIN_EMAIL / KINGLET_ADMIN_PASSWORD (or read the generated
 # password from the container logs) when no administrator exists.
 
 services:
   kinglet:
-    build: ..
-    image: kinglet:latest
+    image: ghcr.io/rushlightlab/kinglet:0.3.0
     environment:
       KINGLET_DB_PATH: /data/kinglet.db
       KINGLET_RETENTION_DAYS: 14
