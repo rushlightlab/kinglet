@@ -22,23 +22,28 @@ Docs and landing page: **https://kinglet.rushlightlab.com**
 
 ## Quickstart (Docker)
 
-From a clone of this repo:
+Run the public image — no clone or build:
 
 ```bash
-docker compose up -d --build
+docker run -d --name kinglet \
+  --restart unless-stopped \
+  -p 8080:3000 \
+  -v kinglet-data:/data \
+  -e KINGLET_BASE_URL=http://localhost:8080 \
+  ghcr.io/rushlightlab/kinglet:latest
 
-# the first boot (or a database with no administrator) creates one.
-# If no password was configured, the generated one is printed here:
-docker compose exec kinglet cat /data/admin-password.txt
+# if you didn't set an admin password, read the generated one:
+docker exec kinglet cat /data/admin-password.txt
 
 # open the UI
 open http://localhost:8080
 ```
 
 Sign in with the admin email (default `admin@kinglet.local`) and that password.
-Set `KINGLET_ADMIN_EMAIL` / `KINGLET_ADMIN_PASSWORD` in `.env` (copy from
-`.env.example`) to choose your own — they only apply when no administrator
-exists.
+Set `KINGLET_ADMIN_EMAIL` / `KINGLET_ADMIN_PASSWORD` on the container to choose
+your own — they only apply when no administrator exists. For a public server,
+set `KINGLET_BASE_URL` to your HTTPS origin and pin a release tag such as
+`:0.3.0` instead of `:latest`.
 
 Then go to **/settings → projects & keys**, create an API key (`kl_…`, scopes
 `ingest` / `query`), and send your first log with it:
@@ -50,13 +55,9 @@ curl -X POST http://localhost:8080/v1/events \
   --data-binary '{"level":"error","message":"payment failed","service":"billing"}'
 ```
 
-No clone needed? Run the published multi-arch image (the GHCR package must be
-public, or run `docker login ghcr.io` first):
-
-```bash
-docker run -d --name kinglet -p 8080:3000 -v kinglet-data:/data \
-  ghcr.io/rushlightlab/kinglet:latest
-```
+Prefer Compose, Coolify, or Dokploy? The
+[self-hosting guide](https://kinglet.rushlightlab.com/self-hosting/) has all
+three paths, TLS, backups, and configuration.
 
 ## Send logs
 
@@ -330,9 +331,6 @@ GHCR: pushes to `main` publish `:latest` and `:main`, and `v*` tags publish
 git tag v0.3.0 -m "Kinglet v0.3.0"
 git push origin v0.3.0
 ```
-
-After the first publish, make the package public (GitHub → Packages → kinglet
-→ Package settings → Change visibility) if you want anonymous pulls.
 
 The docs changelog and landing version badge are generated from GitHub
 Releases. Publishing a release updates them on the next docs build; to trigger
