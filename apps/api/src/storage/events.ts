@@ -10,6 +10,11 @@ import type { HistogramPointRow, QueryOptions, ServiceRow } from "./types.js";
 /** SQLite caps the number of bound variables per statement. */
 const INSERT_CHUNK = 500;
 
+/** Yield a real macrotask so large deletes do not monopolize the event loop. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function mapEventRow(row: typeof schema.events.$inferSelect): StoredEvent {
   return {
     id: Number(row.id),
@@ -23,6 +28,15 @@ function mapEventRow(row: typeof schema.events.$inferSelect): StoredEvent {
     message: row.message,
     fields: row.fields ?? null,
   };
+}
+
+export function eventSizeBytes(event: Normalized): number {
+  return (
+    Buffer.byteLength(event.message) +
+    Buffer.byteLength(event.fields ?? "") +
+    Buffer.byteLength(event.service ?? "") +
+    Buffer.byteLength(event.env ?? "")
+  );
 }
 
 export async function insertEvents(
@@ -52,6 +66,7 @@ export async function insertEvents(
             env: e.env,
             message: e.message,
             fields: e.fields,
+            sizeBytes: eventSizeBytes(e),
           }))
         )
         .returning({ id: schema.events.id });
@@ -165,6 +180,7 @@ export async function deleteOlderThan(db: KingletDb, ts: number): Promise<number
     const changed = Number(result.rowsAffected ?? 0);
     total += changed;
     if (changed === 0) return total;
+    await yieldToEventLoop();
   }
 }
 
@@ -185,5 +201,20 @@ export async function deleteByProject(
     const changed = Number(result.rowsAffected ?? 0);
     total += changed;
     if (changed === 0) return total;
+    await yieldToEventLoop();
+  }
+}
+
+/** Chunked alert-history retention, yielded so it never blocks the loop. */
+export async function deleteAlertsOlderThan(db: KingletDb, ts: number): Promise<number> {
+  let total = 0;
+  for (;;) {
+    const result = await db.run(
+      sql`DELETE FROM alerts WHERE id IN (SELECT id FROM alerts WHERE fired_at < ${ts} ORDER BY fired_at LIMIT 10000)`
+    );
+    const changed = Number(result.rowsAffected ?? 0);
+    total += changed;
+    if (changed === 0) return total;
+    await yieldToEventLoop();
   }
 }

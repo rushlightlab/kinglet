@@ -179,6 +179,8 @@ async function main(): Promise<void> {
   const engine: MonitorEngine = startMonitorEngine(storage, {
     baseUrl: config.baseUrl,
     allowPrivateWebhooks: config.allowPrivateWebhooks,
+    dbPath: config.dbPath,
+    maxDbBytes: config.maxDbBytes,
   });
   registerRoutes(app, storage, engine, config, auth);
   registerStaticUi(app);
@@ -193,7 +195,7 @@ async function main(): Promise<void> {
     console.error("");
     void storage.close().finally(() => process.exit(1));
   });
-  startRetentionJob(storage, config.retentionDays);
+  startRetentionJob(storage, config.retentionDays, config.alertRetentionDays);
 
   const shutdown = (): void => {
     console.log("[kinglet] shutting down…");

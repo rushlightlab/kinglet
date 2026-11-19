@@ -1,7 +1,5 @@
 import { and, count, eq, inArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
-import fs from "node:fs";
-import path from "node:path";
 import { bodyLimit } from "hono/body-limit";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -11,6 +9,8 @@ import {
   createApiKey,
   deleteApiKey,
   deleteApiKeysByOwner,
+  deleteApiKeysByOwnerInProject,
+  getApiKey,
   listApiKeys,
   rotateApiKey,
   updateApiKeyScopes,
@@ -26,6 +26,7 @@ import {
   requirePermission,
   requireUser,
   resolveProjectId,
+  userAuth,
 } from "./auth/middleware.js";
 import type { AppEnv, AuthInfo } from "./auth/middleware.js";
 import { isKeyScope, isRole, permissionsForRole } from "./auth/roles.js";
@@ -47,6 +48,8 @@ import { passwordProblem } from "./auth/password.js";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
 import type { Normalized } from "./ingest.js";
 import { normalizeEvent } from "./ingest.js";
+import { validateQueryString } from "./query-validation.js";
+import { eventSizeBytes } from "./storage/events.js";
 import type { MonitorEngine } from "./monitors.js";
 import {
   createMonitorFromRaw,
@@ -61,11 +64,22 @@ import type { AlertNotice } from "./notify.js";
 import { systemStatus } from "./status.js";
 import * as schema from "./storage/schema.js";
 import type { Storage } from "./storage/index.js";
+import { localDbBytes, invalidateDbSizeCache } from "./storage/db-size.js";
 import { toClientEvent } from "./types.js";
 
 const MAX_BATCH = 10000;
 const MAX_STREAMS = 200;
+const MAX_STREAMS_PER_IDENTITY = 10;
+const MAX_STREAMS_PER_PROJECT = 100;
+const MAX_PENDING_WRITES = 500;
+const MAX_PENDING_BYTES = 1_000_000;
 let activeStreams = 0;
+const streamsByIdentity = new Map<string, number>();
+const streamsByProject = new Map<string, number>();
+
+function streamIdentity(auth: AuthInfo): string {
+  return auth.kind === "key" ? `key:${auth.keyId}` : `user:${auth.user.id}`;
+}
 
 /**
  * Validates the from/to query parameters. Rejects unsafe/non-integer values,
@@ -86,9 +100,7 @@ function parseRange(c: Context<AppEnv>): { from: number; to: number } | Response
 }
 
 function validateQuery(q: string): string | null {
-  if (q.length > 500) return "filter is too long (max 500 characters)";
-  if (q.split(/\s+/).filter(Boolean).length > 32) return "too many filter terms (max 32)";
-  return null;
+  return validateQueryString(q);
 }
 
 /** Per-identity ingest rate limit: 600 batches / minute. */
@@ -127,32 +139,6 @@ async function projectEventCount(storage: Storage, projectId: string): Promise<n
 function bumpProjectCount(projectId: string, inserted: number): void {
   const cached = projectCountCache.get(projectId);
   if (cached) cached.value += inserted;
-}
-
-let dbSizeCache: { bytes: number | null; checkedAt: number } = { bytes: null, checkedAt: 0 };
-
-/** Size of a local libSQL store, WAL included; null for remote stores. */
-function localDbBytes(dbPath: string): number | null {
-  const local = dbPath.toLowerCase().startsWith("file:") ? dbPath.slice(5) : dbPath;
-  if (/^(libsql:\/\/|https?:\/\/|wss?:\/\/)/i.test(local)) return null;
-  const now = Date.now();
-  if (now - dbSizeCache.checkedAt < 30_000) return dbSizeCache.bytes;
-  let bytes: number | null = null;
-  try {
-    const resolved = path.resolve(local);
-    bytes = fs.statSync(resolved).size;
-    for (const suffix of ["-wal", "-shm"]) {
-      try {
-        bytes += fs.statSync(resolved + suffix).size;
-      } catch {
-        // file may not exist
-      }
-    }
-  } catch {
-    bytes = null;
-  }
-  dbSizeCache = { bytes, checkedAt: now };
-  return bytes;
 }
 
 function clampInt(value: string | undefined, fallback: number, min: number, max: number): number {
@@ -355,6 +341,7 @@ export function registerRoutes(
       await tx.delete(schema.alerts).where(inArray(schema.alerts.monitorId, monitorIds));
       await tx.delete(schema.monitors).where(eq(schema.monitors.projectId, id));
       await tx.delete(schema.events).where(eq(schema.events.projectId, id));
+      await tx.delete(schema.projectUsage).where(eq(schema.projectUsage.projectId, id));
       await tx.delete(schema.apiKeys).where(eq(schema.apiKeys.projectId, id));
       await tx.delete(schema.projectMembers).where(eq(schema.projectMembers.projectId, id));
       await tx.delete(schema.projects).where(eq(schema.projects.id, id));
@@ -413,10 +400,18 @@ export function registerRoutes(
     const body = parsedBody.body;
 
     const disabled = typeof body?.disabled === "boolean" ? body.disabled : undefined;
+    let role: Role | undefined;
+    if (body?.role !== undefined) {
+      if (!isRole(body.role)) return c.json({ error: "invalid role" }, 400);
+      role = body.role;
+    }
+    // Validate the final state, not the pre-change role. A combined
+    // { disabled: true, role: "admin" } must not create a banned administrator.
+    const finalRole = role ?? target.role;
+    if (disabled === true && finalRole === "admin") {
+      return c.json({ error: "administrators cannot be disabled" }, 400);
+    }
     if (disabled !== undefined) {
-      if (disabled && target.role === "admin") {
-        return c.json({ error: "administrators cannot be disabled" }, 400);
-      }
       if (disabled && userId === me.id) {
         return c.json({ error: "you cannot disable your own account" }, 400);
       }
@@ -428,14 +423,14 @@ export function registerRoutes(
           400
         );
       }
+      if (disabled) {
+        // Disabling is an offboarding event: keys must not come back on unban.
+        const revoked = await deleteApiKeysByOwner(storage, userId);
+        if (revoked > 0) console.log(`[kinglet] revoked ${revoked} API key(s) for disabled user ${userId}`);
+      }
     }
 
-    let role: Role | undefined;
-    if (body?.role !== undefined) {
-      if (!isRole(body.role)) return c.json({ error: "invalid role" }, 400);
-      role = body.role;
-    }
-    if (target.role === "admin" && role !== undefined && role !== "admin") {
+    if (target.role === "admin" && target.disabled === false && role !== undefined && role !== "admin") {
       if ((await countAdmins(storage)) <= 1) {
         return c.json({ error: "cannot demote the last administrator" }, 400);
       }
@@ -476,7 +471,11 @@ export function registerRoutes(
         c.req.raw.headers,
         userId
       );
-      return c.json({ password });
+      // Account recovery is a full credential rotation: keys minted during a
+      // stolen session must not survive the password reset.
+      const revokedKeys = await deleteApiKeysByOwner(storage, userId);
+      if (revokedKeys > 0) console.log(`[kinglet] revoked ${revokedKeys} API key(s) after password reset for ${userId}`);
+      return c.json({ password, revokedKeys });
     } catch (err) {
       return c.json(
         { error: err instanceof Error ? err.message : "could not reset password" },
@@ -510,6 +509,10 @@ export function registerRoutes(
   });
 
   // ================= API keys =================
+
+  const canManageApiKey = (auth: AuthInfo, key: { createdBy: string | null }): boolean =>
+    auth.kind === "user" &&
+    (auth.user.role === "admin" || key.createdBy === auth.user.id);
 
   app.get("/v1/projects/:id/keys", async (c) => {
     const denied = requirePermission(c, "keys.read");
@@ -567,6 +570,11 @@ export function registerRoutes(
     if (!(await canAccessProject(getAuth(c), storage, projectId))) {
       return c.json({ error: "project not found" }, 404);
     }
+    const key = await getApiKey(storage, id, projectId);
+    if (!key) return c.json({ error: "key not found" }, 404);
+    if (!canManageApiKey(getAuth(c), key)) {
+      return c.json({ error: "only the key creator or an administrator can revoke this key" }, 403);
+    }
     const deleted = await deleteApiKey(storage, id, projectId);
     if (!deleted) return c.json({ error: "key not found" }, 404);
     return c.json({ ok: true });
@@ -583,6 +591,11 @@ export function registerRoutes(
     }
     if (!(await canAccessProject(getAuth(c), storage, projectId))) {
       return c.json({ error: "project not found" }, 404);
+    }
+    const key = await getApiKey(storage, id, projectId);
+    if (!key) return c.json({ error: "key not found" }, 404);
+    if (!canManageApiKey(getAuth(c), key)) {
+      return c.json({ error: "only the key creator or an administrator can change this key" }, 403);
     }
     const parsedBody = await readJsonStrict(c);
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
@@ -614,6 +627,11 @@ export function registerRoutes(
     }
     if (!(await canAccessProject(getAuth(c), storage, projectId))) {
       return c.json({ error: "project not found" }, 404);
+    }
+    const key = await getApiKey(storage, id, projectId);
+    if (!key) return c.json({ error: "key not found" }, 404);
+    if (!canManageApiKey(getAuth(c), key)) {
+      return c.json({ error: "only the key creator or an administrator can rotate this key" }, 403);
     }
     const rotated = await rotateApiKey(storage, id, projectId);
     if (!rotated) return c.json({ error: "key not found" }, 404);
@@ -733,7 +751,10 @@ export function registerRoutes(
         )
       );
     if (Number(result.rowsAffected ?? 0) === 0) return c.json({ error: "member not found" }, 404);
-    return c.json({ ok: true });
+    // Offboarding a project member must revoke the machine credentials that
+    // member minted for this project; otherwise the key outlives the membership.
+    const revokedKeys = await deleteApiKeysByOwnerInProject(storage, userId, projectId);
+    return c.json({ ok: true, revokedKeys });
   });
 
   // ================= events =================
@@ -756,7 +777,7 @@ export function registerRoutes(
           {
             error:
               `database size limit reached (${Math.round(config.maxDbBytes / 1_048_576)} MB) — ` +
-              "shorten KINGLET_RETENTION_DAYS or raise KINGLET_MAX_DB_MB",
+              "delete old data or raise KINGLET_MAX_DB_MB",
           },
           507
         );
@@ -832,6 +853,26 @@ export function registerRoutes(
       else errors.push(result.error);
     }
 
+    if (config.maxProjectBytes > 0 && normalized.length > 0) {
+      const incomingBytes = normalized.reduce((sum, event) => sum + eventSizeBytes(event), 0);
+      const usage = await storage.db
+        .select({ bytes: schema.projectUsage.bytes })
+        .from(schema.projectUsage)
+        .where(eq(schema.projectUsage.projectId, projectId))
+        .limit(1);
+      const storedBytes = Number(usage[0]?.bytes ?? 0);
+      if (storedBytes + incomingBytes > config.maxProjectBytes) {
+        return c.json(
+          {
+            error:
+              `project storage limit reached (${Math.round(config.maxProjectBytes / 1_048_576)} MB) - ` +
+              "delete old events or raise KINGLET_MAX_PROJECT_DB_MB",
+          },
+          507
+        );
+      }
+    }
+
     const rows = await storage.insertEvents(
       projectId,
       normalized,
@@ -888,7 +929,7 @@ export function registerRoutes(
     }
     const deleted = await storage.deleteByProject(projectId, range);
     projectCountCache.delete(projectId);
-    dbSizeCache = { bytes: null, checkedAt: 0 };
+    invalidateDbSizeCache();
     console.log(
       `[kinglet] cleared ${deleted} event(s) from project ${projectId}` +
         (range ? ` between ${new Date(range.from).toISOString()} and ${new Date(range.to).toISOString()}` : " (all time)") +
@@ -976,6 +1017,13 @@ export function registerRoutes(
     if (activeStreams >= MAX_STREAMS) {
       return c.json({ error: "too many live streams — close one and retry" }, 429);
     }
+    const identity = streamIdentity(authInfo);
+    if ((streamsByIdentity.get(identity) ?? 0) >= MAX_STREAMS_PER_IDENTITY) {
+      return c.json({ error: "too many live streams for this account — close one and retry" }, 429);
+    }
+    if ((streamsByProject.get(projectId) ?? 0) >= MAX_STREAMS_PER_PROJECT) {
+      return c.json({ error: "too many live streams for this project — close one and retry" }, 429);
+    }
     const f = parseFilters(q);
     const bearerRaw = (c.req.header("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
     const streamKey = bearerRaw || c.req.query("key");
@@ -983,13 +1031,22 @@ export function registerRoutes(
       let closed = false;
       let counted = true;
       let pending = 0;
+      let pendingBytes = 0;
       let ticks = 0;
       activeStreams++;
+      streamsByIdentity.set(identity, (streamsByIdentity.get(identity) ?? 0) + 1);
+      streamsByProject.set(projectId, (streamsByProject.get(projectId) ?? 0) + 1);
       const cleanup = (): void => {
         if (closed) return;
         closed = true;
         if (counted) {
           activeStreams--;
+          const identityCount = (streamsByIdentity.get(identity) ?? 1) - 1;
+          if (identityCount <= 0) streamsByIdentity.delete(identity);
+          else streamsByIdentity.set(identity, identityCount);
+          const projectCount = (streamsByProject.get(projectId) ?? 1) - 1;
+          if (projectCount <= 0) streamsByProject.delete(projectId);
+          else streamsByProject.set(projectId, projectCount);
           counted = false;
         }
         clearInterval(heartbeat);
@@ -1011,29 +1068,56 @@ export function registerRoutes(
             headers: c.req.raw.headers,
             query: { disableCookieCache: true },
           });
-          return Boolean(session?.user);
+          if (!session?.user) return false;
+          const role = isRole(session.user.role) ? session.user.role : "viewer";
+          const createdAt = session.user.createdAt instanceof Date ? session.user.createdAt.getTime() : Date.now();
+          const updatedAt = session.user.updatedAt instanceof Date ? session.user.updatedAt.getTime() : createdAt;
+          const current = userAuth({
+            id: String(session.user.id),
+            email: session.user.email,
+            name: session.user.name ?? "",
+            role,
+            createdAt,
+            updatedAt,
+          });
+          return can(current, "logs.read") && await canAccessProject(current, storage, projectId);
         }
         if (authInfo.kind === "key") {
           if (!streamKey) return false;
-          return Boolean(await verifyApiKey(storage, streamKey));
+          const verified = await verifyApiKey(storage, streamKey);
+          return Boolean(
+            verified &&
+              verified.id === authInfo.keyId &&
+              verified.projectId === projectId &&
+              verified.scopes.has("query")
+          );
         }
         return false;
       };
       const unsubscribe = subscribeEvents((rows) => {
         if (closed) return;
-        if (pending > 500) {
-          fail(new Error("slow consumer — stream dropped"));
-          return;
-        }
         for (const row of rows) {
+          if (closed) return;
           if (row.projectId !== projectId) continue;
           if (!matchesEvent(f, row)) continue;
+          if (pending >= MAX_PENDING_WRITES || pendingBytes >= MAX_PENDING_BYTES) {
+            fail(new Error("slow consumer — stream dropped"));
+            return;
+          }
+          const payload = JSON.stringify(toClientEvent(row));
+          const bytes = Buffer.byteLength(payload);
+          if (pendingBytes + bytes > MAX_PENDING_BYTES) {
+            fail(new Error("slow consumer — stream dropped"));
+            return;
+          }
           pending++;
+          pendingBytes += bytes;
           void stream
-            .writeSSE({ data: JSON.stringify(toClientEvent(row)) })
+            .writeSSE({ data: payload })
             .catch(fail)
             .finally(() => {
               pending--;
+              pendingBytes -= bytes;
             });
         }
       });

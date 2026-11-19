@@ -49,14 +49,8 @@ function newPrefix(plaintext: string): string {
   return `${plaintext.slice(0, 11)}…`;
 }
 
-export async function listApiKeys(storage: Storage, projectId: string): Promise<ApiKey[]> {
-  const rows = await storage.db
-    .select({ key: schema.apiKeys, email: schema.user.email })
-    .from(schema.apiKeys)
-    .leftJoin(schema.user, eq(schema.user.id, schema.apiKeys.createdBy))
-    .where(eq(schema.apiKeys.projectId, projectId))
-    .orderBy(schema.apiKeys.id);
-  return rows.map(({ key: row, email }) => ({
+function toApiKey(row: typeof schema.apiKeys.$inferSelect, email: string | null): ApiKey {
+  return {
     id: row.id,
     projectId: row.projectId,
     name: row.name,
@@ -66,7 +60,32 @@ export async function listApiKeys(storage: Storage, projectId: string): Promise<
     createdByEmail: email ?? null,
     createdAt: Number(row.createdAt),
     lastUsedAt: row.lastUsedAt === null ? null : Number(row.lastUsedAt),
-  }));
+  };
+}
+
+export async function listApiKeys(storage: Storage, projectId: string): Promise<ApiKey[]> {
+  const rows = await storage.db
+    .select({ key: schema.apiKeys, email: schema.user.email })
+    .from(schema.apiKeys)
+    .leftJoin(schema.user, eq(schema.user.id, schema.apiKeys.createdBy))
+    .where(eq(schema.apiKeys.projectId, projectId))
+    .orderBy(schema.apiKeys.id);
+  return rows.map(({ key, email }) => toApiKey(key, email ?? null));
+}
+
+export async function getApiKey(
+  storage: Storage,
+  id: string,
+  projectId: string
+): Promise<ApiKey | null> {
+  const rows = await storage.db
+    .select({ key: schema.apiKeys, email: schema.user.email })
+    .from(schema.apiKeys)
+    .leftJoin(schema.user, eq(schema.user.id, schema.apiKeys.createdBy))
+    .where(and(eq(schema.apiKeys.id, id), eq(schema.apiKeys.projectId, projectId)))
+    .limit(1);
+  const row = rows[0];
+  return row ? toApiKey(row.key, row.email ?? null) : null;
 }
 
 export async function createApiKey(
@@ -154,6 +173,18 @@ export async function rotateApiKey(
  */
 export async function deleteApiKeysByOwner(storage: Storage, userId: string): Promise<number> {
   const result = await storage.db.delete(schema.apiKeys).where(eq(schema.apiKeys.createdBy, userId));
+  return Number(result.rowsAffected ?? 0);
+}
+
+/** Project-member offboarding: revoke only the keys this user minted there. */
+export async function deleteApiKeysByOwnerInProject(
+  storage: Storage,
+  userId: string,
+  projectId: string
+): Promise<number> {
+  const result = await storage.db
+    .delete(schema.apiKeys)
+    .where(and(eq(schema.apiKeys.createdBy, userId), eq(schema.apiKeys.projectId, projectId)));
   return Number(result.rowsAffected ?? 0);
 }
 

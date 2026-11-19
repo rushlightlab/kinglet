@@ -1,4 +1,4 @@
-import { asc, count, eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import type { Storage } from "../storage/index.js";
 import * as schema from "../storage/schema.js";
 import type { KingletAuth } from "./auth.js";
@@ -50,8 +50,13 @@ export async function getUserById(storage: Storage, id: string): Promise<AdminUs
 }
 
 export async function countAdmins(storage: Storage): Promise<number> {
-  const rows = await storage.db.select({ n: count() }).from(schema.user).where(eq(schema.user.role, "admin"));
-  return Number(rows[0]?.n ?? 0);
+  const rows = await storage.db
+    .select({ banned: schema.user.banned })
+    .from(schema.user)
+    .where(eq(schema.user.role, "admin"));
+  // A banned administrator cannot approve releases, recover the instance, or
+  // use any admin-only route. Only active admins count toward the guard.
+  return rows.filter((row) => row.banned !== true).length;
 }
 
 export async function createManagedUser(

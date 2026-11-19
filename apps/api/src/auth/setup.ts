@@ -44,10 +44,12 @@ export async function ensureBootstrapAdmin(
   // Recover a zero-admin database too (not just a zero-user one), e.g. after
   // a manual role edit or an old admin-plugin bypass.
   const admins = await storage.db
-    .select({ n: count() })
+    .select({ banned: schema.user.banned })
     .from(schema.user)
     .where(eq(schema.user.role, "admin"));
-  if (Number(admins[0]?.n ?? 0) > 0) return null;
+  // Recover a database whose only admins are banned as well as a zero-admin
+  // database. A banned row must not suppress bootstrap recovery.
+  if (admins.some((row) => row.banned !== true)) return null;
 
   const email = (config.adminEmail ?? "admin@kinglet.local").toLowerCase();
   const generated = config.adminPassword ? null : generatePassword();

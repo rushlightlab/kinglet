@@ -20,10 +20,14 @@ export interface Config {
   /** Directory holding the database file (local stores only). */
   dataDir: string;
   retentionDays: number;
+  /** Days to keep alert history rows. */
+  alertRetentionDays: number;
   /** Session lifetime for the web UI. */
   sessionDays: number;
   /** Hard cap on stored events per project; 0 disables the cap. */
   maxEventsPerProject: number;
+  /** Hard cap on stored bytes per project; 0 disables the cap. */
+  maxProjectBytes: number;
   /** Hard cap on the local database size in bytes; 0 disables the cap. */
   maxDbBytes: number;
   /** Optional bootstrap administrator identity (when no administrator exists). */
@@ -101,8 +105,10 @@ export function loadConfig(): Config {
       .filter(Boolean),
     dataDir,
     retentionDays: intEnv("KINGLET_RETENTION_DAYS", 14),
+    alertRetentionDays: intEnv("KINGLET_ALERT_RETENTION_DAYS", 90),
     sessionDays: intEnv("KINGLET_SESSION_DAYS", 30),
     maxEventsPerProject: nonNegativeIntEnv("KINGLET_MAX_EVENTS_PER_PROJECT", 1_000_000),
+    maxProjectBytes: nonNegativeIntEnv("KINGLET_MAX_PROJECT_DB_MB", 1024) * 1024 * 1024,
     maxDbBytes: nonNegativeIntEnv("KINGLET_MAX_DB_MB", 4096) * 1024 * 1024,
     adminEmail: process.env.KINGLET_ADMIN_EMAIL?.trim() || undefined,
     adminPassword: process.env.KINGLET_ADMIN_PASSWORD?.trim() || undefined,

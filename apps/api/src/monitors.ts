@@ -3,10 +3,12 @@ import type { SQL } from "drizzle-orm";
 import { subscribeEvents } from "./bus.js";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
 import type { ParsedFilters } from "./filters.js";
+import { validateQueryString } from "./query-validation.js";
 import { sendNotice, validateWebhookUrl } from "./notify.js";
 import type { AlertNotice, NotifyChannel } from "./notify.js";
 import { uuidv7 } from "./auth/ids.js";
 import { systemStatus } from "./status.js";
+import { localDbBytes } from "./storage/db-size.js";
 import * as schema from "./storage/schema.js";
 import type { Storage } from "./storage/index.js";
 import { LEVEL_NAMES } from "./types.js";
@@ -97,6 +99,8 @@ export function parseMonitorInput(
 
   const query = typeof o.query === "string" ? o.query.trim().slice(0, 500) : "";
   if (/\n|\r/.test(query)) return { ok: false, error: "query must be a single-line filter expression" };
+  const queryProblem = validateQueryString(query);
+  if (queryProblem) return { ok: false, error: queryProblem };
 
   const kind =
     typeof o.kind === "string" && (MONITOR_KINDS as readonly string[]).includes(o.kind)
@@ -318,9 +322,15 @@ interface MonitorState {
 
 export function startMonitorEngine(
   storage: Storage,
-  opts: { baseUrl?: string; allowPrivateWebhooks?: boolean } = {}
+  opts: {
+    baseUrl?: string;
+    allowPrivateWebhooks?: boolean;
+    dbPath?: string;
+    maxDbBytes?: number;
+  } = {}
 ): MonitorEngine {
   const allowPrivate = opts.allowPrivateWebhooks ?? false;
+  const maxDbBytes = opts.maxDbBytes ?? 0;
   let monitors: Monitor[] = [];
   let projectNames = new Map<string, string>();
   const state = new Map<string, MonitorState>();
@@ -431,24 +441,51 @@ export function startMonitorEngine(
     if (s.firing) return;
     s.firing = true;
     try {
+      if (maxDbBytes > 0 && opts.dbPath) {
+        const bytes = localDbBytes(opts.dbPath);
+        if (bytes !== null && bytes >= maxDbBytes) {
+          console.warn("[kinglet] alert not recorded: database size limit reached");
+          return;
+        }
+      }
       const now = Date.now();
       const summary = summaryFor(m, detail);
-      const inserted = await storage.db
-        .insert(schema.alerts)
-        .values({
-          id: uuidv7(),
-          monitorId: m.id,
-          state: "fired",
-          summary,
-          count: detail.count ?? null,
-          sampleMessage: detail.sampleMessage ?? null,
-          firedAt: now,
-        })
-        .returning({ id: schema.alerts.id });
+      let alertId = s.openAlertId;
+      if (alertId !== null && s.active) {
+        // A match monitor that is already firing updates its open alert
+        // instead of inserting a new row on every cooldown expiry. This keeps
+        // alert history bounded without losing the latest sample.
+        await storage.db
+          .update(schema.alerts)
+          .set({
+            state: "fired",
+            summary,
+            count: detail.count ?? null,
+            sampleMessage: detail.sampleMessage ?? null,
+            firedAt: now,
+            resolvedAt: null,
+            notifyStatus: null,
+            notifyError: null,
+          })
+          .where(eq(schema.alerts.id, alertId));
+      } else {
+        const inserted = await storage.db
+          .insert(schema.alerts)
+          .values({
+            id: uuidv7(),
+            monitorId: m.id,
+            state: "fired",
+            summary,
+            count: detail.count ?? null,
+            sampleMessage: detail.sampleMessage ?? null,
+            firedAt: now,
+          })
+          .returning({ id: schema.alerts.id });
+        alertId = inserted[0]?.id ?? null;
+        s.openAlertId = alertId;
+      }
       s.active = true;
       s.lastFiredAt = now;
-      const alertId = inserted[0]?.id ?? null;
-      s.openAlertId = alertId;
 
       const delivery = await notifyAll(m, {
         monitorId: m.id,

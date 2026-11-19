@@ -54,6 +54,8 @@ export const events = sqliteTable(
     env: text("env"),
     message: text("message").notNull(),
     fields: text("fields"),
+    /** UTF-8 bytes of the stored payload; maintained on insert. */
+    sizeBytes: integer("size_bytes").notNull().default(0),
   },
   (table) => [
     index("idx_events_ts").on(table.ts),
@@ -64,6 +66,17 @@ export const events = sqliteTable(
     uniqueIndex("uq_events_uid").on(table.uid),
   ]
 );
+
+/**
+ * Per-project event/byte accounting, maintained by triggers on `events`.
+ * The global database cap prevents disk exhaustion; this keeps one tenant from
+ * consuming the shared store and denying ingest to everyone else.
+ */
+export const projectUsage = sqliteTable("project_usage", {
+  projectId: text("project_id").primaryKey(),
+  bytes: integer("bytes").notNull().default(0),
+  events: integer("events").notNull().default(0),
+});
 
 export const monitors = sqliteTable(
   "monitors",
@@ -104,7 +117,7 @@ export const alerts = sqliteTable(
     notifyStatus: text("notify_status"),
     notifyError: text("notify_error"),
   },
-  (table) => [index("idx_alerts_monitor").on(table.monitorId, table.firedAt)]
+  (table) => [index("idx_alerts_monitor").on(table.monitorId, table.firedAt), index("idx_alerts_fired").on(table.firedAt)]
 );
 
 export type EventRow = typeof events.$inferSelect;
@@ -112,6 +125,7 @@ export type MonitorRow = typeof monitors.$inferSelect;
 export type AlertRow = typeof alerts.$inferSelect;
 export type ProjectRow = typeof projects.$inferSelect;
 export type ApiKeyRow = typeof apiKeys.$inferSelect;
+export type ProjectUsageRow = typeof projectUsage.$inferSelect;
 
 // ---------------------------------------------------------------------------
 // Better Auth tables (drizzle adapter). Table exports must be named exactly

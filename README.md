@@ -216,7 +216,9 @@ your UI with the query and time range pre-filled.
 | `KINGLET_SESSION_DAYS` | `30` | Web session lifetime |
 | `KINGLET_BASE_URL` | — | Public URL, used for deep links in alert notifications |
 | `KINGLET_RETENTION_DAYS` | `14` | Delete events older than this |
+| `KINGLET_ALERT_RETENTION_DAYS` | `90` | Delete alert history older than this |
 | `KINGLET_MAX_EVENTS_PER_PROJECT` | `1000000` | Hard cap on retained events per project (`0` = unlimited) |
+| `KINGLET_MAX_PROJECT_DB_MB` | `1024` | Hard cap on retained event bytes per project (`0` = unlimited) |
 | `KINGLET_MAX_DB_MB` | `4096` | Hard cap on local database size in MB (`0` = unlimited) |
 
 On first boot, or if the database has no administrator, Kinglet creates one from

@@ -73,9 +73,11 @@ export default function KeysCard({
   projectId: string;
   projectName: string;
 }) {
-  const { permissions } = useApp();
+  const { permissions, user } = useApp();
   const navigate = useNavigate();
   const canWriteKeys = hasPermission(permissions, "keys.write");
+  const canManageKey = (key: ApiKeyInfo): boolean =>
+    canWriteKeys && (user.role === "admin" || key.createdBy === user.id);
 
   const [keys, setKeys] = useState<ApiKeyInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -274,14 +276,14 @@ export default function KeysCard({
                             View usage
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            disabled={!canWriteKeys}
+                            disabled={!canManageKey(key)}
                             onSelect={() => openKeyScopes(key)}
                           >
                             <SlidersHorizontalIcon />
                             Edit permissions
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            disabled={!canWriteKeys}
+                            disabled={!canManageKey(key)}
                             onSelect={() => setPendingKey({ type: "rotate", key })}
                           >
                             <RotateCcwIcon />
@@ -291,7 +293,7 @@ export default function KeysCard({
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
                           variant="destructive"
-                          disabled={!canWriteKeys}
+                          disabled={!canManageKey(key)}
                           onSelect={() => setPendingKey({ type: "revoke", key })}
                         >
                           <Trash2Icon />
