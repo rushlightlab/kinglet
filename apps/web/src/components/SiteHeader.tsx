@@ -1,8 +1,20 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { ChevronDownIcon, LogOutIcon, SettingsIcon } from "lucide-react";
 import { useApp } from "../app-context";
 import Crown from "./Crown";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Select,
   SelectContent,
@@ -15,6 +27,8 @@ import {
 
 export default function SiteHeader({ children }: { children?: ReactNode }) {
   const { user, projects, currentProjectId, setProjectId, signOut } = useApp();
+  const navigate = useNavigate();
+  const initials = (user.name.trim() || user.email).slice(0, 2).toUpperCase();
 
   return (
     <header className="flex flex-wrap items-center gap-3 border-b border-white/[0.08] bg-ink-950/90 px-4 py-2.5">
@@ -71,12 +85,54 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
 
       <div className="ml-auto flex flex-wrap items-center gap-2">
         {children}
-        <span className="hidden font-mono text-[10px] text-mist-faint md:inline">
-          {user.email} · {user.role}
-        </span>
-        <Button variant="chip" size="xs" onClick={signOut}>
-          sign out
-        </Button>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" className="gap-2 px-2" aria-label="Account menu">
+              <Avatar size="sm" className="border border-white/[0.1]">
+                <AvatarFallback className="bg-ink-800 font-mono text-[10px] text-gold">
+                  {initials}
+                </AvatarFallback>
+              </Avatar>
+              <span className="hidden max-w-36 truncate font-mono text-[10px] text-mist-dim md:inline">
+                {user.email}
+              </span>
+              <Badge
+                variant="outline"
+                className="hidden text-[9px] normal-case tracking-normal sm:inline-flex"
+              >
+                {user.role}
+              </Badge>
+              <ChevronDownIcon className="size-3 text-mist-faint" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-56">
+            <DropdownMenuLabel className="normal-case tracking-normal">
+              <div className="flex flex-col gap-1">
+                <span className="font-mono text-xs text-mist">{user.name || user.email}</span>
+                <span className="font-mono text-[10px] text-mist-faint">{user.email}</span>
+                <Badge
+                  variant="outline"
+                  className="w-fit text-[9px] normal-case tracking-normal"
+                >
+                  {user.role}
+                </Badge>
+              </div>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuItem onSelect={() => void navigate({ to: "/settings" })}>
+                <SettingsIcon />
+                Settings
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={signOut}>
+              <LogOutIcon />
+              Sign out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );
