@@ -237,6 +237,10 @@ export default function LogControls(props: LogControlsProps) {
                   );
                 })}
               </div>
+              <p className="mt-2 text-[9px] leading-relaxed text-mist-faint">
+                off leaves the live tail as the only source. a rate re-fetches the
+                window on that interval.
+              </p>
             </div>
 
             <div className="mt-3 flex items-center justify-between gap-2">
