@@ -1,6 +1,7 @@
 import { and, count, desc, eq, gte, isNotNull, lt, lte, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { Normalized } from "../ingest.js";
+import { uuidv7 } from "../auth/ids.js";
 import type { StoredEvent } from "../types.js";
 import type { KingletDb } from "./db.js";
 import * as schema from "./schema.js";
@@ -12,6 +13,7 @@ const INSERT_CHUNK = 500;
 function mapEventRow(row: typeof schema.events.$inferSelect): StoredEvent {
   return {
     id: Number(row.id),
+    uid: row.uid ?? null,
     projectId: Number(row.projectId),
     apiKeyId: row.apiKeyId === null ? null : Number(row.apiKeyId),
     ts: Number(row.ts),
@@ -33,11 +35,15 @@ export async function insertEvents(
   const rows: StoredEvent[] = [];
   await db.transaction(async (tx) => {
     for (let i = 0; i < events.length; i += INSERT_CHUNK) {
-      const chunk = events.slice(i, i + INSERT_CHUNK);
+      const chunk = events.slice(i, i + INSERT_CHUNK).map((event) => ({
+        ...event,
+        uid: uuidv7(),
+      }));
       const inserted = await tx
         .insert(schema.events)
         .values(
           chunk.map((e) => ({
+            uid: e.uid,
             projectId,
             apiKeyId,
             ts: e.ts,
@@ -54,6 +60,7 @@ export async function insertEvents(
         if (!event) return;
         rows.push({
           id: Number(insertedRow.id),
+          uid: event.uid,
           projectId,
           apiKeyId,
           ts: event.ts,
@@ -79,6 +86,21 @@ export async function queryEvents(db: KingletDb, opts: QueryOptions): Promise<St
     .orderBy(desc(schema.events.id))
     .limit(opts.limit);
   return rows.map(mapEventRow);
+}
+
+/** Single-event lookup for shareable UUIDs; fast thanks to uq_events_uid. */
+export async function getEventByUid(
+  db: KingletDb,
+  projectId: number,
+  uid: string
+): Promise<StoredEvent | null> {
+  const rows = await db
+    .select()
+    .from(schema.events)
+    .where(and(eq(schema.events.projectId, projectId), eq(schema.events.uid, uid)))
+    .limit(1);
+  const row = rows[0];
+  return row ? mapEventRow(row) : null;
 }
 
 export async function histogramPoints(

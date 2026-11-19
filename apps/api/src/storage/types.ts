@@ -42,6 +42,7 @@ export interface Storage {
     apiKeyId: number | null
   ): Promise<StoredEvent[]>;
   queryEvents(opts: QueryOptions): Promise<StoredEvent[]>;
+  getEventByUid(projectId: number, uid: string): Promise<StoredEvent | null>;
   histogramPoints(
     projectId: number,
     from: number,

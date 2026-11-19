@@ -18,8 +18,14 @@ export default function EventDrawer({ event, onClose }: { event: KingletEvent; o
         <Row label="service" value={event.service ?? "—"} />
         <Row label="env" value={event.env ?? "—"} />
         <Row label="api key" value={event.apiKeyId ? `#${event.apiKeyId}` : "session"} />
+        <Row label="uid" value={event.uid ?? "—"} />
         <Row label="id" value={String(event.id)} />
       </dl>
+      {event.uid && (
+        <div className="mt-2">
+          <CopyButton value={event.uid} label="copy event id" />
+        </div>
+      )}
       <div className="mt-4">
         <div className="k-kicker">message</div>
         <pre className="mt-1 whitespace-pre-wrap break-words rounded-[5px] border border-white/[0.08] bg-ink-850 p-2 font-mono text-xs text-mist">

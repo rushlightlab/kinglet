@@ -30,6 +30,7 @@ import {
 import type { AppEnv, AuthInfo } from "./auth/middleware.js";
 import { isKeyScope, isRole, permissionsForRole } from "./auth/roles.js";
 import type { KeyScope, Role } from "./auth/roles.js";
+import { isUuid } from "./auth/ids.js";
 import {
   countAdmins,
   createManagedUser,
@@ -884,6 +885,23 @@ export function registerRoutes(
       events: rows.map(toClientEvent),
       nextCursor: rows.length === limit ? rows[rows.length - 1]?.id ?? null : null,
     });
+  });
+
+  app.get("/v1/events/:uid", async (c) => {
+    const authInfo = getAuth(c);
+    if (authInfo.kind === "key" && !authInfo.scopes.has("query")) {
+      return c.json({ error: "this key cannot query (missing query scope)" }, 403);
+    }
+    if (authInfo.kind === "user" && !can(authInfo, "logs.read")) {
+      return c.json({ error: "forbidden" }, 403);
+    }
+    const projectId = await resolveProjectId(c, storage);
+    if (projectId instanceof Response) return projectId;
+    const uid = c.req.param("uid");
+    if (!isUuid(uid)) return c.json({ error: "invalid event id" }, 400);
+    const row = await storage.getEventByUid(projectId, uid);
+    if (!row) return c.json({ error: "event not found" }, 404);
+    return c.json({ event: toClientEvent(row) });
   });
 
   app.get("/v1/histogram", async (c) => {

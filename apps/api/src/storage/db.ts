@@ -6,6 +6,7 @@ import { migrate } from "drizzle-orm/libsql/migrator";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { uuidv7 } from "../auth/ids.js";
 import * as schema from "./schema.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -91,7 +92,26 @@ export async function openDatabase(opts: {
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
     await client.execute("INSERT INTO events_fts(events_fts) VALUES('rebuild')");
   }
+  await backfillEventUids(client);
   return { db, client };
+}
+
+/** Give existing events a UUID v7 once; new rows get one at insert time. */
+async function backfillEventUids(client: Client): Promise<void> {
+  for (;;) {
+    const rows = await client.execute(
+      "SELECT id FROM events WHERE uid IS NULL ORDER BY id LIMIT 1000"
+    );
+    if (rows.rows.length === 0) return;
+    await client.batch(
+      rows.rows.map((row) => ({
+        sql: "UPDATE events SET uid = ? WHERE id = ?",
+        args: [uuidv7(), Number(row.id)],
+      })),
+      "write"
+    );
+    if (rows.rows.length < 1000) return;
+  }
 }
 
 /** Adds project_id columns to databases that predate multi-project support. */

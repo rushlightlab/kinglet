@@ -36,6 +36,13 @@
       "when": 1795074439390,
       "tag": "0004_high_northstar",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1795075763622,
+      "tag": "0005_deep_jubilee",
+      "breakpoints": true
     }
   ]
 }

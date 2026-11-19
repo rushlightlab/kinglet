@@ -43,6 +43,9 @@ export const events = sqliteTable(
   "events",
   {
     id: integer("id").primaryKey(),
+    // Public, time-sortable identifier for single-event lookups. The integer
+    // id stays the rowid so FTS5 external content and pagination keep working.
+    uid: text("uid"),
     projectId: integer("project_id").notNull().default(1),
     apiKeyId: integer("api_key_id"),
     ts: integer("ts").notNull(),
@@ -58,6 +61,7 @@ export const events = sqliteTable(
     index("idx_events_project_key_ts").on(table.projectId, table.apiKeyId, table.ts),
     index("idx_events_service_ts").on(table.service, table.ts),
     index("idx_events_env_ts").on(table.env, table.ts),
+    uniqueIndex("uq_events_uid").on(table.uid),
   ]
 );
 
