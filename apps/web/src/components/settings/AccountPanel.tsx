@@ -7,6 +7,7 @@ import ErrorAlert from "../ErrorAlert";
 import PasswordInput from "../PasswordInput";
 import PasswordRequirements from "../PasswordRequirements";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
 
@@ -45,11 +46,27 @@ export default function AccountPanel() {
       <Card>
         <CardHeader>
           <CardTitle>Account</CardTitle>
-          <CardDescription>
-            {user.email} · <span className="text-gold">{user.role}</span>
-            {user.name ? ` · ${user.name}` : ""}
-          </CardDescription>
+          <CardDescription>The signed-in user for this Kinglet instance.</CardDescription>
         </CardHeader>
+        <CardContent>
+          <dl className="grid items-start gap-x-6 gap-y-3 sm:grid-cols-[5rem_1fr]">
+            <dt className="font-mono text-[10px] text-mist-faint">email</dt>
+            <dd className="break-all font-mono text-xs text-mist">{user.email}</dd>
+
+            <dt className="font-mono text-[10px] text-mist-faint">role</dt>
+            <dd>
+              <Badge
+                variant={user.role === "admin" ? "default" : "outline"}
+                className="text-[10px] normal-case tracking-normal"
+              >
+                {user.role}
+              </Badge>
+            </dd>
+
+            <dt className="font-mono text-[10px] text-mist-faint">name</dt>
+            <dd className="font-mono text-xs text-mist">{user.name || "—"}</dd>
+          </dl>
+        </CardContent>
       </Card>
 
       <Card>
