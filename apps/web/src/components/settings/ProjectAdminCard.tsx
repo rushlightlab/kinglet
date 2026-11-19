@@ -131,7 +131,7 @@ export function ProjectDangerCard({ project }: { project: Project }) {
                 variant="destructive"
                 size="sm"
                 disabled={isOnlyProject || deleting}
-                title={isOnlyProject ? "The last project cannot be deleted" : undefined}
+                title={isOnlyProject ? "The only project cannot be deleted" : undefined}
               >
                 <Trash2Icon data-icon="inline-start" />
                 delete project
@@ -162,7 +162,7 @@ export function ProjectDangerCard({ project }: { project: Project }) {
           </AlertDialog>
           {isOnlyProject && (
             <p className="font-mono text-[10px] text-mist-faint">
-              This is the last project, so it cannot be deleted.
+              This is the only project, so it cannot be deleted.
             </p>
           )}
         </CardContent>

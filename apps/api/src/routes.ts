@@ -343,7 +343,7 @@ export function registerRoutes(
     const id = parseId(c.req.param("id"));
     if (id === null) return c.json({ error: "invalid project id" }, 400);
     const totals = await storage.db.select({ n: count() }).from(schema.projects);
-    if (Number(totals[0]?.n ?? 0) <= 1) return c.json({ error: "cannot delete the last project" }, 400);
+    if (Number(totals[0]?.n ?? 0) <= 1) return c.json({ error: "cannot delete the only project" }, 400);
     if (!(await projectExists(storage, id))) return c.json({ error: "project not found" }, 404);
 
     const monitorIds = storage.db
