@@ -1,6 +1,6 @@
 {
   "name": "@kinglet/sdk-node",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Batching log client for Kinglet — small, light, king.",
   "type": "module",
   "main": "dist/index.js",

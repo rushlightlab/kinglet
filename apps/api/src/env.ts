@@ -32,7 +32,7 @@ export interface Config {
   maxEventsPerProject: number;
   /** Hard cap on the local database size in bytes; 0 disables the cap. */
   maxDbBytes: number;
-  /** Optional bootstrap administrator identity (first boot only). */
+  /** Optional bootstrap administrator identity (when no administrator exists). */
   adminEmail?: string;
   adminPassword?: string;
 }

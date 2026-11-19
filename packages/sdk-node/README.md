@@ -1,13 +1,17 @@
 # @kinglet/sdk-node
 
-Batching log client for Kinglet. Zero dependencies, Node 22+.
+Batching log client for Kinglet. Zero dependencies, Node 26+.
+
+> **Not published to npm yet.** The package lives in `packages/sdk-node` in the
+> Kinglet repo. Build it with `pnpm --filter @kinglet/sdk-node build` and use a
+> workspace/file dependency until the npm release.
 
 ```ts
 import { createLogger } from "@kinglet/sdk-node";
 
 const log = createLogger({
   url: "http://localhost:8080",   // your Kinglet server
-  token: "tok_...",               // from kinglet.token or KINGLET_TOKENS
+  token: "kl_...",                // API key with the ingest scope
   service: "my-app",
   env: "prod",
 });

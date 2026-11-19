@@ -1,7 +1,7 @@
 # 👑 Kinglet
 
 **Small. Light. King.** — a tiny self-hostable log platform. The Axiom-shaped
-experience, running on your own $5 VPS: one container, one SQLite file, one
+experience, running on your own $5 VPS: one container, one SQLite database, one
 fast dark UI with a live tail.
 
 Named after the tiny bird with the golden crown (genus *Regulus* — "little king").
@@ -22,11 +22,13 @@ Docs and landing page: **https://kinglet.rushlightlab.com**
 
 ## Quickstart (Docker)
 
+From a clone of this repo:
+
 ```bash
 docker compose up -d --build
 
-# first boot creates the administrator; if no password was configured,
-# a generated one is printed in the logs and saved here:
+# the first boot (or a database with no administrator) creates one.
+# If no password was configured, the generated one is printed here:
 docker compose exec kinglet cat /data/admin-password.txt
 
 # open the UI
@@ -35,7 +37,8 @@ open http://localhost:8080
 
 Sign in with the admin email (default `admin@kinglet.local`) and that password.
 Set `KINGLET_ADMIN_EMAIL` / `KINGLET_ADMIN_PASSWORD` in `.env` (copy from
-`.env.example`) to choose your own — they only apply when no users exist yet.
+`.env.example`) to choose your own — they only apply when no administrator
+exists.
 
 Then go to **/settings → projects & keys**, create an API key (`kl_…`, scopes
 `ingest` / `query`), and send your first log with it:
@@ -47,7 +50,8 @@ curl -X POST http://localhost:8080/v1/events \
   --data-binary '{"level":"error","message":"payment failed","service":"billing"}'
 ```
 
-No clone needed? Run the published multi-arch image:
+No clone needed? Run the published multi-arch image (the GHCR package must be
+public, or run `docker login ghcr.io` first):
 
 ```bash
 docker run -d --name kinglet -p 8080:3000 -v kinglet-data:/data \
@@ -83,9 +87,15 @@ Each line (or each item in a JSON `{"events":[...]}` array) is one event:
 
 ### Node.js
 
-```bash
-pnpm add @kinglet/sdk-node   # or: npm i @kinglet/sdk-node
-```
+> **Not on npm yet.** `@kinglet/sdk-node` lives in this repo
+> (`packages/sdk-node`). Until it is published, use the HTTP examples above or
+> build it from a checkout:
+>
+> ```bash
+> pnpm --filter @kinglet/sdk-node build
+> ```
+
+The package exposes a zero-dependency batching client:
 
 ```ts
 import { createLogger } from "@kinglet/sdk-node";
@@ -113,20 +123,23 @@ your app never blocks on logging.
 
 ## API reference
 
-Auth accepts either the `kinglet_session` cookie (the web UI) or
+Auth accepts either the `better-auth.session_token` cookie (the web UI) or
 `Authorization: Bearer kl_…` (API keys). Project-scoped routes take `?project=<id>`
-(sessions/legacy tokens); API keys are bound to their project.
+(sessions/legacy tokens); API keys are bound to their project. Cookie-authenticated
+mutations must send `X-Kinglet-Request: 1`; Bearer requests are exempt.
 
 | Route | What it does |
 | --- | --- |
 | `/api/auth/*` | Better Auth endpoints (sign-in, sign-out, session, password) |
 | `GET /v1/me` | Current user + permissions |
-| `GET/POST /v1/projects` | List / create projects |
-| `DELETE /v1/projects/:id` | Delete a project and all its data |
+| `GET/POST /v1/projects` | List assigned projects / create one (admin) |
+| `DELETE /v1/projects/:id` | Delete a project and all its data (admin) |
 | `GET/POST /v1/users` | List / create users (admin) |
 | `PATCH/DELETE /v1/users/:id` | Change role / delete user (admin) |
 | `GET/POST /v1/projects/:id/keys` | List / create API keys for a project |
 | `DELETE /v1/keys/:id?project=` | Revoke an API key |
+| `GET/POST /v1/projects/:id/members` | List / assign project members (admin) |
+| `DELETE /v1/projects/:id/members/:userId` | Remove a project member (admin) |
 | `POST /v1/events` | Ingest a batch (NDJSON or JSON, ≤ 10k events, ≤ 8MB) |
 | `GET /v1/events` | Query. Params: `q` (filter grammar), `from`, `to` (epoch ms), `limit`, `cursor` |
 | `GET /v1/histogram` | Counts per level per bucket. Params: `from`, `to`, `buckets` |
@@ -136,7 +149,14 @@ Auth accepts either the `kinglet_session` cookie (the web UI) or
 | `PATCH/DELETE /v1/monitors/:id` | Update / delete a monitor |
 | `POST /v1/monitors/:id/test` | Send a test notification through every channel |
 | `GET /v1/alerts` | Alert history, latest first |
-| `GET /healthz` | Health check (no auth) |
+| `GET /v1/system/status` | Operational diagnostics (admin) |
+| `GET /healthz` | Minimal health check (no auth) |
+
+Ingest is rate-limited to 600 batches/minute per identity. Filters are capped at
+500 characters / 32 terms, `limit` at 1000, `buckets` at 240, alerts at 500, and
+monitors at 100 per project. `from`/`to` are clamped to the last 31 days and
+5 minutes of future skew. Per-project event and database caps are configurable
+(see below).
 
 ### Filter grammar
 
@@ -153,7 +173,8 @@ Combine freely: `level>=warn service:api -healthcheck`
 ## Alerts & monitors
 
 Monitors are standing queries evaluated against a project's stream (add
-`?project=<id>` — API keys can't manage monitors; use the UI or a session):
+`?project=<id>` — `kl_` keys can't manage monitors; use the UI, a session, or a
+legacy token):
 
 | Kind | Fires when | Example |
 | --- | --- | --- |
@@ -164,6 +185,8 @@ Monitors are standing queries evaluated against a project's stream (add
 Create one over HTTP, or in the UI at `/monitors`:
 
 ```bash
+# Requires a session cookie or a legacy KINGLET_TOKENS token;
+# project API keys cannot manage monitors.
 curl -X POST http://localhost:8080/v1/monitors \
   -H "Authorization: Bearer $KINGLET_TOKEN" \
   -H "Content-Type: application/json" \
@@ -186,10 +209,10 @@ your UI with the query and time range pre-filled.
 | --- | --- | --- |
 | `KINGLET_PORT` | `3000` | HTTP port |
 | `KINGLET_STORAGE` | `auto` | `sqlite`, `libsql`, or `auto` (picks by db path scheme) |
-| `KINGLET_DB_PATH` | `data/kinglet.db` | Plain path → SQLite; `libsql://`/`https://`/`file:` → libSQL |
+| `KINGLET_DB_PATH` | `data/kinglet.db` (image: `/data/kinglet.db`) | Plain path → SQLite; `libsql://`/`https://`/`file:` → libSQL |
 | `KINGLET_DB_AUTH_TOKEN` | — | Auth token for remote libSQL/Turso databases |
-| `KINGLET_ADMIN_EMAIL` | `admin@kinglet.local` | Bootstrap administrator email (first boot only) |
-| `KINGLET_ADMIN_PASSWORD` | *(generated)* | Bootstrap administrator password (first boot only) |
+| `KINGLET_ADMIN_EMAIL` | `admin@kinglet.local` | Bootstrap administrator email (when no administrator exists) |
+| `KINGLET_ADMIN_PASSWORD` | *(generated)* | Bootstrap administrator password (when no administrator exists) |
 | `BETTER_AUTH_SECRET` | *(generated, persisted)* | Session signing secret; set explicitly for multi-instance installs |
 | `KINGLET_TRUSTED_PROXIES` | — | CIDRs allowed to set `X-Forwarded-For` |
 | `KINGLET_ALLOW_PRIVATE_WEBHOOKS` | — | Allow private/internal webhook targets (SSRF escape hatch) |
@@ -203,9 +226,11 @@ your UI with the query and time range pre-filled.
 
 On first boot, or if the database has no administrator, Kinglet creates one from
 `KINGLET_ADMIN_EMAIL` / `KINGLET_ADMIN_PASSWORD`. If no password is set, one is
-generated, printed to the console, and written to `admin-password.txt` next to
-the database. Real ingest integrations should use project API keys (`kl_…`)
-created in **/settings**, not the legacy token:
+generated and printed to the console; for a local database it is also written to
+`admin-password.txt` next to the database. If an account with that email already
+exists, it is promoted and keeps its current password. Real ingest integrations
+should use project API keys (`kl_…`) created in **/settings**, not the legacy
+token.
 
 ## Storage backends
 
@@ -214,7 +239,7 @@ default or connects to a hosted [Turso](https://turso.tech) database with the
 same code. Schema and queries are defined with **Drizzle ORM**; migrations live
 in `apps/api/drizzle` and run automatically on boot.
 
-**sqlite** *(default)* — one local file, WAL mode, FTS5 trigram search:
+**sqlite** *(default)* — one local database file (plus WAL/SHM sidecars while running), WAL mode, FTS5 trigram search:
 
 ```bash
 KINGLET_DB_PATH=/data/kinglet.db
@@ -242,11 +267,12 @@ implement the same `Storage` interface, so the API and UI stay untouched.
 
 ## Self-hosting notes
 
-- **Resources**: ~150–250MB RAM. Millions of events/day fit comfortably on a
-  2 vCPU / 2GB VPS; ~300–500MB of disk per million retained events.
-- **Backups**: the whole store is one file — point
-  [Litestream](https://litestream.io/) at `data/kinglet.db` for continuous
-  S3 replication.
+- **Resources**: ~150–250MB RAM; designed for a 2 vCPU / 2GB VPS. Throughput
+  and disk depend on event size, fields, and retention (roughly a few hundred MB
+  per million retained events).
+- **Backups**: the store is one SQLite database (`kinglet.db` plus `-wal`/`-shm`
+  while running). Use [Litestream](https://litestream.io/) or `sqlite3 .backup`;
+  don't copy only the `.db` from a live WAL store.
 - **Scale ceiling**: SQLite/libSQL are the right engines for single-node
   self-hosting. Storage sits behind a driver interface — Turso for managed
   hosting today, ClickHouse as the planned scale-out backend tomorrow.
@@ -262,11 +288,11 @@ pnpm build      # build all packages (UI dist is served by the API after this)
 pnpm typecheck
 ```
 
-The dev API writes to `apps/api/data/`. On first boot it creates the
-administrator and prints the credentials (password also saved to
-`apps/api/data/admin-password.txt` — set `KINGLET_ADMIN_EMAIL` /
-`KINGLET_ADMIN_PASSWORD` before the first run to choose your own). Sign in at
-`http://localhost:5173`.
+The dev API writes to `apps/api/data/`. On first boot, or whenever no
+administrator exists, it creates one and prints the credentials (the password is
+also saved to `apps/api/data/admin-password.txt` for a local database — set
+`KINGLET_ADMIN_EMAIL` / `KINGLET_ADMIN_PASSWORD` before the first run to choose
+your own). Sign in at `http://localhost:5173`.
 
 Port 3000 already taken by another app? Point both dev servers elsewhere:
 
@@ -308,8 +334,8 @@ GHCR: pushes to `main` publish `:latest` / `:main` / `:sha-…`, and `v*` tags
 publish `:X.Y.Z` and `:X.Y`.
 
 ```bash
-git tag v0.1.0 -m "Kinglet v0.1.0"
-git push origin v0.1.0
+git tag v0.3.0 -m "Kinglet v0.3.0"
+git push origin v0.3.0
 ```
 
 After the first publish, make the package public (GitHub → Packages → kinglet
@@ -318,14 +344,11 @@ After the first publish, make the package public (GitHub → Packages → kingle
 ## Roadmap
 
 - [x] v0.1 — HTTP ingest, live tail, filter grammar, histogram, retention, Docker
-- [x] Auth & multi-project — email login, admin/member/viewer roles, per-project `kl_` keys with scopes
-- [x] Drizzle ORM + Better Auth — typed schema, generated migrations, cached sessions, JSON error contract
-- [x] Monitors & alerts — instant match, spike, silence → webhook/Discord/Slack with cooldown + auto-resolve
-- [x] UI polish — URL-synced views, shareable permalinks, saved searches, keyboard navigation, Kinglet design language
-- [x] Docs + landing page — Astro/Starlight site in a separate `kinglet-site` repo (HTTP API reference, self-hosting guide, SDK docs)
-- [ ] v0.2 — pino transport + zero-code Node preload, PHP Monolog handler, Fluent Bit/Vector guides
-- [ ] v0.3 — OTLP + syslog receivers
-- [ ] v1.0 — ClickHouse storage profile, teams
+- [x] v0.2 — auth & multi-project (Better Auth + Drizzle), monitors/alerts, UI polish (URL state, saved searches, permalinks, keyboard nav)
+- [x] v0.3 — per-project memberships, quotas, security hardening, docs/landing site
+- [ ] Next — pino transport + zero-code Node preload, PHP Monolog handler, Fluent Bit guide
+- [ ] Later — OTLP + syslog receivers
+- [ ] v1.0 — ClickHouse storage profile, workspace teams
 
 ## License
 

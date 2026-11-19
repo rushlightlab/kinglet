@@ -6,7 +6,7 @@
 #   docker compose -f docker-compose.tls.yml up -d --build
 #
 # Set KINGLET_ADMIN_EMAIL / KINGLET_ADMIN_PASSWORD (or read the generated
-# password from the container logs) on first boot.
+# password from the container logs) when no administrator exists.
 
 services:
   kinglet:

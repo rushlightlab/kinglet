@@ -7,7 +7,7 @@ import * as schema from "../storage/schema.js";
 /**
  * Better Auth, tuned per the official performance guide:
  *  - `better-auth/minimal` — Drizzle adapter means Kysely is not bundled.
- *  - session cookie cache — signed session cookie (5 min) so getSession does
+ *  - session cookie cache — signed session cookie (60s) so getSession does
  *    not hit the database on every request.
  *  - indexes — users.email, sessions.userId + token, accounts.userId,
  *    verifications.identifier are created in the Drizzle schema.

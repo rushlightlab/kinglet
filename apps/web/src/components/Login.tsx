@@ -82,8 +82,8 @@ export default function Login({ onSuccess, error: initialError }: { onSuccess: (
           </button>
 
           <p className="mt-4 font-mono text-[11px] leading-relaxed text-mist-faint">
-            First boot? The generated admin password is in the server console or{" "}
-            <span className="text-mist-dim">admin-password.txt</span> next to the database.
+            No administrator yet? The generated password is in the server console or{" "}
+            <span className="text-mist-dim">admin-password.txt</span> next to a local database.
           </p>
         </div>
       </div>
