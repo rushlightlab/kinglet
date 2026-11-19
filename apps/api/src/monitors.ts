@@ -9,6 +9,7 @@ import { uuidv7 } from "./auth/ids.js";
 import { systemStatus } from "./status.js";
 import * as schema from "./storage/schema.js";
 import type { Storage } from "./storage/index.js";
+import { LEVEL_NAMES } from "./types.js";
 import type { StoredEvent } from "./types.js";
 
 /**
@@ -321,6 +322,7 @@ export function startMonitorEngine(
 ): MonitorEngine {
   const allowPrivate = opts.allowPrivateWebhooks ?? false;
   let monitors: Monitor[] = [];
+  let projectNames = new Map<string, string>();
   const state = new Map<string, MonitorState>();
   const parsedCache = new Map<string, ParsedFilters>();
 
@@ -344,7 +346,14 @@ export function startMonitorEngine(
 
   async function refresh(): Promise<void> {
     try {
-      monitors = await listMonitors(storage);
+      const [rows, projectRows] = await Promise.all([
+        listMonitors(storage),
+        storage.db
+          .select({ id: schema.projects.id, name: schema.projects.name })
+          .from(schema.projects),
+      ]);
+      monitors = rows;
+      projectNames = new Map(projectRows.map((project) => [project.id, project.name]));
       const ids = new Set(monitors.map((m) => m.id));
       for (const id of [...state.keys()]) {
         if (!ids.has(id)) state.delete(id);
@@ -410,7 +419,13 @@ export function startMonitorEngine(
   async function fire(
     m: Monitor,
     s: MonitorState,
-    detail: { count?: number; sampleMessage?: string }
+    detail: {
+      count?: number;
+      sampleMessage?: string;
+      sampleService?: string | null;
+      sampleEnv?: string | null;
+      sampleLevel?: string | null;
+    }
   ): Promise<void> {
     // Reserve synchronously so concurrent ingest batches cannot double-fire.
     if (s.firing) return;
@@ -438,6 +453,10 @@ export function startMonitorEngine(
       const delivery = await notifyAll(m, {
         monitorId: m.id,
         monitorName: m.name,
+        projectName: projectNames.get(m.projectId),
+        service: detail.sampleService ?? null,
+        env: detail.sampleEnv ?? null,
+        level: detail.sampleLevel ?? null,
         query: m.query,
         state: "fired",
         summary,
@@ -488,6 +507,7 @@ export function startMonitorEngine(
     await notifyAll(m, {
       monitorId: m.id,
       monitorName: m.name,
+      projectName: projectNames.get(m.projectId),
       query: m.query,
       state: "resolved",
       summary: "condition cleared",
@@ -550,7 +570,12 @@ export function startMonitorEngine(
           const now = Date.now();
           if (s.firing) break;
           if (now - s.lastFiredAt < m.cooldownMs) break;
-          await fire(m, s, { sampleMessage: row.message });
+          await fire(m, s, {
+            sampleMessage: row.message,
+            sampleService: row.service,
+            sampleEnv: row.env,
+            sampleLevel: LEVEL_NAMES[row.level] ?? null,
+          });
           break; // one fire per batch per monitor
         }
       } catch (err) {

@@ -34,6 +34,10 @@ export interface NotifyChannel {
 export interface AlertNotice {
   monitorId: string;
   monitorName: string;
+  projectName?: string;
+  service?: string | null;
+  env?: string | null;
+  level?: string | null;
   query: string;
   state: "fired" | "resolved" | "test";
   summary: string;
@@ -175,25 +179,142 @@ export async function sendNotice(
   const invalid = validateWebhookUrl(channel.url, allowPrivate);
   if (invalid) throw new Error(invalid);
 
-  const text = formatText(notice);
   const body =
     channel.type === "webhook"
-      ? JSON.stringify({ source: "kinglet", ...notice })
+      ? JSON.stringify({ source: "kinglet", text: formatText(notice), ...notice })
       : channel.type === "discord"
-        ? JSON.stringify({ content: text, username: "Kinglet" })
-        : JSON.stringify({ text });
+        ? JSON.stringify(discordPayload(notice))
+        : JSON.stringify(slackPayload(notice));
 
   await postJson(new URL(channel.url), body, allowPrivate);
 }
 
+interface NoticeField {
+  name: string;
+  value: string;
+  inline: boolean;
+}
+
+const STATE_META: Record<
+  AlertNotice["state"],
+  { emoji: string; title: string; color: number; hex: string }
+> = {
+  fired: { emoji: "🔥", title: "Monitor fired", color: 0xff5c33, hex: "#ff5c33" },
+  resolved: { emoji: "✅", title: "Monitor resolved", color: 0x7dd3a1, hex: "#7dd3a1" },
+  test: { emoji: "🔔", title: "Test notification", color: 0xfbbf24, hex: "#fbbf24" },
+};
+
+function durationLabel(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
+  return `${Math.round(ms / 86_400_000)}d`;
+}
+
+function codeBlock(text: string): string {
+  const cleaned = text.replace(/```/g, "'''");
+  return `\`\`\`\n${truncate(cleaned, 900)}\n\`\`\``;
+}
+
+function noticeFields(
+  n: AlertNotice,
+  formatLink: (url: string) => string
+): NoticeField[] {
+  const fields: NoticeField[] = [];
+  if (n.projectName) fields.push({ name: "Project", value: n.projectName, inline: true });
+  if (n.service) fields.push({ name: "Service", value: n.service, inline: true });
+  if (n.env) fields.push({ name: "Env", value: n.env, inline: true });
+  fields.push({ name: "Monitor", value: n.monitorName || "—", inline: true });
+  if (n.level) fields.push({ name: "Level", value: n.level, inline: true });
+  fields.push({
+    name: "Query",
+    value: n.query ? `\`${n.query}\`` : "all events",
+    inline: true,
+  });
+  if (n.state === "fired") {
+    if (n.count !== undefined && n.count !== null) {
+      fields.push({ name: "Count", value: String(n.count), inline: true });
+    }
+    if (n.threshold !== undefined && n.threshold !== null) {
+      fields.push({ name: "Threshold", value: String(n.threshold), inline: true });
+    }
+    if (n.windowMs !== undefined && n.windowMs !== null) {
+      fields.push({ name: "Window", value: durationLabel(n.windowMs), inline: true });
+    }
+  }
+  if (n.link) {
+    fields.push({ name: "Link", value: formatLink(n.link), inline: false });
+  }
+  // Discord caps field values at 1024 characters.
+  return fields.map((field) => ({ ...field, value: truncate(field.value, 1000) }));
+}
+
+export function discordPayload(n: AlertNotice): Record<string, unknown> {
+  const meta = STATE_META[n.state];
+  const fields = noticeFields(n, (url) => `[Open in Kinglet](${url})`);
+  if (n.sampleMessage) {
+    const linkIndex = fields.findIndex((field) => field.name === "Link");
+    const sample = {
+      name: "Sample",
+      value: codeBlock(n.sampleMessage),
+      inline: false,
+    };
+    if (linkIndex >= 0) fields.splice(linkIndex, 0, sample);
+    else fields.push(sample);
+  }
+  const embed: Record<string, unknown> = {
+    title: `${meta.emoji} ${meta.title}`,
+    color: meta.color,
+    fields,
+    timestamp: new Date(n.firedAt).toISOString(),
+    footer: { text: "Kinglet" },
+  };
+  if (n.summary) embed.description = truncate(n.summary, 1000);
+  return { username: "Kinglet", embeds: [embed] };
+}
+
+export function slackPayload(n: AlertNotice): Record<string, unknown> {
+  const meta = STATE_META[n.state];
+  const textParts: string[] = [];
+  if (n.summary) textParts.push(n.summary);
+  if (n.sampleMessage) textParts.push(codeBlock(n.sampleMessage));
+  return {
+    text: `${meta.emoji} Kinglet · ${meta.title.toLowerCase()}`,
+    attachments: [
+      {
+        color: meta.hex,
+        title: `${meta.emoji} ${meta.title}`,
+        text: textParts.join("\n"),
+        fields: noticeFields(n, (url) => `<${url}|Open in Kinglet>`).map((field) => ({
+          title: field.name,
+          value: field.value,
+          short: field.inline,
+        })),
+        footer: "Kinglet",
+        ts: Math.floor(n.firedAt / 1000),
+      },
+    ],
+  };
+}
+
 function formatText(n: AlertNotice): string {
-  const emoji = n.state === "fired" ? "🔥" : n.state === "resolved" ? "✅" : "🔔";
-  const lines: string[] = [
-    `${emoji} Kinglet · ${n.monitorName} — ${n.state}`,
-    n.query ? `Query: ${n.query}` : "Query: (all events)",
-  ];
+  const meta = STATE_META[n.state];
+  const lines: string[] = [`${meta.emoji} Kinglet · ${meta.title.toLowerCase()}`];
+  if (n.projectName) lines.push(`Project: ${n.projectName}`);
+  lines.push(`Monitor: ${n.monitorName || "—"}`);
+  if (n.service) lines.push(`Service: ${n.service}`);
+  if (n.env) lines.push(`Env: ${n.env}`);
+  if (n.level) lines.push(`Level: ${n.level}`);
+  lines.push(n.query ? `Query: ${n.query}` : "Query: all events");
   if (n.summary) lines.push(n.summary);
-  if (n.sampleMessage) lines.push(`Sample: ${truncate(n.sampleMessage, 200)}`);
+  if (n.count !== undefined && n.count !== null) lines.push(`Count: ${n.count}`);
+  if (n.threshold !== undefined && n.threshold !== null) {
+    lines.push(`Threshold: ${n.threshold}`);
+  }
+  if (n.windowMs !== undefined && n.windowMs !== null) {
+    lines.push(`Window: ${durationLabel(n.windowMs)}`);
+  }
+  if (n.sampleMessage) lines.push(`Sample: ${truncate(n.sampleMessage, 300)}`);
   if (n.link) lines.push(n.link);
   return lines.join("\n");
 }

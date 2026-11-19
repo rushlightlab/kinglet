@@ -326,6 +326,7 @@ export function registerRoutes(
     const row = existing[0];
     if (!row) return c.json({ error: "project not found" }, 404);
     await storage.db.update(schema.projects).set({ name }).where(eq(schema.projects.id, id));
+    await engine.refresh();
     return c.json({
       project: {
         id,
@@ -1074,6 +1075,8 @@ export function registerRoutes(
   app.post("/v1/monitors/test-channel", async (c) => {
     const denied = monitorGuard(c, true);
     if (denied) return denied;
+    const projectId = await resolveProjectId(c, storage);
+    if (projectId instanceof Response) return projectId;
     const parsedBody = await readJsonStrict(c);
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
@@ -1084,12 +1087,18 @@ export function registerRoutes(
     }
     const urlError = validateWebhookUrl(url, config.allowPrivateWebhooks);
     if (urlError) return c.json({ error: urlError }, 400);
+    const project = await storage.db
+      .select({ name: schema.projects.name })
+      .from(schema.projects)
+      .where(eq(schema.projects.id, projectId))
+      .limit(1);
     try {
       await sendNotice(
         { type, url },
         {
           monitorId: "test",
           monitorName: "Test channel",
+          projectName: project[0]?.name,
           query: "",
           state: "test",
           summary: "Test notification from Kinglet — your channel works.",
@@ -1196,9 +1205,15 @@ export function registerRoutes(
     if (id === null) return c.json({ error: "invalid monitor id" }, 400);
     const monitor = await getMonitor(storage, id, projectId);
     if (!monitor) return c.json({ error: "monitor not found" }, 404);
+    const project = await storage.db
+      .select({ name: schema.projects.name })
+      .from(schema.projects)
+      .where(eq(schema.projects.id, projectId))
+      .limit(1);
     const notice: AlertNotice = {
       monitorId: monitor.id,
       monitorName: monitor.name,
+      projectName: project[0]?.name,
       query: monitor.query,
       state: "test",
       summary: "Test notification from Kinglet — your channel works.",

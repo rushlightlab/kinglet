@@ -326,8 +326,8 @@ export function testMonitor(projectId: string, id: string): Promise<{ results: C
 }
 
 /** Test an unsaved channel from the monitor form. */
-export function testChannel(channel: NotifyChannel): Promise<{ ok: true }> {
-  return api<{ ok: true }>("/v1/monitors/test-channel", {
+export function testChannel(projectId: string, channel: NotifyChannel): Promise<{ ok: true }> {
+  return api<{ ok: true }>(withProject("/v1/monitors/test-channel", projectId), {
     method: "POST",
     body: JSON.stringify(channel),
   });

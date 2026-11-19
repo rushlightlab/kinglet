@@ -488,7 +488,7 @@ function MonitorForm({
   const testRow = async (channel: NotifyChannel, index: number): Promise<void> => {
     setTestingChannel(index);
     try {
-      await testChannel(channel);
+      await testChannel(projectId, channel);
       toast.success(`Test sent to ${channel.type}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "test failed");
