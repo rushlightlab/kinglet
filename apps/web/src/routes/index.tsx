@@ -17,10 +17,11 @@ import LogTable from "../components/LogTable";
 import SiteHeader from "../components/SiteHeader";
 import {
   DEFAULT_WINDOW_KEY,
-  refreshIntervalForRange,
-  refreshIntervalForWindow,
+  recommendedRefreshKey,
+  refreshMsFor,
   WINDOWS,
 } from "../time";
+import type { RefreshKey } from "../time";
 
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -39,6 +40,11 @@ function Explorer() {
   const [qDraft, setQDraft] = useState(() => search.q ?? "");
   const [q, setQ] = useState(() => search.q ?? "");
   const [rangeKey, setRangeKey] = useState(DEFAULT_WINDOW_KEY);
+  const [refreshKey, setRefreshKey] = useState<RefreshKey>(() =>
+    search.from !== undefined && search.to !== undefined
+      ? recommendedRefreshKey(search.to - search.from)
+      : recommendedRefreshKey(WINDOWS[DEFAULT_WINDOW_KEY] ?? 60 * 60_000)
+  );
   const [customRange, setCustomRange] = useState<null | { from: number; to: number }>(() =>
     search.from !== undefined && search.to !== undefined ? { from: search.from, to: search.to } : null
   );
@@ -47,10 +53,15 @@ function Explorer() {
   const [services, setServices] = useState<Service[]>([]);
   const [selected, setSelected] = useState<KingletEvent | null>(null);
   const [cursorId, setCursorId] = useState<number | null>(null);
-  const [live, setLive] = useState(true);
   const [follow, setFollow] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const windowMs = customRange
+    ? customRange.to - customRange.from
+    : WINDOWS[rangeKey] ?? 60 * 60_000;
+  const live = refreshKey !== "off";
+  const refreshMs = refreshMsFor(refreshKey);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
@@ -113,20 +124,18 @@ function Explorer() {
     followRef.current = follow;
   }, [follow]);
 
-  // Wide windows do not need the same polling cadence as narrow ones.
-  const windowMs = customRange
-    ? customRange.to - customRange.from
-    : WINDOWS[rangeKey] ?? 60 * 60_000;
-  const refreshMs = customRange
-    ? refreshIntervalForRange(customRange.from, customRange.to)
-    : refreshIntervalForWindow(rangeKey);
+  const toggleLive = useCallback(() => {
+    setRefreshKey((current) =>
+      current === "off" ? recommendedRefreshKey(windowMs) : "off"
+    );
+  }, [windowMs]);
 
-  // While live, refresh the window at the cadence this range can use.
+  // While live, refresh the window at the selected rate.
   useEffect(() => {
-    if (!live) return;
+    if (refreshMs === null) return;
     const id = setInterval(() => loadWindow(true), refreshMs);
     return () => clearInterval(id);
-  }, [live, loadWindow, refreshMs]);
+  }, [loadWindow, refreshMs]);
 
   // Live tail over SSE (session cookie auth).
   useEffect(() => {
@@ -197,7 +206,7 @@ function Explorer() {
           setSelected(null);
           break;
         case "l":
-          setLive((v) => !v);
+          toggleLive();
           break;
         case "f":
           setFollow((v) => !v);
@@ -206,7 +215,7 @@ function Explorer() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [move]);
+  }, [move, toggleLive]);
 
   // Apply a full query immediately (chips, saved searches).
   const applyQuery = useCallback((nextQ: string) => {
@@ -237,17 +246,25 @@ function Explorer() {
         <LogControls
           rangeKey={rangeKey}
           windowMs={windowMs}
-          refreshMs={refreshMs}
+          refreshKey={refreshKey}
           customRange={customRange}
           onRangeChange={(value) => {
+            const width = WINDOWS[value] ?? 60 * 60_000;
             setRangeKey(value);
             setCustomRange(null);
+            if (refreshKey !== "off") setRefreshKey(recommendedRefreshKey(width));
           }}
-          onCustomRange={(range) => setCustomRange(range)}
+          onCustomRange={(range) => {
+            setCustomRange(range);
+            if (refreshKey !== "off") {
+              setRefreshKey(recommendedRefreshKey(range.to - range.from));
+            }
+          }}
           onClearCustom={() => setCustomRange(null)}
+          onRefreshChange={setRefreshKey}
           live={live}
           follow={follow}
-          onToggleLive={() => setLive((v) => !v)}
+          onToggleLive={toggleLive}
           onToggleFollow={() => setFollow((v) => !v)}
           services={services}
           appliedQ={q}

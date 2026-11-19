@@ -21,21 +21,24 @@ import {
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
-  formatRefresh,
   MAX_RANGE_MS,
+  REFRESH_OPTIONS,
+  refreshLabel,
   toDatetimeLocal,
   WINDOW_PRESETS,
   windowLabel,
 } from "../time";
+import type { RefreshKey } from "../time";
 
 interface LogControlsProps {
   rangeKey: string;
   windowMs: number;
-  refreshMs: number;
+  refreshKey: RefreshKey;
   customRange: { from: number; to: number } | null;
   onRangeChange: (value: string) => void;
   onCustomRange: (range: { from: number; to: number }) => void;
   onClearCustom: () => void;
+  onRefreshChange: (key: RefreshKey) => void;
   live: boolean;
   follow: boolean;
   onToggleLive: () => void;
@@ -166,6 +169,7 @@ export default function LogControls(props: LogControlsProps) {
                   <button
                     key={preset.key}
                     type="button"
+                    aria-pressed={active}
                     onClick={() => pickPreset(preset.key)}
                     className={`${presetButtonClass} ${
                       active
@@ -204,6 +208,30 @@ export default function LogControls(props: LogControlsProps) {
 
             {rangeError && <p className="mt-2 text-[10px] text-coral">{rangeError}</p>}
 
+            <div className="mt-3 border-t border-white/[0.07] pt-3">
+              <p className="text-[11px] font-medium text-mist">Refresh rate</p>
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                {REFRESH_OPTIONS.map((option) => {
+                  const active = props.refreshKey === option.key;
+                  return (
+                    <button
+                      key={option.key}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => props.onRefreshChange(option.key)}
+                      className={`${presetButtonClass} ${
+                        active
+                          ? "border-gold/35 bg-gold/[0.08] text-gold"
+                          : "border-white/[0.08] bg-ink-900 text-mist-dim hover:border-gold/25 hover:text-mist"
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="mt-3 flex items-center justify-between gap-2">
               {props.customRange ? (
                 <Button variant="ghost" size="xs" onClick={clearCustom}>
@@ -240,8 +268,8 @@ export default function LogControls(props: LogControlsProps) {
         }`}
         title={
           props.live
-            ? `Pause the live tail (l). Refreshes every ${formatRefresh(props.refreshMs)}.`
-            : "Resume the live tail (l)"
+            ? `Pause live refresh (l). Refreshing every ${refreshLabel(props.refreshKey)}.`
+            : `Resume live refresh (l) at the recommended rate for this window.`
         }
       >
         {props.live ? (
@@ -253,11 +281,13 @@ export default function LogControls(props: LogControlsProps) {
           />
         )}
         live
-        {props.live && (
-          <span className="text-[9px] tabular-nums text-gold/55">
-            {formatRefresh(props.refreshMs)}
-          </span>
-        )}
+        <span
+          className={`text-[9px] tabular-nums ${
+            props.live ? "text-gold/55" : "text-mist-faint"
+          }`}
+        >
+          {refreshLabel(props.refreshKey)}
+        </span>
       </button>
 
       <span aria-hidden="true" className="my-1 w-px bg-white/[0.07]" />

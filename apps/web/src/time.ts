@@ -43,40 +43,39 @@ export const WINDOW_PRESETS: WindowPreset[] = [
   { key: "30d", label: "last 30 days", gridLabel: "30 days" },
 ];
 
-const REFRESH_MS: Record<string, number> = {
-  "5m": 5_000,
-  "15m": 10_000,
-  "30m": 15_000,
-  "1h": 15_000,
-  "3h": 30_000,
-  "6h": 30_000,
-  "1d": 60_000,
-  "2d": 2 * 60_000,
-  "7d": 5 * 60_000,
-  "15d": 10 * 60_000,
-  "30d": 15 * 60_000,
-};
+export type RefreshKey = "15s" | "1m" | "5m" | "off";
+
+export interface RefreshOption {
+  key: RefreshKey;
+  label: string;
+  short: string;
+  ms: number | null;
+}
+
+/** A deliberate, small set instead of a cadence for every possible width. */
+export const REFRESH_OPTIONS: RefreshOption[] = [
+  { key: "15s", label: "15 secs", short: "15s", ms: 15_000 },
+  { key: "1m", label: "1 min", short: "1m", ms: 60_000 },
+  { key: "5m", label: "5 mins", short: "5m", ms: 5 * 60_000 },
+  { key: "off", label: "off", short: "off", ms: null },
+];
+
+export function refreshMsFor(key: RefreshKey): number | null {
+  return REFRESH_OPTIONS.find((option) => option.key === key)?.ms ?? null;
+}
+
+export function refreshLabel(key: RefreshKey): string {
+  return REFRESH_OPTIONS.find((option) => option.key === key)?.short ?? "off";
+}
 
 /**
- * Live refresh cadence. Wide windows change slowly, so polling hard only
- * burns CPU; narrow windows need a faster tick to stay useful.
+ * Default cadence follows the window the way Axiom does: a short window can
+ * afford frequent re-queries, a month-long view cannot.
  */
-export function refreshIntervalForWindow(key: string): number {
-  return REFRESH_MS[key] ?? 15_000;
-}
-
-export function refreshIntervalForRange(from: number, to: number): number {
-  const width = Math.max(0, to - from);
-  if (width <= 10 * 60_000) return 5_000;
-  if (width <= 60 * 60_000) return 15_000;
-  if (width <= 6 * 60 * 60_000) return 30_000;
-  if (width <= 24 * 60 * 60_000) return 60_000;
-  if (width <= 7 * 24 * 60 * 60_000) return 5 * 60_000;
-  return 15 * 60_000;
-}
-
-export function formatRefresh(ms: number): string {
-  return ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`;
+export function recommendedRefreshKey(windowMs: number): RefreshKey {
+  if (windowMs <= 15 * 60_000) return "15s";
+  if (windowMs <= 6 * 60 * 60_000) return "1m";
+  return "5m";
 }
 
 export function windowLabel(key: string): string {
