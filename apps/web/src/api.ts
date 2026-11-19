@@ -113,6 +113,13 @@ export function deleteProject(id: string): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/projects/${id}`, { method: "DELETE" });
 }
 
+export function renameProject(id: string, name: string): Promise<{ project: Project }> {
+  return api<{ project: Project }>(`/v1/projects/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
 // ---------- project members (admin) ----------
 
 export function fetchProjectMembers(

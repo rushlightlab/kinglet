@@ -306,6 +306,37 @@ export function registerRoutes(
     );
   });
 
+  app.patch("/v1/projects/:id", async (c) => {
+    const denied = requirePermission(c, "projects.write");
+    if (denied) return denied;
+    const id = parseId(c.req.param("id"));
+    if (id === null) return c.json({ error: "invalid project id" }, 400);
+    const parsedBody = await readJsonStrict(c);
+    if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
+    const name =
+      typeof parsedBody.body?.name === "string"
+        ? parsedBody.body.name.trim().slice(0, 64)
+        : "";
+    if (!name) return c.json({ error: "name is required" }, 400);
+    const existing = await storage.db
+      .select()
+      .from(schema.projects)
+      .where(eq(schema.projects.id, id))
+      .limit(1);
+    const row = existing[0];
+    if (!row) return c.json({ error: "project not found" }, 404);
+    await storage.db.update(schema.projects).set({ name }).where(eq(schema.projects.id, id));
+    return c.json({
+      project: {
+        id,
+        name,
+        slug: row.slug,
+        createdAt: Number(row.createdAt),
+        canClearLogs: true,
+      },
+    });
+  });
+
   app.delete("/v1/projects/:id", async (c) => {
     const denied = requirePermission(c, "projects.write");
     if (denied) return denied;

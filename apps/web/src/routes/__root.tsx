@@ -41,7 +41,7 @@ function RootComponent() {
         setState({
           phase: "offline",
           error:
-            "No project is available for your account. An administrator can assign you to one in Settings → projects & keys.",
+            "No project is available for your account. An administrator can assign you to one in Settings → Projects.",
         });
         return;
       }
@@ -131,7 +131,17 @@ function RootComponent() {
     refreshProjects: async () => {
       try {
         const { projects } = await fetchProjects();
-        setState((prev) => (prev.phase === "ready" ? { ...prev, projects } : prev));
+        setState((prev) => {
+          if (prev.phase !== "ready") return prev;
+          const stillExists = projects.some((p) => p.id === prev.currentProjectId);
+          const currentProjectId = stillExists
+            ? prev.currentProjectId
+            : projects[0]?.id ?? prev.currentProjectId;
+          if (currentProjectId !== prev.currentProjectId) {
+            localStorage.setItem("kinglet.project", currentProjectId);
+          }
+          return { ...prev, projects, currentProjectId };
+        });
       } catch {
         // ignore — the list refreshes on the next load
       }

@@ -54,12 +54,7 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
         <Link to="/monitors" className="nav-link" activeProps={{ className: "nav-link-active" }}>
           /monitors
         </Link>
-        <Link
-          to="/settings"
-          search={{ tab: undefined }}
-          className="nav-link"
-          activeProps={{ className: "nav-link-active" }}
-        >
+        <Link to="/settings" className="nav-link" activeProps={{ className: "nav-link-active" }}>
           /settings
         </Link>
       </nav>
@@ -134,9 +129,7 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
             <DropdownMenuGroup>
               <DropdownMenuItem
                 className="px-2 py-2"
-                onSelect={() =>
-                  void navigate({ to: "/settings", search: { tab: "account" } })
-                }
+                onSelect={() => void navigate({ to: "/account" })}
               >
                 <SettingsIcon />
                 Account settings
