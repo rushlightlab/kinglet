@@ -26,6 +26,41 @@ export const Route = createFileRoute("/")({
   component: Explorer,
 });
 
+function histogramWithLiveEvent(data: Histogram, event: KingletEvent): Histogram {
+  const first = data.points[0];
+
+  if (!first) return data;
+
+  if (event.ts < data.from) return data;
+
+  if (!Number.isInteger(event.level) || event.level < 0 || event.level > 5) return data;
+
+  const bucketTs = Math.floor(event.ts / data.bucketMs) * data.bucketMs;
+  let index = Math.round((bucketTs - first.ts) / data.bucketMs);
+
+  if (index < 0) return data;
+
+  // Live events arrive just after the loaded window ended; grow the newest
+  // bucket instead of dropping them until the next full refresh.
+  if (index >= data.points.length) {
+    if (event.ts > data.to + data.bucketMs * 2) return data;
+    index = data.points.length - 1;
+  }
+
+  const point = data.points[index];
+
+  if (!point) return data;
+  const counts = point.counts.slice();
+
+  counts[event.level] = (counts[event.level] ?? 0) + 1;
+
+  const points = data.points.slice();
+
+  points[index] = { ...point, counts };
+
+  return { ...data, points };
+}
+
 function Explorer() {
   const search = Route.useSearch();
   const navigate = useNavigate();
@@ -148,6 +183,7 @@ function Explorer() {
 
         if (!isKingletEvent(parsed)) return;
         setEvents((prev) => [parsed, ...prev].slice(0, 5000));
+        setHistogram((current) => (current ? histogramWithLiveEvent(current, parsed) : current));
 
         if (followRef.current && scrollRef.current) {
           scrollRef.current.scrollTo({ top: 0 });
@@ -258,6 +294,14 @@ function Explorer() {
     void navigator.clipboard?.writeText(url.toString());
   }, [navigate, q, rangeKey, customRange, currentProjectId]);
 
+  const clearCustomRange = useCallback(() => {
+    setCustomRange(null);
+
+    if (refreshKey !== "off") {
+      setRefreshKey(recommendedRefreshKey(WINDOWS.get(rangeKey) ?? 60 * 60_000));
+    }
+  }, [rangeKey, refreshKey]);
+
   return (
     <div className="flex h-screen flex-col bg-ink-950 text-mist">
       <SiteHeader>
@@ -280,7 +324,7 @@ function Explorer() {
               setRefreshKey(recommendedRefreshKey(range.to - range.from));
             }
           }}
-          onClearCustom={() => setCustomRange(null)}
+          onClearCustom={clearCustomRange}
           onRefreshChange={setRefreshKey}
           live={live}
           follow={follow}
@@ -309,7 +353,14 @@ function Explorer() {
       {histogram && (
         <HistogramChart
           data={histogram}
-          onSelectRange={(from, to) => setCustomRange({ from, to })}
+          onSelectRange={(from, to) => {
+            setCustomRange({ from, to });
+
+            if (refreshKey !== "off") {
+              setRefreshKey(recommendedRefreshKey(to - from));
+            }
+          }}
+          onReset={customRange ? clearCustomRange : undefined}
         />
       )}
 
