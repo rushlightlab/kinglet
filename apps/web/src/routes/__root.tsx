@@ -22,7 +22,7 @@ type RootState =
       user: AppUser;
       permissions: string[];
       projects: Project[];
-      currentProjectId: number;
+      currentProjectId: string;
     };
 
 function RootComponent() {
@@ -32,10 +32,10 @@ function RootComponent() {
     try {
       const me = await fetchMe();
       const { projects } = await fetchProjects();
-      const storedRaw = Number(localStorage.getItem("kinglet.project"));
-      const urlRaw = Number(new URLSearchParams(window.location.search).get("project"));
-      const valid = (id: number): boolean =>
-        Number.isFinite(id) && id > 0 && projects.some((p) => p.id === id);
+      const storedRaw = localStorage.getItem("kinglet.project");
+      const urlRaw = new URLSearchParams(window.location.search).get("project");
+      const valid = (id: string | null): id is string =>
+        id !== null && projects.some((p) => p.id === id);
       const chosen = [urlRaw, storedRaw].find(valid) ?? projects[0]?.id;
       if (chosen === undefined) {
         setState({

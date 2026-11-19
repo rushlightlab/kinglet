@@ -69,6 +69,7 @@ export async function openDatabase(opts: {
 
   const db = drizzle(client, { schema });
   await ensureProjectIdCompat(client);
+  await prepareUuidIdMigration(client);
   try {
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
   } catch (err) {
@@ -135,5 +136,58 @@ async function ensureProjectIdCompat(client: Client): Promise<void> {
   }
   if (!(await columns("monitors")).includes("project_id")) {
     await client.execute("ALTER TABLE monitors ADD COLUMN project_id INTEGER NOT NULL DEFAULT 1");
+  }
+}
+
+/**
+ * Before 0006 converts integer IDs to UUID v7 text IDs, build a mapping for
+ * every existing row so references can be rewritten consistently. Fresh
+ * databases get empty maps because 0006 still expects them to exist.
+ */
+async function prepareUuidIdMigration(client: Client): Promise<void> {
+  const hasTable = async (name: string): Promise<boolean> => {
+    const result = await client.execute({
+      sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      args: [name],
+    });
+    return result.rows.length > 0;
+  };
+  const idType = async (table: string): Promise<string | null> => {
+    if (!(await hasTable(table))) return null;
+    const result = await client.execute(`PRAGMA table_info(${table})`);
+    const id = result.rows.find((row) => String(row.name) === "id");
+    return id ? String(id.type ?? "").toUpperCase() : null;
+  };
+
+  const type = await idType("projects");
+  // Already migrated to UUID text IDs, or no projects table but this is not a
+  // fresh boot. A fresh database has no projects table and needs empty maps.
+  if (type !== null && !type.includes("INT")) return;
+
+  const maps = [
+    ["projects", "__uuid_projects"],
+    ["api_keys", "__uuid_api_keys"],
+    ["monitors", "__uuid_monitors"],
+    ["alerts", "__uuid_alerts"],
+    ["project_members", "__uuid_project_members"],
+  ] as const;
+
+  for (const [, map] of maps) {
+    await client.execute(
+      `CREATE TABLE IF NOT EXISTS ${map} (old_id INTEGER PRIMARY KEY, new_id TEXT NOT NULL)`
+    );
+  }
+
+  for (const [table, map] of maps) {
+    if (!(await hasTable(table))) continue;
+    const rows = await client.execute(`SELECT id FROM ${table}`);
+    if (rows.rows.length === 0) continue;
+    await client.batch(
+      rows.rows.map((row) => ({
+        sql: `INSERT OR IGNORE INTO ${map} (old_id, new_id) VALUES (?, ?)`,
+        args: [Number(row.id), uuidv7()],
+      })),
+      "write"
+    );
   }
 }

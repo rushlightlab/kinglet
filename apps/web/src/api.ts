@@ -19,7 +19,7 @@ const authClient = createAuthClient({
   baseURL: typeof window === "undefined" ? "" : window.location.origin,
 });
 
-function withProject(path: string, projectId: number): string {
+function withProject(path: string, projectId: string): string {
   const separator = path.includes("?") ? "&" : "?";
   return `${path}${separator}project=${projectId}`;
 }
@@ -109,20 +109,20 @@ export function createProject(name: string): Promise<{ project: Project }> {
   });
 }
 
-export function deleteProject(id: number): Promise<{ ok: true }> {
+export function deleteProject(id: string): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/projects/${id}`, { method: "DELETE" });
 }
 
 // ---------- project members (admin) ----------
 
 export function fetchProjectMembers(
-  projectId: number
+  projectId: string
 ): Promise<{ members: ProjectMember[] }> {
   return api<{ members: ProjectMember[] }>(`/v1/projects/${projectId}/members`);
 }
 
 export function addProjectMember(
-  projectId: number,
+  projectId: string,
   userId: string
 ): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/projects/${projectId}/members`, {
@@ -132,7 +132,7 @@ export function addProjectMember(
 }
 
 export function removeProjectMember(
-  projectId: number,
+  projectId: string,
   userId: string
 ): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/projects/${projectId}/members/${userId}`, {
@@ -141,7 +141,7 @@ export function removeProjectMember(
 }
 
 export function updateProjectMember(
-  projectId: number,
+  projectId: string,
   userId: string,
   body: { canClearLogs: boolean }
 ): Promise<{ ok: true; canClearLogs: boolean }> {
@@ -189,12 +189,12 @@ export function deleteUser(id: string): Promise<{ ok: true }> {
 
 // ---------- API keys ----------
 
-export function fetchKeys(projectId: number): Promise<{ keys: ApiKeyInfo[] }> {
+export function fetchKeys(projectId: string): Promise<{ keys: ApiKeyInfo[] }> {
   return api<{ keys: ApiKeyInfo[] }>(`/v1/projects/${projectId}/keys`);
 }
 
 export function createKey(
-  projectId: number,
+  projectId: string,
   input: { name: string; scopes: string[] }
 ): Promise<{ key: ApiKeyInfo; plaintext: string }> {
   return api<{ key: ApiKeyInfo; plaintext: string }>(`/v1/projects/${projectId}/keys`, {
@@ -203,13 +203,13 @@ export function createKey(
   });
 }
 
-export function deleteKey(id: number, projectId: number): Promise<{ ok: true }> {
+export function deleteKey(id: string, projectId: string): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/keys/${id}?project=${projectId}`, { method: "DELETE" });
 }
 
 export function updateKeyScopes(
-  id: number,
-  projectId: number,
+  id: string,
+  projectId: string,
   scopes: string[]
 ): Promise<{ ok: true; scopes: string[] }> {
   return api<{ ok: true; scopes: string[] }>(`/v1/keys/${id}?project=${projectId}`, {
@@ -219,8 +219,8 @@ export function updateKeyScopes(
 }
 
 export function rotateKey(
-  id: number,
-  projectId: number
+  id: string,
+  projectId: string
 ): Promise<{ plaintext: string; prefix: string }> {
   return api<{ plaintext: string; prefix: string }>(
     `/v1/keys/${id}/rotate?project=${projectId}`,
@@ -231,7 +231,7 @@ export function rotateKey(
 // ---------- events ----------
 
 export function fetchEvents(opts: {
-  projectId: number;
+  projectId: string;
   q?: string;
   from?: number;
   to?: number;
@@ -247,22 +247,22 @@ export function fetchEvents(opts: {
 
 /** Deletes events in the project, optionally within an epoch-ms range. */
 export function clearProjectLogs(
-  projectId: number,
+  projectId: string,
   range?: { from: number; to: number }
-): Promise<{ deleted: number; projectId: number; from?: number; to?: number }> {
+): Promise<{ deleted: number; projectId: string; from?: number; to?: number }> {
   const params = new URLSearchParams({ project: String(projectId) });
   if (range) {
     params.set("from", String(range.from));
     params.set("to", String(range.to));
   }
-  return api<{ deleted: number; projectId: number; from?: number; to?: number }>(
+  return api<{ deleted: number; projectId: string; from?: number; to?: number }>(
     `/v1/events?${params.toString()}`,
     { method: "DELETE" }
   );
 }
 
 export function fetchHistogram(opts: {
-  projectId: number;
+  projectId: string;
   from: number;
   to: number;
   buckets?: number;
@@ -272,12 +272,12 @@ export function fetchHistogram(opts: {
   return api<Histogram>(withProject(`/v1/histogram?${params.toString()}`, opts.projectId));
 }
 
-export function fetchServices(projectId: number): Promise<{ services: Service[] }> {
+export function fetchServices(projectId: string): Promise<{ services: Service[] }> {
   return api<{ services: Service[] }>(withProject("/v1/services", projectId));
 }
 
 /** SSE live tail — session cookie auth, so no token in the URL. */
-export function openStream(projectId: number, q: string): EventSource {
+export function openStream(projectId: string, q: string): EventSource {
   const params = new URLSearchParams({ project: String(projectId) });
   if (q) params.set("q", q);
   return new EventSource(`/v1/stream?${params.toString()}`);
@@ -285,11 +285,11 @@ export function openStream(projectId: number, q: string): EventSource {
 
 // ---------- monitors & alerts ----------
 
-export function fetchMonitors(projectId: number): Promise<{ monitors: Monitor[] }> {
+export function fetchMonitors(projectId: string): Promise<{ monitors: Monitor[] }> {
   return api<{ monitors: Monitor[] }>(withProject("/v1/monitors", projectId));
 }
 
-export function createMonitor(projectId: number, input: Partial<Monitor>): Promise<{ monitor: Monitor }> {
+export function createMonitor(projectId: string, input: Partial<Monitor>): Promise<{ monitor: Monitor }> {
   return api<{ monitor: Monitor }>(withProject("/v1/monitors", projectId), {
     method: "POST",
     body: JSON.stringify(input),
@@ -297,8 +297,8 @@ export function createMonitor(projectId: number, input: Partial<Monitor>): Promi
 }
 
 export function updateMonitor(
-  projectId: number,
-  id: number,
+  projectId: string,
+  id: string,
   input: Partial<Monitor>
 ): Promise<{ monitor: Monitor }> {
   return api<{ monitor: Monitor }>(withProject(`/v1/monitors/${id}`, projectId), {
@@ -307,16 +307,16 @@ export function updateMonitor(
   });
 }
 
-export function deleteMonitor(projectId: number, id: number): Promise<{ ok: true }> {
+export function deleteMonitor(projectId: string, id: string): Promise<{ ok: true }> {
   return api<{ ok: true }>(withProject(`/v1/monitors/${id}`, projectId), { method: "DELETE" });
 }
 
-export function testMonitor(projectId: number, id: number): Promise<{ results: ChannelTestResult[] }> {
+export function testMonitor(projectId: string, id: string): Promise<{ results: ChannelTestResult[] }> {
   return api<{ results: ChannelTestResult[] }>(withProject(`/v1/monitors/${id}/test`, projectId), {
     method: "POST",
   });
 }
 
-export function fetchAlerts(projectId: number, limit = 100): Promise<{ alerts: AlertRecord[] }> {
+export function fetchAlerts(projectId: string, limit = 100): Promise<{ alerts: AlertRecord[] }> {
   return api<{ alerts: AlertRecord[] }>(withProject(`/v1/alerts?limit=${limit}`, projectId));
 }

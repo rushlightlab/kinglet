@@ -391,7 +391,7 @@ function KeysPanel() {
                   <TableCell>
                     <span
                       className="inline-flex items-center rounded-[3px] border border-white/[0.08] bg-white/[0.025] px-1.5 py-0.5 font-mono text-[10px] text-mist-dim"
-                      title={`Key #${key.id}`}
+                      title={`key:${key.id}`}
                     >
                       {key.prefix}
                     </span>
@@ -853,7 +853,7 @@ function ClearLogsCard({
   projectName,
   canClear,
 }: {
-  projectId: number;
+  projectId: string;
   projectName: string;
   canClear: boolean;
 }) {

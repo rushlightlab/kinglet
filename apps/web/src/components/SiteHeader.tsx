@@ -63,7 +63,7 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
       {projects.length > 0 ? (
         <Select
           value={String(currentProjectId)}
-          onValueChange={(value) => setProjectId(Number(value))}
+          onValueChange={(value) => setProjectId(value)}
         >
           <SelectTrigger size="sm" className="min-w-28" aria-label="Current project">
             <SelectValue />

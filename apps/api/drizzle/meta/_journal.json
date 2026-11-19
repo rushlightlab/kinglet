@@ -43,6 +43,13 @@
       "when": 1795075763622,
       "tag": "0005_deep_jubilee",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1795076053357,
+      "tag": "0006_nervous_bromley",
+      "breakpoints": true
     }
   ]
 }

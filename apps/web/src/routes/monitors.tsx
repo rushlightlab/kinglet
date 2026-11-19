@@ -108,7 +108,7 @@ function MonitorsPage() {
   const canWrite = hasPermission(permissions, "monitors.write");
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
-  const [editing, setEditing] = useState<number | "new" | null>(null);
+  const [editing, setEditing] = useState<string | "new" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -171,7 +171,7 @@ function MonitorsPage() {
   };
 
   const editingMonitor =
-    typeof editing === "number" ? monitors.find((m) => m.id === editing) ?? null : null;
+    editing !== null && editing !== "new" ? monitors.find((m) => m.id === editing) ?? null : null;
 
   return (
     <PageShell
@@ -455,7 +455,7 @@ function MonitorForm({
   onCancel,
 }: {
   initial: Monitor | null;
-  projectId: number;
+  projectId: string;
   onDone: () => Promise<void>;
   onCancel: () => void;
 }) {

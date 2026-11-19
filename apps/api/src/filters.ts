@@ -8,7 +8,7 @@ import { LEVEL_NAMES } from "./types.js";
  *   level>=warn        level comparisons
  *   service:api        service equals "api"
  *   env:prod           env equals "prod"
- *   key:12             events ingested by API key #12
+ *   key:0190f3a2-…     events ingested by that API key (UUID v7)
  *   "conn refused"     message contains phrase
  *   -healthcheck       message must NOT contain this
  *
@@ -20,7 +20,7 @@ export interface ParsedFilters {
   levelValue: number | null;
   service: string | null;
   env: string | null;
-  apiKeyId: number | null;
+  apiKeyId: string | null;
   includes: string[];
   excludes: string[];
 }
@@ -77,7 +77,7 @@ export function parseFilters(q: string): ParsedFilters {
     }
     const levelMatch = /^level(>=|<=|>|<|=|:)(.+)$/i.exec(t);
     const kvMatch = /^(service|env):(.+)$/i.exec(t);
-    const keyMatch = /^(?:key|api_key):(\d+)$/i.exec(t);
+    const keyMatch = /^(?:key|api_key):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(t);
     if (!negative && levelMatch) {
       const value = levelIndex(levelMatch[2] ?? "");
       if (value !== null) {
@@ -88,7 +88,7 @@ export function parseFilters(q: string): ParsedFilters {
       }
     }
     if (!negative && keyMatch) {
-      f.apiKeyId = Number(keyMatch[1]);
+      f.apiKeyId = (keyMatch[1] ?? "").toLowerCase();
       continue;
     }
     if (!negative && kvMatch) {
@@ -118,7 +118,7 @@ function textClause(term: string): SQL {
   return sql`message LIKE ${`%${escaped}%`} ESCAPE '\\'`;
 }
 
-export function buildWhere(f: ParsedFilters, range: EventRange, projectId: number): SQL {
+export function buildWhere(f: ParsedFilters, range: EventRange, projectId: string): SQL {
   const parts: SQL[] = [
     sql`project_id = ${projectId}`,
     sql`ts >= ${range.from}`,
@@ -155,7 +155,7 @@ export function matchesEvent(
     service: string | null;
     env: string | null;
     message: string;
-    apiKeyId?: number | null;
+    apiKeyId?: string | null;
   }
 ): boolean {
   if (f.levelOp && f.levelValue !== null && !compare(row.level, f.levelOp, f.levelValue)) return false;

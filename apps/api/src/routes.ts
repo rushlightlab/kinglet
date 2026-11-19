@@ -30,7 +30,7 @@ import {
 import type { AppEnv, AuthInfo } from "./auth/middleware.js";
 import { isKeyScope, isRole, permissionsForRole } from "./auth/roles.js";
 import type { KeyScope, Role } from "./auth/roles.js";
-import { isUuid } from "./auth/ids.js";
+import { isUuid, uuidv7 } from "./auth/ids.js";
 import {
   countAdmins,
   createManagedUser,
@@ -110,8 +110,8 @@ function allowIngest(auth: AuthInfo): boolean {
  * Stored-event counts are cached for 30s so per-batch quota checks do not run
  * a COUNT on the hot ingest path every time.
  */
-const projectCountCache = new Map<number, { value: number; expiresAt: number }>();
-async function projectEventCount(storage: Storage, projectId: number): Promise<number> {
+const projectCountCache = new Map<string, { value: number; expiresAt: number }>();
+async function projectEventCount(storage: Storage, projectId: string): Promise<number> {
   const now = Date.now();
   const cached = projectCountCache.get(projectId);
   if (cached && cached.expiresAt > now) return cached.value;
@@ -124,7 +124,7 @@ async function projectEventCount(storage: Storage, projectId: number): Promise<n
   return value;
 }
 
-function bumpProjectCount(projectId: number, inserted: number): void {
+function bumpProjectCount(projectId: string, inserted: number): void {
   const cached = projectCountCache.get(projectId);
   if (cached) cached.value += inserted;
 }
@@ -162,9 +162,14 @@ function clampInt(value: string | undefined, fallback: number, min: number, max:
   return Math.min(max, Math.max(min, n));
 }
 
-function parseId(raw: string): number | null {
-  const n = Math.trunc(Number(raw));
-  return Number.isFinite(n) && n > 0 ? n : null;
+function parseId(raw: string): string | null {
+  return isUuid(raw) ? raw.toLowerCase() : null;
+}
+
+/** Project ids are UUID v7 in the `?project=` query parameter. */
+function parseProjectQuery(raw: string | undefined): string | null {
+  if (raw === undefined) return null;
+  return parseId(raw);
 }
 
 async function readJson(c: Context<AppEnv>): Promise<Record<string, unknown> | null> {
@@ -250,7 +255,7 @@ export function registerRoutes(
             .orderBy(schema.projects.id);
     return c.json({
       projects: rows.map((r) => ({
-        id: Number(r.id),
+        id: r.id,
         name: r.name,
         slug: r.slug,
         createdAt: Number(r.createdAt),
@@ -281,7 +286,7 @@ export function registerRoutes(
     const now = Date.now();
     const rows = await storage.db
       .insert(schema.projects)
-      .values({ name, slug, createdAt: now })
+      .values({ id: uuidv7(), name, slug, createdAt: now })
       .returning();
     const row = rows[0];
     // Give the creator explicit membership too, so a later demotion from
@@ -291,12 +296,12 @@ export function registerRoutes(
       if (authInfo.kind === "user") {
         await storage.db
           .insert(schema.projectMembers)
-          .values({ projectId: Number(row.id), userId: authInfo.user.id, createdAt: now })
+          .values({ id: uuidv7(), projectId: row.id, userId: authInfo.user.id, createdAt: now })
           .onConflictDoNothing();
       }
     }
     return c.json(
-      { project: { id: Number(row?.id ?? 0), name, slug, createdAt: now } },
+      { project: { id: row?.id ?? "", name, slug, createdAt: now } },
       201
     );
   });
@@ -525,9 +530,8 @@ export function registerRoutes(
     if (denied) return denied;
     const id = parseId(c.req.param("id"));
     if (id === null) return c.json({ error: "invalid key id" }, 400);
-    const projectRaw = c.req.query("project");
-    const projectId = Math.trunc(Number(projectRaw));
-    if (!Number.isFinite(projectId) || projectId <= 0) return c.json({ error: "project is required" }, 400);
+    const projectId = parseProjectQuery(c.req.query("project"));
+    if (projectId === null) return c.json({ error: "project is required" }, 400);
     if (!(await canAccessProject(getAuth(c), storage, projectId))) {
       return c.json({ error: "project not found" }, 404);
     }
@@ -541,8 +545,8 @@ export function registerRoutes(
     if (denied) return denied;
     const id = parseId(c.req.param("id"));
     if (id === null) return c.json({ error: "invalid key id" }, 400);
-    const projectId = Math.trunc(Number(c.req.query("project")));
-    if (!Number.isFinite(projectId) || projectId <= 0) {
+    const projectId = parseProjectQuery(c.req.query("project"));
+    if (projectId === null) {
       return c.json({ error: "project is required" }, 400);
     }
     if (!(await canAccessProject(getAuth(c), storage, projectId))) {
@@ -572,8 +576,8 @@ export function registerRoutes(
     if (denied) return denied;
     const id = parseId(c.req.param("id"));
     if (id === null) return c.json({ error: "invalid key id" }, 400);
-    const projectId = Math.trunc(Number(c.req.query("project")));
-    if (!Number.isFinite(projectId) || projectId <= 0) {
+    const projectId = parseProjectQuery(c.req.query("project"));
+    if (projectId === null) {
       return c.json({ error: "project is required" }, 400);
     }
     if (!(await canAccessProject(getAuth(c), storage, projectId))) {
@@ -633,7 +637,7 @@ export function registerRoutes(
     if (!target) return c.json({ error: "user not found" }, 404);
     await storage.db
       .insert(schema.projectMembers)
-      .values({ projectId, userId, createdAt: Date.now() })
+      .values({ id: uuidv7(), projectId, userId, createdAt: Date.now() })
       .onConflictDoNothing();
     return c.json(
       {
@@ -899,7 +903,7 @@ export function registerRoutes(
     if (projectId instanceof Response) return projectId;
     const uid = c.req.param("uid");
     if (!isUuid(uid)) return c.json({ error: "invalid event id" }, 400);
-    const row = await storage.getEventByUid(projectId, uid);
+    const row = await storage.getEventByUid(projectId, uid.toLowerCase());
     if (!row) return c.json({ error: "event not found" }, 404);
     return c.json({ event: toClientEvent(row) });
   });

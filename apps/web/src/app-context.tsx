@@ -5,8 +5,8 @@ export interface AppContextValue {
   user: AppUser;
   permissions: string[];
   projects: Project[];
-  currentProjectId: number;
-  setProjectId: (id: number) => void;
+  currentProjectId: string;
+  setProjectId: (id: string) => void;
   refreshProjects: () => Promise<void>;
   signOut: () => void;
 }

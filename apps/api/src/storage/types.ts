@@ -37,23 +37,23 @@ export interface Storage {
   /** Typed Drizzle database for meta tables and ad-hoc queries. */
   readonly db: KingletDb;
   insertEvents(
-    projectId: number,
+    projectId: string,
     events: Normalized[],
-    apiKeyId: number | null
+    apiKeyId: string | null
   ): Promise<StoredEvent[]>;
   queryEvents(opts: QueryOptions): Promise<StoredEvent[]>;
-  getEventByUid(projectId: number, uid: string): Promise<StoredEvent | null>;
+  getEventByUid(projectId: string, uid: string): Promise<StoredEvent | null>;
   histogramPoints(
-    projectId: number,
+    projectId: string,
     from: number,
     to: number,
     bucketMs: number
   ): Promise<HistogramPointRow[]>;
-  listServices(projectId: number): Promise<ServiceRow[]>;
+  listServices(projectId: string): Promise<ServiceRow[]>;
   /** Chunked delete; returns how many events were dropped. */
   deleteOlderThan(ts: number): Promise<number>;
   /** Chunked delete of every event in one project; returns the count. */
-  deleteByProject(projectId: number, range?: { from: number; to: number }): Promise<number>;
+  deleteByProject(projectId: string, range?: { from: number; to: number }): Promise<number>;
   /** Housekeeping after big deletes (vacuum etc.). No-op on managed backends. */
   runMaintenance(): Promise<void>;
   close(): Promise<void>;

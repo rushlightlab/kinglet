@@ -4,8 +4,8 @@ export const LEVEL_NAMES = ["trace", "debug", "info", "warn", "error", "fatal"] 
 export interface StoredEvent {
   id: number;
   uid: string | null;
-  projectId: number;
-  apiKeyId: number | null;
+  projectId: string;
+  apiKeyId: string | null;
   ts: number;
   level: number;
   service: string | null;
@@ -18,8 +18,8 @@ export interface StoredEvent {
 export interface ClientEvent {
   id: number;
   uid: string | null;
-  projectId: number;
-  apiKeyId: number | null;
+  projectId: string;
+  apiKeyId: string | null;
   ts: number;
   level: number;
   service: string | null;

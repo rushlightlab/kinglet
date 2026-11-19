@@ -14,7 +14,7 @@ import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqli
  */
 
 export const projects = sqliteTable("projects", {
-  id: integer("id").primaryKey(),
+  id: text("id").primaryKey(),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
   createdAt: integer("created_at").notNull(),
@@ -26,8 +26,8 @@ export const projects = sqliteTable("projects", {
 export const apiKeys = sqliteTable(
   "api_keys",
   {
-    id: integer("id").primaryKey(),
-    projectId: integer("project_id").notNull(),
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull(),
     name: text("name").notNull(),
     prefix: text("prefix").notNull(),
     keyHash: text("key_hash").notNull().unique(),
@@ -46,8 +46,8 @@ export const events = sqliteTable(
     // Public, time-sortable identifier for single-event lookups. The integer
     // id stays the rowid so FTS5 external content and pagination keep working.
     uid: text("uid"),
-    projectId: integer("project_id").notNull().default(1),
-    apiKeyId: integer("api_key_id"),
+    projectId: text("project_id").notNull(),
+    apiKeyId: text("api_key_id"),
     ts: integer("ts").notNull(),
     level: integer("level").notNull(),
     service: text("service"),
@@ -68,8 +68,8 @@ export const events = sqliteTable(
 export const monitors = sqliteTable(
   "monitors",
   {
-    id: integer("id").primaryKey(),
-    projectId: integer("project_id").notNull().default(1),
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull(),
     name: text("name").notNull(),
     query: text("query").notNull().default(""),
     kind: text("kind").notNull().default("count_above"),
@@ -92,8 +92,8 @@ export const monitors = sqliteTable(
 export const alerts = sqliteTable(
   "alerts",
   {
-    id: integer("id").primaryKey(),
-    monitorId: integer("monitor_id").notNull(),
+    id: text("id").primaryKey(),
+    monitorId: text("monitor_id").notNull(),
     state: text("state").notNull(),
     summary: text("summary").notNull(),
     count: integer("count"),
@@ -197,8 +197,8 @@ export const verification = sqliteTable(
 export const projectMembers = sqliteTable(
   "project_members",
   {
-    id: integer("id").primaryKey(),
-    projectId: integer("project_id").notNull(),
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull(),
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),

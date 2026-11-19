@@ -13,7 +13,7 @@ export const LEVEL_COLORS = [
 export interface KingletEvent {
   id: number;
   uid: string | null;
-  apiKeyId: number | null;
+  apiKeyId: string | null;
   ts: number;
   level: number;
   service: string | null;
@@ -54,7 +54,7 @@ export interface NotifyChannel {
 }
 
 export interface Monitor {
-  id: number;
+  id: string;
   name: string;
   query: string;
   kind: MonitorKind;
@@ -73,8 +73,8 @@ export interface Monitor {
 }
 
 export interface AlertRecord {
-  id: number;
-  monitorId: number;
+  id: string;
+  monitorId: string;
   monitorName: string | null;
   state: "fired" | "resolved";
   summary: string;
@@ -94,7 +94,7 @@ export interface ChannelTestResult {
 }
 
 export interface Project {
-  id: number;
+  id: string;
   name: string;
   slug: string;
   createdAt: number;
@@ -123,8 +123,8 @@ export interface AppUser {
 }
 
 export interface ApiKeyInfo {
-  id: number;
-  projectId: number;
+  id: string;
+  projectId: string;
   name: string;
   prefix: string;
   scopes: string[];

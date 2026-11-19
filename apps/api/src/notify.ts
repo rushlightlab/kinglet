@@ -32,7 +32,7 @@ export interface NotifyChannel {
 }
 
 export interface AlertNotice {
-  monitorId: number;
+  monitorId: string;
   monitorName: string;
   query: string;
   state: "fired" | "resolved" | "test";

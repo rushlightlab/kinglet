@@ -5,6 +5,7 @@ import type { Config } from "../env.js";
 import type { Storage } from "../storage/index.js";
 import * as schema from "../storage/schema.js";
 import type { KingletAuth } from "./auth.js";
+import { uuidv7 } from "./ids.js";
 import { generatePassword } from "./tokens.js";
 
 /**
@@ -26,7 +27,7 @@ export async function ensureSchemaExtras(storage: Storage): Promise<void> {
     // database from racing on the unique slug.
     await storage.db
       .insert(schema.projects)
-      .values({ name: "default", slug: "default", createdAt: Date.now() })
+      .values({ id: uuidv7(), name: "default", slug: "default", createdAt: Date.now() })
       .onConflictDoNothing();
   }
 }

@@ -14,8 +14,8 @@ function mapEventRow(row: typeof schema.events.$inferSelect): StoredEvent {
   return {
     id: Number(row.id),
     uid: row.uid ?? null,
-    projectId: Number(row.projectId),
-    apiKeyId: row.apiKeyId === null ? null : Number(row.apiKeyId),
+    projectId: row.projectId,
+    apiKeyId: row.apiKeyId ?? null,
     ts: Number(row.ts),
     level: Number(row.level),
     service: row.service,
@@ -27,9 +27,9 @@ function mapEventRow(row: typeof schema.events.$inferSelect): StoredEvent {
 
 export async function insertEvents(
   db: KingletDb,
-  projectId: number,
+  projectId: string,
   events: Normalized[],
-  apiKeyId: number | null
+  apiKeyId: string | null
 ): Promise<StoredEvent[]> {
   if (events.length === 0) return [];
   const rows: StoredEvent[] = [];
@@ -91,7 +91,7 @@ export async function queryEvents(db: KingletDb, opts: QueryOptions): Promise<St
 /** Single-event lookup for shareable UUIDs; fast thanks to uq_events_uid. */
 export async function getEventByUid(
   db: KingletDb,
-  projectId: number,
+  projectId: string,
   uid: string
 ): Promise<StoredEvent | null> {
   const rows = await db
@@ -105,7 +105,7 @@ export async function getEventByUid(
 
 export async function histogramPoints(
   db: KingletDb,
-  projectId: number,
+  projectId: string,
   from: number,
   to: number,
   bucketMs: number
@@ -144,7 +144,7 @@ export async function histogramPoints(
   return points;
 }
 
-export async function listServices(db: KingletDb, projectId: number): Promise<ServiceRow[]> {
+export async function listServices(db: KingletDb, projectId: string): Promise<ServiceRow[]> {
   const rows = await db
     .select({ name: schema.events.service, n: count() })
     .from(schema.events)
@@ -171,7 +171,7 @@ export async function deleteOlderThan(db: KingletDb, ts: number): Promise<number
 /** Chunked project wipe: keys, monitors, and alert history are untouched. */
 export async function deleteByProject(
   db: KingletDb,
-  projectId: number,
+  projectId: string,
   range?: { from: number; to: number }
 ): Promise<number> {
   let total = 0;

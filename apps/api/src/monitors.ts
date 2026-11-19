@@ -5,6 +5,7 @@ import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
 import type { ParsedFilters } from "./filters.js";
 import { sendNotice, validateWebhookUrl } from "./notify.js";
 import type { AlertNotice, NotifyChannel } from "./notify.js";
+import { uuidv7 } from "./auth/ids.js";
 import { systemStatus } from "./status.js";
 import * as schema from "./storage/schema.js";
 import type { Storage } from "./storage/index.js";
@@ -27,8 +28,8 @@ export type MonitorKind = "match" | "count_above" | "count_below";
 export const MONITOR_KINDS: readonly MonitorKind[] = ["match", "count_above", "count_below"];
 
 export interface Monitor {
-  id: number;
-  projectId: number;
+  id: string;
+  projectId: string;
   name: string;
   query: string;
   kind: MonitorKind;
@@ -47,8 +48,8 @@ export interface Monitor {
 }
 
 export interface AlertRecord {
-  id: number;
-  monitorId: number;
+  id: string;
+  monitorId: string;
   monitorName: string | null;
   state: "fired" | "resolved";
   summary: string;
@@ -147,8 +148,8 @@ function parseChannels(raw: string): NotifyChannel[] {
 
 function rowToMonitor(row: typeof schema.monitors.$inferSelect): Monitor {
   return {
-    id: Number(row.id),
-    projectId: Number(row.projectId),
+    id: row.id,
+    projectId: row.projectId,
     name: row.name,
     query: row.query,
     kind: (MONITOR_KINDS as readonly string[]).includes(row.kind) ? (row.kind as MonitorKind) : "count_above",
@@ -167,7 +168,7 @@ function rowToMonitor(row: typeof schema.monitors.$inferSelect): Monitor {
 }
 
 /** All monitors when projectId is omitted (the alert engine); one project otherwise. */
-export async function listMonitors(storage: Storage, projectId?: number): Promise<Monitor[]> {
+export async function listMonitors(storage: Storage, projectId?: string): Promise<Monitor[]> {
   const rows = await storage.db
     .select()
     .from(schema.monitors)
@@ -178,8 +179,8 @@ export async function listMonitors(storage: Storage, projectId?: number): Promis
 
 export async function getMonitor(
   storage: Storage,
-  id: number,
-  projectId?: number
+  id: string,
+  projectId?: string
 ): Promise<Monitor | null> {
   const condition = projectId === undefined
     ? eq(schema.monitors.id, id)
@@ -193,7 +194,7 @@ export type MonitorResult = { ok: true; monitor: Monitor } | { ok: false; error:
 
 export async function createMonitorFromRaw(
   storage: Storage,
-  projectId: number,
+  projectId: string,
   raw: unknown,
   opts: { allowPrivateWebhooks: boolean }
 ): Promise<MonitorResult> {
@@ -204,6 +205,7 @@ export async function createMonitorFromRaw(
   const rows = await storage.db
     .insert(schema.monitors)
     .values({
+      id: uuidv7(),
       projectId,
       name: v.name,
       query: v.query,
@@ -224,8 +226,8 @@ export async function createMonitorFromRaw(
 
 export async function updateMonitorFromRaw(
   storage: Storage,
-  id: number,
-  projectId: number,
+  id: string,
+  projectId: string,
   raw: unknown,
   opts: { allowPrivateWebhooks: boolean }
 ): Promise<MonitorResult | { ok: false; error: string; notFound: true }> {
@@ -252,7 +254,7 @@ export async function updateMonitorFromRaw(
   return row ? { ok: true, monitor: rowToMonitor(row) } : { ok: false, error: "monitor not found", notFound: true };
 }
 
-export async function deleteMonitor(storage: Storage, id: number, projectId: number): Promise<boolean> {
+export async function deleteMonitor(storage: Storage, id: string, projectId: string): Promise<boolean> {
   return storage.db.transaction(async (tx) => {
     const result = await tx
       .delete(schema.monitors)
@@ -263,7 +265,7 @@ export async function deleteMonitor(storage: Storage, id: number, projectId: num
   });
 }
 
-export async function listAlerts(storage: Storage, limit: number, projectId: number): Promise<AlertRecord[]> {
+export async function listAlerts(storage: Storage, limit: number, projectId: string): Promise<AlertRecord[]> {
   const rows = await storage.db
     .select({
       id: schema.alerts.id,
@@ -284,8 +286,8 @@ export async function listAlerts(storage: Storage, limit: number, projectId: num
     .orderBy(desc(schema.alerts.firedAt))
     .limit(Math.min(500, Math.max(1, limit)));
   return rows.map((row) => ({
-    id: Number(row.id),
-    monitorId: Number(row.monitorId),
+    id: row.id,
+    monitorId: row.monitorId,
     monitorName: row.monitorName ?? null,
     state: row.state === "resolved" ? "resolved" : "fired",
     summary: row.summary,
@@ -309,7 +311,7 @@ interface MonitorState {
   firing: boolean;
   lastFiredAt: number;
   lastEvalAt: number;
-  openAlertId: number | null;
+  openAlertId: string | null;
   evaluating: boolean;
 }
 
@@ -319,7 +321,7 @@ export function startMonitorEngine(
 ): MonitorEngine {
   const allowPrivate = opts.allowPrivateWebhooks ?? false;
   let monitors: Monitor[] = [];
-  const state = new Map<number, MonitorState>();
+  const state = new Map<string, MonitorState>();
   const parsedCache = new Map<string, ParsedFilters>();
 
   const parsed = (query: string): ParsedFilters => {
@@ -331,7 +333,7 @@ export function startMonitorEngine(
     return f;
   };
 
-  const getState = (id: number): MonitorState => {
+  const getState = (id: string): MonitorState => {
     let s = state.get(id);
     if (!s) {
       s = { active: false, firing: false, lastFiredAt: 0, lastEvalAt: 0, openAlertId: null, evaluating: false };
@@ -419,6 +421,7 @@ export function startMonitorEngine(
       const inserted = await storage.db
         .insert(schema.alerts)
         .values({
+          id: uuidv7(),
           monitorId: m.id,
           state: "fired",
           summary,
@@ -429,7 +432,7 @@ export function startMonitorEngine(
         .returning({ id: schema.alerts.id });
       s.active = true;
       s.lastFiredAt = now;
-      const alertId = Number(inserted[0]?.id ?? 0) || null;
+      const alertId = inserted[0]?.id ?? null;
       s.openAlertId = alertId;
 
       const delivery = await notifyAll(m, {

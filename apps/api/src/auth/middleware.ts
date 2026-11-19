@@ -6,6 +6,7 @@ import { verifyApiKey } from "./apikeys.js";
 import type { KingletAuth } from "./auth.js";
 import type { KeyScope, Permission, Role } from "./roles.js";
 import { isRole, permissionsForRole } from "./roles.js";
+import { isUuid } from "./ids.js";
 
 export type AuthInfo =
   | {
@@ -15,9 +16,9 @@ export type AuthInfo =
     }
   | {
       kind: "key";
-      keyId: number;
+      keyId: string;
       name: string;
-      projectId: number;
+      projectId: string;
       scopes: Set<KeyScope>;
     };
 
@@ -115,7 +116,7 @@ export function requireUser(c: Context<AppEnv>): AuthUser | Response {
   return auth.user;
 }
 
-export async function defaultProjectId(storage: Storage): Promise<number | null> {
+export async function defaultProjectId(storage: Storage): Promise<string | null> {
   const rows = await storage.db
     .select({ id: schema.projects.id })
     .from(schema.projects)
@@ -124,7 +125,7 @@ export async function defaultProjectId(storage: Storage): Promise<number | null>
   return rows[0]?.id ?? null;
 }
 
-export async function projectExists(storage: Storage, id: number): Promise<boolean> {
+export async function projectExists(storage: Storage, id: string): Promise<boolean> {
   const rows = await storage.db
     .select({ id: schema.projects.id })
     .from(schema.projects)
@@ -142,7 +143,7 @@ export async function projectExists(storage: Storage, id: number): Promise<boole
 export async function canAccessProject(
   auth: AuthInfo,
   storage: Storage,
-  projectId: number
+  projectId: string
 ): Promise<boolean> {
   if (auth.kind === "key") return auth.projectId === projectId;
   if (auth.user.role === "admin") return true;
@@ -168,7 +169,7 @@ export async function canAccessProject(
 export async function canClearProjectLogs(
   auth: AuthInfo,
   storage: Storage,
-  projectId: number
+  projectId: string
 ): Promise<boolean> {
   if (auth.kind !== "user") return false;
   if (auth.user.role === "admin") return true;
@@ -195,13 +196,13 @@ export async function canClearProjectLogs(
 export async function resolveProjectId(
   c: Context<AppEnv>,
   storage: Storage
-): Promise<number | Response> {
+): Promise<string | Response> {
   const auth = getAuth(c);
   if (auth.kind === "key") return auth.projectId;
   const raw = c.req.query("project");
   if (raw !== undefined) {
-    const id = Math.trunc(Number(raw));
-    if (!Number.isFinite(id) || id <= 0) return c.json({ error: "invalid project id" }, 400);
+    if (!isUuid(raw)) return c.json({ error: "invalid project id" }, 400);
+    const id = raw.toLowerCase();
     if (!(await projectExists(storage, id))) return c.json({ error: "project not found" }, 404);
     // 404 (not 403) so non-members cannot probe which project ids exist.
     if (!(await canAccessProject(auth, storage, id))) {
@@ -222,7 +223,7 @@ export async function resolveProjectId(
       .limit(1);
     const first = rows[0];
     if (!first) return c.json({ error: "no projects are assigned to your account" }, 409);
-    return Number(first.id);
+    return first.id;
   }
   const fallback = await defaultProjectId(storage);
   if (fallback === null) return c.json({ error: "no projects exist" }, 409);

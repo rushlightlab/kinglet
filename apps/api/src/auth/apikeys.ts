@@ -3,14 +3,15 @@ import type { Storage } from "../storage/index.js";
 import * as schema from "../storage/schema.js";
 import type { KeyScope } from "./roles.js";
 import { isKeyScope } from "./roles.js";
+import { uuidv7 } from "./ids.js";
 import { randomToken, sha256hex } from "./tokens.js";
 
 /** Kinglet API keys: kl_… — machine credentials scoped per project. */
 export const KEY_PREFIX = "kl_";
 
 export interface ApiKey {
-  id: number;
-  projectId: number;
+  id: string;
+  projectId: string;
   name: string;
   /** Short display fragment, e.g. "kl_9f2a1c3d…" — never the full key. */
   prefix: string;
@@ -23,8 +24,8 @@ export interface ApiKey {
 }
 
 export interface VerifiedKey {
-  id: number;
-  projectId: number;
+  id: string;
+  projectId: string;
   name: string;
   scopes: Set<KeyScope>;
 }
@@ -48,7 +49,7 @@ function newPrefix(plaintext: string): string {
   return `${plaintext.slice(0, 11)}…`;
 }
 
-export async function listApiKeys(storage: Storage, projectId: number): Promise<ApiKey[]> {
+export async function listApiKeys(storage: Storage, projectId: string): Promise<ApiKey[]> {
   const rows = await storage.db
     .select({ key: schema.apiKeys, email: schema.user.email })
     .from(schema.apiKeys)
@@ -56,8 +57,8 @@ export async function listApiKeys(storage: Storage, projectId: number): Promise<
     .where(eq(schema.apiKeys.projectId, projectId))
     .orderBy(schema.apiKeys.id);
   return rows.map(({ key: row, email }) => ({
-    id: Number(row.id),
-    projectId: Number(row.projectId),
+    id: row.id,
+    projectId: row.projectId,
     name: row.name,
     prefix: displayPrefix(row.prefix),
     scopes: parseScopes(row.scopes),
@@ -70,26 +71,25 @@ export async function listApiKeys(storage: Storage, projectId: number): Promise<
 
 export async function createApiKey(
   storage: Storage,
-  input: { projectId: number; name: string; scopes: KeyScope[]; createdBy: string | null }
+  input: { projectId: string; name: string; scopes: KeyScope[]; createdBy: string | null }
 ): Promise<{ key: ApiKey; plaintext: string }> {
   const plaintext = KEY_PREFIX + randomToken();
   const prefix = newPrefix(plaintext);
+  const id = uuidv7();
   const now = Date.now();
-  const inserted = await storage.db
-    .insert(schema.apiKeys)
-    .values({
-      projectId: input.projectId,
-      name: input.name,
-      prefix,
-      keyHash: sha256hex(plaintext),
-      scopes: JSON.stringify(input.scopes),
-      createdBy: input.createdBy,
-      createdAt: now,
-    })
-    .returning({ id: schema.apiKeys.id });
+  await storage.db.insert(schema.apiKeys).values({
+    id,
+    projectId: input.projectId,
+    name: input.name,
+    prefix,
+    keyHash: sha256hex(plaintext),
+    scopes: JSON.stringify(input.scopes),
+    createdBy: input.createdBy,
+    createdAt: now,
+  });
   return {
     key: {
-      id: Number(inserted[0]?.id ?? 0),
+      id,
       projectId: input.projectId,
       name: input.name,
       prefix,
@@ -103,22 +103,26 @@ export async function createApiKey(
   };
 }
 
-export async function deleteApiKey(storage: Storage, id: number, projectId: number): Promise<boolean> {
+export async function deleteApiKey(
+  storage: Storage,
+  id: string,
+  projectId: string
+): Promise<boolean> {
   const result = await storage.db
     .delete(schema.apiKeys)
     .where(and(eq(schema.apiKeys.id, id), eq(schema.apiKeys.projectId, projectId)));
   return Number(result.rowsAffected ?? 0) > 0;
 }
 
-export async function deleteProjectApiKeys(storage: Storage, projectId: number): Promise<void> {
+export async function deleteProjectApiKeys(storage: Storage, projectId: string): Promise<void> {
   await storage.db.delete(schema.apiKeys).where(eq(schema.apiKeys.projectId, projectId));
 }
 
 /** Change a key's scopes without changing the key itself. */
 export async function updateApiKeyScopes(
   storage: Storage,
-  id: number,
-  projectId: number,
+  id: string,
+  projectId: string,
   scopes: KeyScope[]
 ): Promise<boolean> {
   const result = await storage.db
@@ -131,8 +135,8 @@ export async function updateApiKeyScopes(
 /** Replace the key material; the old plaintext stops working immediately. */
 export async function rotateApiKey(
   storage: Storage,
-  id: number,
-  projectId: number
+  id: string,
+  projectId: string
 ): Promise<{ plaintext: string; prefix: string } | null> {
   const plaintext = KEY_PREFIX + randomToken();
   const prefix = newPrefix(plaintext);
@@ -154,7 +158,7 @@ export async function deleteApiKeysByOwner(storage: Storage, userId: string): Pr
 }
 
 /** In-memory throttle so hot ingest batches don't UPDATE last_used_at constantly. */
-const lastTouch = new Map<number, number>();
+const lastTouch = new Map<string, number>();
 
 export async function verifyApiKey(storage: Storage, plaintext: string): Promise<VerifiedKey | null> {
   if (!plaintext.startsWith(KEY_PREFIX)) return null;
@@ -176,7 +180,7 @@ export async function verifyApiKey(storage: Storage, plaintext: string): Promise
     const owner = owners[0];
     if (!owner || owner.banned === true) return null;
   }
-  const id = Number(row.id);
+  const id = row.id;
   const now = Date.now();
   if (now - (lastTouch.get(id) ?? 0) > 60_000) {
     lastTouch.set(id, now);
@@ -188,7 +192,7 @@ export async function verifyApiKey(storage: Storage, plaintext: string): Promise
   }
   return {
     id,
-    projectId: Number(row.projectId),
+    projectId: row.projectId,
     name: row.name,
     scopes: new Set(parseScopes(row.scopes)),
   };
