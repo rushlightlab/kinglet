@@ -55,6 +55,14 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export const Route = createFileRoute("/monitors")({
@@ -287,50 +295,79 @@ function MonitorsPage() {
           <div className="k-kicker">
             <span className="text-gold">/</span> alerts
           </div>
-          <h2 className="font-display mt-2 text-lg font-semibold tracking-wide">Recent alerts</h2>
-          <div className="mt-3">
-            {alerts.map((a) => (
-              <div
-                key={a.id}
-                className="flex items-center gap-3 border-b border-white/[0.04] py-2.5 font-mono text-xs"
-              >
-                <span
-                  className={`size-1.5 shrink-0 rounded-full ${
-                    a.state === "fired" && a.resolvedAt === null ? "bg-coral" : "bg-gold"
-                  }`}
-                />
-                <span className="w-24 shrink-0 text-mist-faint">{relTime(a.firedAt)}</span>
-                <span className="w-36 shrink-0 truncate text-mist-dim">{a.monitorName ?? "monitor"}</span>
-                <span className="truncate text-mist">{a.summary}</span>
-                <span className="ml-auto flex shrink-0 items-center gap-2">
-                  {a.state === "fired" && a.notifyStatus && a.notifyStatus !== "none" && (
-                    <Badge
-                      variant={
-                        a.notifyStatus === "sent"
-                          ? "ghost"
-                          : a.notifyStatus === "partial"
-                            ? "outline"
-                            : "destructive"
-                      }
-                      title={a.notifyError ?? "Notification delivery"}
-                    >
-                      notify {a.notifyStatus}
-                    </Badge>
+          <Card className="mt-3">
+            <CardHeader>
+              <CardTitle>Recent alerts</CardTitle>
+              <CardDescription>
+                Fired and resolved history for this project, newest first.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>when</TableHead>
+                    <TableHead>monitor</TableHead>
+                    <TableHead>summary</TableHead>
+                    <TableHead className="hidden sm:table-cell">notify</TableHead>
+                    <TableHead className="text-right">state</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {alerts.map((a) => (
+                    <TableRow key={a.id}>
+                      <TableCell className="whitespace-nowrap text-mist-faint">
+                        {relTime(a.firedAt)}
+                      </TableCell>
+                      <TableCell className="max-w-36 truncate text-mist-dim">
+                        {a.monitorName ?? "monitor"}
+                      </TableCell>
+                      <TableCell
+                        className="max-w-[24rem] truncate text-mist"
+                        title={a.summary}
+                      >
+                        {a.summary}
+                      </TableCell>
+                      <TableCell className="hidden sm:table-cell">
+                        {a.state === "fired" &&
+                        a.notifyStatus &&
+                        a.notifyStatus !== "none" ? (
+                          <Badge
+                            variant={
+                              a.notifyStatus === "sent"
+                                ? "ghost"
+                                : a.notifyStatus === "partial"
+                                  ? "outline"
+                                  : "destructive"
+                            }
+                            title={a.notifyError ?? "Notification delivery"}
+                          >
+                            {a.notifyStatus}
+                          </Badge>
+                        ) : (
+                          <span className="text-[10px] text-mist-faint">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {a.state === "fired" && a.resolvedAt === null ? (
+                          <Badge variant="destructive">fired</Badge>
+                        ) : (
+                          <Badge variant="ghost">resolved</Badge>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {alerts.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={5} className="py-6 text-center text-mist-faint">
+                        No alerts yet. When a monitor fires, its story lands here.
+                      </TableCell>
+                    </TableRow>
                   )}
-                  {a.state === "fired" && a.resolvedAt === null ? (
-                    <Badge variant="destructive">fired</Badge>
-                  ) : (
-                    <Badge variant="ghost">resolved</Badge>
-                  )}
-                </span>
-              </div>
-            ))}
-            {alerts.length === 0 && (
-              <p className="py-6 font-mono text-xs text-mist-faint">
-                No alerts yet. When a monitor fires, its story lands here.
-              </p>
-            )}
-          </div>
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </div>
       </div>
 

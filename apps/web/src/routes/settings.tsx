@@ -48,6 +48,14 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
   Select,
   SelectContent,
   SelectGroup,
@@ -163,10 +171,10 @@ function KeysPanel() {
   const candidates = eligibleUsers.filter(
     (u) => !members.some((m) => m.userId === u.id)
   );
-  const noCandidatesMessage =
+  const memberEmptyMessage =
     eligibleUsers.length === 0
       ? "No member accounts yet. Create one under the Users tab."
-      : "Every member account is already assigned to this project.";
+      : "No members assigned yet.";
 
   const addMember = async (): Promise<void> => {
     if (!memberToAdd) return;
@@ -285,49 +293,82 @@ function KeysPanel() {
             </Alert>
           )}
 
-          <div className="divide-y divide-white/[0.04]">
-            {keys.map((key) => (
-              <div key={key.id} className="flex flex-wrap items-center gap-2 py-2 font-mono text-xs">
-                <span className="text-mist">{key.name}</span>
-                <span className="text-mist-faint">{key.prefix}</span>
-                {key.scopes.map((scope) => (
-                  <Badge key={scope}>{scope}</Badge>
-                ))}
-                <span className="text-[10px] text-mist-faint">
-                  {key.createdByEmail ? `by ${key.createdByEmail} · ` : ""}
-                  {key.lastUsedAt
-                    ? `last used ${new Date(key.lastUsedAt).toLocaleDateString()}`
-                    : "never used"}
-                </span>
-                {canWriteKeys && (
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="destructive" size="xs" className="ml-auto">
-                        revoke
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Revoke {key.name}?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          Anything still using this key will start receiving 401s.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction variant="destructive" onClick={() => void revoke(key)}>
-                          Revoke key
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                )}
-              </div>
-            ))}
-            {keys.length === 0 && (
-              <p className="py-3 font-mono text-xs text-mist-faint">No keys for this project yet.</p>
-            )}
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>key</TableHead>
+                <TableHead>scopes</TableHead>
+                <TableHead className="hidden md:table-cell">activity</TableHead>
+                <TableHead className="text-right">actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {keys.map((key) => (
+                <TableRow key={key.id}>
+                  <TableCell>
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      <span className="truncate text-mist">{key.name}</span>
+                      <span className="text-[10px] text-mist-faint">{key.prefix}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {key.scopes.map((scope) => (
+                        <Badge key={scope}>{scope}</Badge>
+                      ))}
+                    </div>
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell">
+                    <div className="flex flex-col gap-0.5 text-[10px] text-mist-faint">
+                      <span>
+                        {key.lastUsedAt
+                          ? `last used ${new Date(key.lastUsedAt).toLocaleDateString()}`
+                          : "never used"}
+                      </span>
+                      {key.createdByEmail && <span>by {key.createdByEmail}</span>}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {canWriteKeys ? (
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button variant="destructive" size="xs">
+                            revoke
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Revoke {key.name}?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              Anything still using this key will start receiving 401s.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              variant="destructive"
+                              onClick={() => void revoke(key)}
+                            >
+                              Revoke key
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    ) : (
+                      <span className="text-[10px] text-mist-faint">—</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {keys.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={4} className="py-4 text-center text-mist-faint">
+                    No keys for this project yet.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
 
           {canWriteKeys && (
             <form
@@ -408,57 +449,71 @@ function KeysPanel() {
               <p className="mt-1 font-mono text-[10px] leading-relaxed text-mist-faint">
                 Admins see every project. Members and viewers see only the projects assigned here.
               </p>
-              <div className="mt-3 flex flex-col gap-1">
-                {members.map((m) => (
-                  <div
-                    key={m.userId}
-                    className="flex items-center gap-2 border-b border-white/[0.04] py-1.5 font-mono text-xs"
-                  >
-                    <span className="truncate text-mist">{m.email}</span>
-                    <Badge variant="outline">{m.role}</Badge>
-                    {m.role !== "viewer" && (
-                      <div className="ml-auto flex items-center gap-1.5 font-mono text-[10px] text-mist-faint">
-                        <Switch
-                          checked={m.canClearLogs}
-                          onCheckedChange={(checked) => void setMemberClearLogs(m, checked)}
-                          aria-label={`Allow ${m.email} to clear logs`}
-                        />
-                        clear logs
-                      </div>
+              <div className="mt-3">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>member</TableHead>
+                      <TableHead>role</TableHead>
+                      <TableHead>clear logs</TableHead>
+                      <TableHead className="text-right">actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {members.map((m) => (
+                      <TableRow key={m.userId}>
+                        <TableCell className="max-w-56 truncate text-mist">{m.email}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{m.role}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          {m.role === "viewer" ? (
+                            <span className="text-[10px] text-mist-faint">—</span>
+                          ) : (
+                            <Switch
+                              checked={m.canClearLogs}
+                              onCheckedChange={(checked) => void setMemberClearLogs(m, checked)}
+                              aria-label={`Allow ${m.email} to clear logs`}
+                            />
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button variant="destructive" size="xs">
+                                remove
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Remove {m.email}?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  They will lose access to this project immediately.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction
+                                  variant="destructive"
+                                  onClick={() => void removeMember(m.userId)}
+                                >
+                                  Remove member
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {members.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={4} className="py-4 text-center text-mist-faint">
+                          {memberEmptyMessage}
+                        </TableCell>
+                      </TableRow>
                     )}
-                    <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <Button
-                          variant="destructive"
-                          size="xs"
-                          className={m.role === "viewer" ? "ml-auto" : undefined}
-                        >
-                          remove
-                        </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Remove {m.email}?</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            They will lose access to this project immediately.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction
-                            variant="destructive"
-                            onClick={() => void removeMember(m.userId)}
-                          >
-                            Remove member
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
-                  </div>
-                ))}
-                {members.length === 0 && eligibleUsers.length > 0 && (
-                  <p className="py-1 font-mono text-xs text-mist-faint">No members assigned yet.</p>
-                )}
+                  </TableBody>
+                </Table>
               </div>
               {candidates.length > 0 ? (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -488,7 +543,11 @@ function KeysPanel() {
                   </Button>
                 </div>
               ) : (
-                <p className="mt-3 font-mono text-[10px] text-mist-faint">{noCandidatesMessage}</p>
+                members.length > 0 && (
+                  <p className="mt-3 font-mono text-[10px] text-mist-faint">
+                    Every member account is already assigned to this project.
+                  </p>
+                )
               )}
             </div>
           )}
@@ -834,55 +893,81 @@ function UsersPanel() {
           <CardDescription>Administrators can create accounts and assign roles.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <div className="divide-y divide-white/[0.04]">
-            {users.map((u) => (
-              <div key={u.id} className="flex flex-wrap items-center gap-3 py-2 font-mono text-xs">
-                <span className="text-mist">{u.email}</span>
-                <span className="text-mist-faint">{u.name || "—"}</span>
-                {u.role === "admin" ? (
-                  <Badge>admin</Badge>
-                ) : (
-                  <Select value={u.role} onValueChange={(value) => void changeRole(u, value)}>
-                    <SelectTrigger size="sm" className="w-28">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="member">member</SelectItem>
-                        <SelectItem value="viewer">viewer</SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                )}
-                {u.id !== user.id && u.role !== "admin" && (
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="destructive" size="xs" className="ml-auto">
-                        delete
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Delete {u.email}?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          The account and its sessions are removed immediately.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction variant="destructive" onClick={() => void remove(u.id)}>
-                          Delete user
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                )}
-              </div>
-            ))}
-            {users.length === 0 && (
-              <p className="py-3 font-mono text-xs text-mist-faint">No users loaded.</p>
-            )}
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>user</TableHead>
+                <TableHead>role</TableHead>
+                <TableHead className="text-right">actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {users.map((u) => (
+                <TableRow key={u.id}>
+                  <TableCell>
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      <span className="truncate text-mist">{u.email}</span>
+                      <span className="text-[10px] text-mist-faint">{u.name || "—"}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    {u.role === "admin" ? (
+                      <Badge>admin</Badge>
+                    ) : (
+                      <Select value={u.role} onValueChange={(value) => void changeRole(u, value)}>
+                        <SelectTrigger size="sm" className="w-28">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            <SelectItem value="member">member</SelectItem>
+                            <SelectItem value="viewer">viewer</SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {u.id !== user.id && u.role !== "admin" ? (
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button variant="destructive" size="xs">
+                            delete
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete {u.email}?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              The account and its sessions are removed immediately.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              variant="destructive"
+                              onClick={() => void remove(u.id)}
+                            >
+                              Delete user
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    ) : (
+                      <span className="text-[10px] text-mist-faint">—</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {users.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={3} className="py-4 text-center text-mist-faint">
+                    No users loaded.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
 
           <form
             className="grid gap-3 border-t border-white/[0.06] pt-4 sm:grid-cols-2"
