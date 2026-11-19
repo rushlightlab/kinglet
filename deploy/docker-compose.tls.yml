@@ -5,6 +5,10 @@
 #   KINGLET_BASE_URL=https://logs.example.com \
 #   docker compose -f docker-compose.tls.yml up -d
 #
+# This sample uses Caddy. On a platform that runs Traefik (Dokploy/Coolify),
+# set KINGLET_TRUSTED_PROXIES to the platform proxy's address instead; see
+# the Security page in the docs.
+#
 # This uses the public image. For a local source build, replace the image with:
 #   build: ..
 #   image: kinglet:latest
@@ -15,18 +19,25 @@
 services:
   kinglet:
     image: ghcr.io/rushlightlab/kinglet:0.3.0
+    # For production, pin the release digest instead of the mutable version tag:
+    #   image: ghcr.io/rushlightlab/kinglet@sha256:<digest>
     environment:
       KINGLET_DB_PATH: /data/kinglet.db
       KINGLET_RETENTION_DAYS: 14
       # Must match the public HTTPS origin: secure cookies + alert links.
       KINGLET_BASE_URL: ${KINGLET_BASE_URL:?set KINGLET_BASE_URL=https://your.domain}
-      # Caddy is the only proxy in front of the app.
-      KINGLET_TRUSTED_PROXIES: 172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
+      # Caddy is the only proxy in front of the app. Trust its fixed address,
+      # never the whole private range: LAN/VPN/Tailscale clients are not proxies.
+      KINGLET_TRUSTED_PROXIES: 172.30.0.10/32
       KINGLET_ADMIN_EMAIL: ${KINGLET_ADMIN_EMAIL:-}
       KINGLET_ADMIN_PASSWORD: ${KINGLET_ADMIN_PASSWORD:-}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+    expose:
+      - "3000"
     volumes:
       - kinglet-data:/data
+    networks:
+      - kinglet
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -51,6 +62,9 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+    networks:
+      kinglet:
+        ipv4_address: 172.30.0.10
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -64,3 +78,9 @@ volumes:
   kinglet-data:
   caddy-data:
   caddy-config:
+
+networks:
+  kinglet:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
