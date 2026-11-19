@@ -12,7 +12,7 @@ export interface ApiKey {
   id: number;
   projectId: number;
   name: string;
-  /** Display fragment, e.g. "kl_9f2a…c81d" — never the full key. */
+  /** Short display fragment, e.g. "kl_9f2a1c3d…" — never the full key. */
   prefix: string;
   scopes: KeyScope[];
   /** User who minted the key, so admins can audit and offboard. */
@@ -38,6 +38,16 @@ function parseScopes(raw: string | null): KeyScope[] {
   }
 }
 
+/** Keep only the identifying head of the token, even for older long prefixes. */
+function displayPrefix(stored: string): string {
+  const head = stored.split("…")[0] ?? stored;
+  return `${head.slice(0, 11)}…`;
+}
+
+function newPrefix(plaintext: string): string {
+  return `${plaintext.slice(0, 11)}…`;
+}
+
 export async function listApiKeys(storage: Storage, projectId: number): Promise<ApiKey[]> {
   const rows = await storage.db
     .select({ key: schema.apiKeys, email: schema.user.email })
@@ -49,7 +59,7 @@ export async function listApiKeys(storage: Storage, projectId: number): Promise<
     id: Number(row.id),
     projectId: Number(row.projectId),
     name: row.name,
-    prefix: row.prefix,
+    prefix: displayPrefix(row.prefix),
     scopes: parseScopes(row.scopes),
     createdBy: row.createdBy ?? null,
     createdByEmail: email ?? null,
@@ -63,7 +73,7 @@ export async function createApiKey(
   input: { projectId: number; name: string; scopes: KeyScope[]; createdBy: string | null }
 ): Promise<{ key: ApiKey; plaintext: string }> {
   const plaintext = KEY_PREFIX + randomToken();
-  const prefix = `${plaintext.slice(0, 11)}…${plaintext.slice(-4)}`;
+  const prefix = newPrefix(plaintext);
   const now = Date.now();
   const inserted = await storage.db
     .insert(schema.apiKeys)
@@ -125,7 +135,7 @@ export async function rotateApiKey(
   projectId: number
 ): Promise<{ plaintext: string; prefix: string } | null> {
   const plaintext = KEY_PREFIX + randomToken();
-  const prefix = `${plaintext.slice(0, 11)}…${plaintext.slice(-4)}`;
+  const prefix = newPrefix(plaintext);
   const result = await storage.db
     .update(schema.apiKeys)
     .set({ keyHash: sha256hex(plaintext), prefix, lastUsedAt: null })

@@ -376,23 +376,25 @@ function KeysPanel() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>key</TableHead>
+                <TableHead>name</TableHead>
+                <TableHead>token</TableHead>
                 <TableHead>scopes</TableHead>
-                <TableHead className="hidden md:table-cell">created by</TableHead>
-                <TableHead className="hidden md:table-cell">activity</TableHead>
+                <TableHead className="hidden md:table-cell">last used</TableHead>
+                <TableHead className="hidden md:table-cell">created</TableHead>
                 <TableHead className="text-right">actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {keys.map((key) => (
                 <TableRow key={key.id}>
+                  <TableCell className="text-mist">{key.name}</TableCell>
                   <TableCell>
-                    <div className="flex min-w-0 flex-col gap-0.5">
-                      <span className="truncate text-mist">{key.name}</span>
-                      <span className="text-[10px] text-mist-faint">
-                        {key.prefix} · #{key.id}
-                      </span>
-                    </div>
+                    <span
+                      className="inline-flex items-center rounded-[3px] border border-white/[0.08] bg-white/[0.025] px-1.5 py-0.5 font-mono text-[10px] text-mist-dim"
+                      title={`Key #${key.id}`}
+                    >
+                      {key.prefix}
+                    </span>
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
@@ -401,15 +403,20 @@ function KeysPanel() {
                       ))}
                     </div>
                   </TableCell>
-                  <TableCell className="hidden md:table-cell">
-                    <span className="text-[10px] text-mist-faint">{key.createdByEmail ?? "—"}</span>
+                  <TableCell className="hidden md:table-cell text-[10px] text-mist-faint">
+                    {key.lastUsedAt
+                      ? new Date(key.lastUsedAt).toLocaleDateString()
+                      : "No activity"}
                   </TableCell>
                   <TableCell className="hidden md:table-cell">
-                    <span className="text-[10px] text-mist-faint">
-                      {key.lastUsedAt
-                        ? `last used ${new Date(key.lastUsedAt).toLocaleDateString()}`
-                        : "never used"}
-                    </span>
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      <span className="truncate text-[10px] text-mist-dim">
+                        {key.createdByEmail ?? "—"}
+                      </span>
+                      <span className="text-[10px] text-mist-faint">
+                        {new Date(key.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
                   </TableCell>
                   <TableCell className="text-right">
                     <DropdownMenu>
@@ -467,7 +474,7 @@ function KeysPanel() {
               ))}
               {keys.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="py-4 text-center text-mist-faint">
+                  <TableCell colSpan={6} className="py-4 text-center text-mist-faint">
                     No keys for this project yet.
                   </TableCell>
                 </TableRow>
