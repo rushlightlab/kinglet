@@ -15,14 +15,12 @@ import HistogramChart from "../components/Histogram";
 import LogControls from "../components/LogControls";
 import LogTable from "../components/LogTable";
 import SiteHeader from "../components/SiteHeader";
-
-const WINDOWS: Record<string, number> = {
-  "15m": 15 * 60_000,
-  "1h": 60 * 60_000,
-  "6h": 6 * 60 * 60_000,
-  "24h": 24 * 60 * 60_000,
-  "7d": 7 * 24 * 60 * 60_000,
-};
+import {
+  DEFAULT_WINDOW_KEY,
+  refreshIntervalForRange,
+  refreshIntervalForWindow,
+  WINDOWS,
+} from "../time";
 
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -40,7 +38,7 @@ function Explorer() {
 
   const [qDraft, setQDraft] = useState(() => search.q ?? "");
   const [q, setQ] = useState(() => search.q ?? "");
-  const [rangeKey, setRangeKey] = useState("1h");
+  const [rangeKey, setRangeKey] = useState(DEFAULT_WINDOW_KEY);
   const [customRange, setCustomRange] = useState<null | { from: number; to: number }>(() =>
     search.from !== undefined && search.to !== undefined ? { from: search.from, to: search.to } : null
   );
@@ -65,8 +63,8 @@ function Explorer() {
   }, [qDraft]);
 
   const loadRange = useCallback(
-    async (from: number, to: number) => {
-      setBusy(true);
+    async (from: number, to: number, silent = false) => {
+      if (!silent) setBusy(true);
       try {
         const [page, hist] = await Promise.all([
           fetchEvents({ projectId: currentProjectId, q, from, to, limit: 500 }),
@@ -79,21 +77,24 @@ function Explorer() {
         if (err instanceof UnauthorizedError) return;
         setError(err instanceof Error ? err.message : String(err));
       } finally {
-        setBusy(false);
+        if (!silent) setBusy(false);
       }
     },
     [q, currentProjectId]
   );
 
-  const loadWindow = useCallback(() => {
-    if (customRange) {
-      void loadRange(customRange.from, customRange.to);
-      return;
-    }
-    const to = Date.now();
-    const width = WINDOWS[rangeKey] ?? 60 * 60_000;
-    void loadRange(to - width, to);
-  }, [customRange, rangeKey, loadRange]);
+  const loadWindow = useCallback(
+    (silent = false) => {
+      if (customRange) {
+        void loadRange(customRange.from, customRange.to, silent);
+        return;
+      }
+      const to = Date.now();
+      const width = WINDOWS[rangeKey] ?? 60 * 60_000;
+      void loadRange(to - width, to, silent);
+    },
+    [customRange, rangeKey, loadRange]
+  );
 
   // Reload when the query, time window, or project changes.
   useEffect(() => {
@@ -112,12 +113,20 @@ function Explorer() {
     followRef.current = follow;
   }, [follow]);
 
-  // While live, refresh the window every 15s.
+  // Wide windows do not need the same polling cadence as narrow ones.
+  const windowMs = customRange
+    ? customRange.to - customRange.from
+    : WINDOWS[rangeKey] ?? 60 * 60_000;
+  const refreshMs = customRange
+    ? refreshIntervalForRange(customRange.from, customRange.to)
+    : refreshIntervalForWindow(rangeKey);
+
+  // While live, refresh the window at the cadence this range can use.
   useEffect(() => {
     if (!live) return;
-    const id = setInterval(loadWindow, 15_000);
+    const id = setInterval(() => loadWindow(true), refreshMs);
     return () => clearInterval(id);
-  }, [live, loadWindow]);
+  }, [live, loadWindow, refreshMs]);
 
   // Live tail over SSE (session cookie auth).
   useEffect(() => {
@@ -227,11 +236,14 @@ function Explorer() {
       <SiteHeader>
         <LogControls
           rangeKey={rangeKey}
+          windowMs={windowMs}
+          refreshMs={refreshMs}
           customRange={customRange}
           onRangeChange={(value) => {
             setRangeKey(value);
             setCustomRange(null);
           }}
+          onCustomRange={(range) => setCustomRange(range)}
           onClearCustom={() => setCustomRange(null)}
           live={live}
           follow={follow}

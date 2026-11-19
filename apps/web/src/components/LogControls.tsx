@@ -1,11 +1,14 @@
+import { useEffect, useState } from "react";
 import {
   ActivityIcon,
   ArrowDownToLineIcon,
   CheckIcon,
+  ChevronDownIcon,
   Clock3Icon,
   XIcon,
 } from "lucide-react";
 import type { Service } from "../types";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,22 +18,23 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-
-const WINDOWS = ["15m", "1h", "6h", "24h", "7d"] as const;
+  formatRefresh,
+  MAX_RANGE_MS,
+  toDatetimeLocal,
+  WINDOW_PRESETS,
+  windowLabel,
+} from "../time";
 
 interface LogControlsProps {
   rangeKey: string;
+  windowMs: number;
+  refreshMs: number;
   customRange: { from: number; to: number } | null;
   onRangeChange: (value: string) => void;
+  onCustomRange: (range: { from: number; to: number }) => void;
   onClearCustom: () => void;
   live: boolean;
   follow: boolean;
@@ -69,11 +73,58 @@ const segmentClass =
   "flex items-center gap-1.5 px-2.5 font-mono text-[10px] transition-colors " +
   "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-gold/40";
 
+const presetButtonClass =
+  "h-7 rounded-[4px] border font-mono text-[10px] transition-colors " +
+  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gold/40";
+
 export default function LogControls(props: LogControlsProps) {
+  const [open, setOpen] = useState(false);
+  const [fromDraft, setFromDraft] = useState("");
+  const [toDraft, setToDraft] = useState("");
+  const [rangeError, setRangeError] = useState<string | null>(null);
+
   const terms = props.appliedQ
     .split(/\s+/)
     .filter(Boolean)
     .map((term) => term.toLowerCase());
+
+  useEffect(() => {
+    if (!open) return;
+    const now = Date.now();
+    const initial = props.customRange ?? { from: now - props.windowMs, to: now };
+    setFromDraft(toDatetimeLocal(initial.from));
+    setToDraft(toDatetimeLocal(initial.to));
+    setRangeError(null);
+  }, [open, props.customRange, props.windowMs]);
+
+  const pickPreset = (key: string): void => {
+    props.onRangeChange(key);
+    setOpen(false);
+  };
+
+  const applyCustom = (): void => {
+    const from = Date.parse(fromDraft);
+    const to = Date.parse(toDraft);
+    if (!fromDraft || !toDraft || !Number.isFinite(from) || !Number.isFinite(to)) {
+      setRangeError("Enter both a start and end time.");
+      return;
+    }
+    if (from >= to) {
+      setRangeError("Start must be before end.");
+      return;
+    }
+    if (to - from > MAX_RANGE_MS) {
+      setRangeError("Keep the range within 31 days.");
+      return;
+    }
+    props.onCustomRange({ from, to });
+    setOpen(false);
+  };
+
+  const clearCustom = (): void => {
+    props.onClearCustom();
+    setOpen(false);
+  };
 
   return (
     <div
@@ -81,39 +132,99 @@ export default function LogControls(props: LogControlsProps) {
       aria-label="Log view controls"
       className="flex h-7 items-stretch overflow-hidden rounded-[5px] border border-white/[0.09] bg-ink-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
     >
-      {props.customRange ? (
-        <button
-          type="button"
-          onClick={props.onClearCustom}
-          className={`${segmentClass} text-gold hover:bg-gold/[0.06]`}
-          title={`Custom range: ${customRangeTitle(props.customRange)}. Click to clear.`}
-        >
-          <Clock3Icon className="size-3 text-gold/70" />
-          custom
-          <XIcon className="size-3 text-gold/60" />
-        </button>
-      ) : (
-        <Select value={props.rangeKey} onValueChange={props.onRangeChange}>
-          <SelectTrigger
-            size="sm"
-            aria-label="Time window"
-            className="h-7 w-auto gap-1.5 rounded-none border-0 bg-transparent px-2.5 text-[10px] text-mist-dim shadow-none hover:bg-white/[0.025] hover:text-mist focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-gold/40 data-[size=sm]:pl-2.5 [&>span]:line-clamp-none [&>svg]:size-3"
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className={`${segmentClass} ${
+              props.customRange
+                ? "text-gold hover:bg-gold/[0.06]"
+                : "text-mist-dim hover:bg-white/[0.025] hover:text-mist"
+            } data-[state=open]:bg-white/[0.03] data-[state=open]:text-mist`}
+            title={
+              props.customRange
+                ? `Custom range: ${customRangeTitle(props.customRange)}`
+                : `Time window: ${windowLabel(props.rangeKey)}`
+            }
           >
-            <Clock3Icon className="size-3 text-mist-faint" />
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectLabel>Time window</SelectLabel>
-              {WINDOWS.map((key) => (
-                <SelectItem key={key} value={key}>
-                  last {key}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      )}
+            <Clock3Icon
+              className={`size-3 ${props.customRange ? "text-gold/70" : "text-mist-faint"}`}
+            />
+            <span className="whitespace-nowrap">
+              {props.customRange ? "custom" : windowLabel(props.rangeKey)}
+            </span>
+            <ChevronDownIcon className="size-3 text-mist-faint" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-[19rem] p-0">
+          <div className="p-3">
+            <p className="text-[11px] font-medium text-mist">Quick range</p>
+            <div className="mt-2 grid grid-cols-3 gap-1.5">
+              {WINDOW_PRESETS.map((preset) => {
+                const active = !props.customRange && props.rangeKey === preset.key;
+                return (
+                  <button
+                    key={preset.key}
+                    type="button"
+                    onClick={() => pickPreset(preset.key)}
+                    className={`${presetButtonClass} ${
+                      active
+                        ? "border-gold/35 bg-gold/[0.08] text-gold"
+                        : "border-white/[0.08] bg-ink-900 text-mist-dim hover:border-gold/25 hover:text-mist"
+                    }`}
+                  >
+                    {preset.gridLabel}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="border-t border-white/[0.07] p-3">
+            <div className="flex flex-col gap-2">
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] text-mist-dim">start</span>
+                <Input
+                  type="datetime-local"
+                  value={fromDraft}
+                  onChange={(e) => setFromDraft(e.target.value)}
+                  className="h-7 px-2 text-[10px] [color-scheme:dark]"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] text-mist-dim">end</span>
+                <Input
+                  type="datetime-local"
+                  value={toDraft}
+                  onChange={(e) => setToDraft(e.target.value)}
+                  className="h-7 px-2 text-[10px] [color-scheme:dark]"
+                />
+              </label>
+            </div>
+
+            {rangeError && <p className="mt-2 text-[10px] text-coral">{rangeError}</p>}
+
+            <div className="mt-3 flex items-center justify-between gap-2">
+              {props.customRange ? (
+                <Button variant="ghost" size="xs" onClick={clearCustom}>
+                  <XIcon data-icon="inline-start" />
+                  clear
+                </Button>
+              ) : (
+                <span aria-hidden="true" />
+              )}
+              <div className="flex gap-1.5">
+                <Button variant="ghost" size="xs" onClick={() => setOpen(false)}>
+                  cancel
+                </Button>
+                <Button variant="soft" size="xs" onClick={applyCustom}>
+                  apply
+                </Button>
+              </div>
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
 
       <span aria-hidden="true" className="my-1 w-px bg-white/[0.07]" />
 
@@ -127,7 +238,11 @@ export default function LogControls(props: LogControlsProps) {
             ? "bg-gold/[0.07] text-gold"
             : "text-mist-dim hover:bg-white/[0.025] hover:text-mist"
         }`}
-        title={props.live ? "Pause the live tail (l)" : "Resume the live tail (l)"}
+        title={
+          props.live
+            ? `Pause the live tail (l). Refreshes every ${formatRefresh(props.refreshMs)}.`
+            : "Resume the live tail (l)"
+        }
       >
         {props.live ? (
           <span className="k-live-dot" aria-hidden="true" />
@@ -138,6 +253,11 @@ export default function LogControls(props: LogControlsProps) {
           />
         )}
         live
+        {props.live && (
+          <span className="text-[9px] tabular-nums text-gold/55">
+            {formatRefresh(props.refreshMs)}
+          </span>
+        )}
       </button>
 
       <span aria-hidden="true" className="my-1 w-px bg-white/[0.07]" />
