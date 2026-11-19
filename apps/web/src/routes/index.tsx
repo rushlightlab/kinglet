@@ -5,7 +5,6 @@ import {
   fetchHistogram,
   fetchServices,
   openStream,
-  sprayDemoEvents,
   UnauthorizedError,
 } from "../api";
 import { useApp } from "../app-context";
@@ -15,6 +14,15 @@ import FilterBar from "../components/FilterBar";
 import HistogramChart from "../components/Histogram";
 import LogTable from "../components/LogTable";
 import SiteHeader from "../components/SiteHeader";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 const WINDOWS: Record<string, number> = {
   "15m": 15 * 60_000,
@@ -225,57 +233,47 @@ function Explorer() {
   return (
     <div className="flex h-screen flex-col bg-ink-950 text-mist">
       <SiteHeader>
-        <select
+        <Select
           value={rangeKey}
-          onChange={(e) => {
-            setRangeKey(e.target.value);
+          onValueChange={(value) => {
+            setRangeKey(value);
             setCustomRange(null);
           }}
-          className="k-chip-btn cursor-pointer bg-ink-900"
-          title="Time window"
         >
-          {Object.keys(WINDOWS).map((k) => (
-            <option key={k}>{k}</option>
-          ))}
-        </select>
-        <button
+          <SelectTrigger size="sm" className="w-20" aria-label="Time window">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {Object.keys(WINDOWS).map((k) => (
+                <SelectItem key={k} value={k}>
+                  {k}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <Button
+          variant={live ? "soft" : "outline"}
+          size="sm"
           onClick={() => setLive((v) => !v)}
-          className={`k-btn k-btn-sm border transition-colors ${
-            live
-              ? "border-gold/40 bg-gold/[0.06] text-gold"
-              : "border-white/[0.08] bg-transparent text-mist-dim"
-          }`}
           title="Toggle live tail (l)"
         >
-          <span className={`h-1.5 w-1.5 rounded-full ${live ? "bg-gold" : "bg-mist-faint"}`} />
+          <span className={`size-1.5 rounded-full ${live ? "bg-gold" : "bg-mist-faint"}`} />
           live
-        </button>
-        <button
+        </Button>
+        <Button
+          variant={follow ? "soft" : "outline"}
+          size="sm"
           onClick={() => setFollow((v) => !v)}
           disabled={!live}
-          className={`k-btn k-btn-sm border transition-colors ${
-            follow
-              ? "border-gold/40 bg-gold/[0.06] text-gold"
-              : "border-white/[0.08] bg-transparent text-mist-dim"
-          } ${!live ? "opacity-40" : ""}`}
           title="Follow the newest event (f)"
         >
           follow
-        </button>
+        </Button>
         <span className="hidden font-mono text-[10px] text-mist-faint sm:inline">
           {services.length} services
         </span>
-        <button
-          onClick={() => {
-            void sprayDemoEvents(currentProjectId).catch((err) =>
-              setError(err instanceof Error ? err.message : String(err))
-            );
-          }}
-          className="k-chip-btn"
-          title="Generate some noisy demo traffic"
-        >
-          spray demo
-        </button>
       </SiteHeader>
 
       <FilterBar

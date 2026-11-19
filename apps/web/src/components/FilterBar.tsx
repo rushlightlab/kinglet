@@ -1,5 +1,7 @@
 import { useState } from "react";
 import type { RefObject } from "react";
+import { LinkIcon, RefreshCwIcon, StarIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { LEVEL_COLORS, LEVEL_NAMES } from "../types";
 
 const SAVED_KEY = "kinglet.saved";
@@ -94,16 +96,24 @@ export default function FilterBar(props: FilterBarProps) {
           className="min-w-0 flex-1 bg-transparent font-mono text-xs text-mist outline-none placeholder:text-mist-faint"
         />
         {props.appliedQ.trim() && (
-          <button onClick={saveCurrent} className="k-chip-btn" title="Save this search">
-            ☆ save
-          </button>
+          <Button variant="chip" size="xs" onClick={saveCurrent} title="Save this search">
+            <StarIcon data-icon="inline-start" />
+            save
+          </Button>
         )}
-        <button onClick={copyLink} className="k-chip-btn" title="Copy a link to this view">
-          {copied ? "✓ linked" : "link"}
-        </button>
-        <button onClick={props.onRefresh} className="k-chip-btn" title="Refresh (or press l)">
-          ↻
-        </button>
+        <Button variant="chip" size="xs" onClick={copyLink} title="Copy a link to this view">
+          <LinkIcon data-icon="inline-start" />
+          {copied ? "linked" : "link"}
+        </Button>
+        <Button
+          variant="chip"
+          size="icon-xs"
+          onClick={props.onRefresh}
+          title="Refresh (or press l)"
+          aria-label="Refresh"
+        >
+          <RefreshCwIcon />
+        </Button>
       </div>
 
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">

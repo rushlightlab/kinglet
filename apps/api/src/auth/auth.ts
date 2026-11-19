@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth/minimal";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { admin } from "better-auth/plugins";
+import { PASSWORD_MIN_LENGTH } from "./password.js";
 import type { KingletDb } from "../storage/db.js";
 import * as schema from "../storage/schema.js";
 
@@ -69,7 +70,7 @@ export function createAuth(
     }),
     emailAndPassword: {
       enabled: true,
-      minPasswordLength: 8,
+      minPasswordLength: PASSWORD_MIN_LENGTH,
     },
     session: {
       expiresIn: sessionDays * 86_400,

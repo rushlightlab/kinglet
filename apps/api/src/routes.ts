@@ -1,4 +1,4 @@
-import { and, count, eq, inArray } from "drizzle-orm";
+import { and, count, eq, inArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import fs from "node:fs";
 import path from "node:path";
@@ -12,6 +12,7 @@ import type { KingletAuth } from "./auth/auth.js";
 import {
   can,
   canAccessProject,
+  canClearProjectLogs,
   getAuth,
   projectExists,
   requirePermission,
@@ -31,6 +32,7 @@ import {
   updateUserName,
 } from "./auth/user-admin.js";
 import { publishEvents, subscribeEvents } from "./bus.js";
+import { passwordProblem } from "./auth/password.js";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
 import type { Normalized } from "./ingest.js";
 import { normalizeEvent } from "./ingest.js";
@@ -216,6 +218,7 @@ export function registerRoutes(
               name: schema.projects.name,
               slug: schema.projects.slug,
               createdAt: schema.projects.createdAt,
+              canClearLogs: schema.projectMembers.canClearLogs,
             })
             .from(schema.projects)
             .innerJoin(
@@ -224,13 +227,23 @@ export function registerRoutes(
             )
             .where(eq(schema.projectMembers.userId, authInfo.user.id))
             .orderBy(schema.projects.id)
-        : await storage.db.select().from(schema.projects).orderBy(schema.projects.id);
+        : await storage.db
+            .select({
+              id: schema.projects.id,
+              name: schema.projects.name,
+              slug: schema.projects.slug,
+              createdAt: schema.projects.createdAt,
+              canClearLogs: sql<number>`1`,
+            })
+            .from(schema.projects)
+            .orderBy(schema.projects.id);
     return c.json({
       projects: rows.map((r) => ({
         id: Number(r.id),
         name: r.name,
         slug: r.slug,
         createdAt: Number(r.createdAt),
+        canClearLogs: Boolean(r.canClearLogs),
       })),
     });
   });
@@ -321,8 +334,9 @@ export function registerRoutes(
     const role: Role = isRole(body?.role) ? body.role : "member";
     const name = typeof body?.name === "string" ? body.name.trim().slice(0, 80) : "";
     const password = typeof body?.password === "string" && body.password.length > 0 ? body.password : undefined;
-    if (password !== undefined && password.length < 8) {
-      return c.json({ error: "password must be at least 8 characters" }, 400);
+    if (password !== undefined) {
+      const problem = passwordProblem(password);
+      if (problem) return c.json({ error: problem }, 400);
     }
     try {
       const result = await createManagedUser(storage, auth, c.req.raw.headers, {
@@ -479,6 +493,7 @@ export function registerRoutes(
         email: schema.user.email,
         name: schema.user.name,
         role: schema.user.role,
+        canClearLogs: schema.projectMembers.canClearLogs,
         addedAt: schema.projectMembers.createdAt,
       })
       .from(schema.projectMembers)
@@ -493,6 +508,7 @@ export function registerRoutes(
           email: r.email,
           name: r.name,
           role: isRole(r.role) ? r.role : "viewer",
+          canClearLogs: Boolean(r.canClearLogs),
           addedAt: Number(r.addedAt),
         })),
     });
@@ -514,7 +530,50 @@ export function registerRoutes(
       .insert(schema.projectMembers)
       .values({ projectId, userId, createdAt: Date.now() })
       .onConflictDoNothing();
-    return c.json({ ok: true, member: { userId, email: target.email, name: target.name, role: target.role } }, 201);
+    return c.json(
+      {
+        ok: true,
+        member: {
+          userId,
+          email: target.email,
+          name: target.name,
+          role: target.role,
+          canClearLogs: false,
+        },
+      },
+      201
+    );
+  });
+
+  app.patch("/v1/projects/:id/members/:userId", async (c) => {
+    const denied = requirePermission(c, "projects.write");
+    if (denied) return denied;
+    const projectId = parseId(c.req.param("id"));
+    if (projectId === null) return c.json({ error: "invalid project id" }, 400);
+    const userId = c.req.param("userId");
+    if (!userId) return c.json({ error: "invalid user id" }, 400);
+    const parsedBody = await readJsonStrict(c);
+    if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
+    if (typeof parsedBody.body?.canClearLogs !== "boolean") {
+      return c.json({ error: "canClearLogs must be a boolean" }, 400);
+    }
+    const canClearLogs = parsedBody.body.canClearLogs;
+    const target = await getUserById(storage, userId);
+    if (!target) return c.json({ error: "user not found" }, 404);
+    if (canClearLogs && target.role === "viewer") {
+      return c.json({ error: "viewers cannot be granted clear logs" }, 400);
+    }
+    const result = await storage.db
+      .update(schema.projectMembers)
+      .set({ canClearLogs })
+      .where(
+        and(
+          eq(schema.projectMembers.projectId, projectId),
+          eq(schema.projectMembers.userId, userId)
+        )
+      );
+    if (Number(result.rowsAffected ?? 0) === 0) return c.json({ error: "member not found" }, 404);
+    return c.json({ ok: true, canClearLogs });
   });
 
   app.delete("/v1/projects/:id/members/:userId", async (c) => {
@@ -649,6 +708,48 @@ export function registerRoutes(
       ...(truncated ? { truncated: true } : {}),
       ...(errors.length > 0 ? { errors: errors.slice(0, 3) } : {}),
     });
+  });
+
+  // Destructive and project-scoped: admins, or a member explicitly granted
+  // `canClearLogs` on this project. API keys can never delete logs.
+  app.delete("/v1/events", async (c) => {
+    const authInfo = getAuth(c);
+    if (authInfo.kind !== "user") return c.json({ error: "user session required" }, 403);
+    if (!c.req.query("project")) return c.json({ error: "project is required" }, 400);
+    const fromRaw = c.req.query("from");
+    const toRaw = c.req.query("to");
+    if ((fromRaw === undefined) !== (toRaw === undefined)) {
+      return c.json({ error: "from and to must be provided together" }, 400);
+    }
+    let range: { from: number; to: number } | undefined;
+    if (fromRaw !== undefined && toRaw !== undefined) {
+      const from = Number(fromRaw);
+      const to = Number(toRaw);
+      if (
+        !Number.isFinite(from) ||
+        !Number.isFinite(to) ||
+        from < 0 ||
+        to < 0 ||
+        from > to
+      ) {
+        return c.json({ error: "invalid time range" }, 400);
+      }
+      range = { from: Math.trunc(from), to: Math.trunc(to) };
+    }
+    const projectId = await resolveProjectId(c, storage);
+    if (projectId instanceof Response) return projectId;
+    if (!(await canClearProjectLogs(authInfo, storage, projectId))) {
+      return c.json({ error: "forbidden" }, 403);
+    }
+    const deleted = await storage.deleteByProject(projectId, range);
+    projectCountCache.delete(projectId);
+    dbSizeCache = { bytes: null, checkedAt: 0 };
+    console.log(
+      `[kinglet] cleared ${deleted} event(s) from project ${projectId}` +
+        (range ? ` between ${new Date(range.from).toISOString()} and ${new Date(range.to).toISOString()}` : " (all time)") +
+        ` (${authInfo.user.email})`
+    );
+    return c.json({ deleted, projectId, ...(range ?? {}) });
   });
 
   app.get("/v1/events", async (c) => {

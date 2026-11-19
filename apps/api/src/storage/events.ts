@@ -141,3 +141,23 @@ export async function deleteOlderThan(db: KingletDb, ts: number): Promise<number
     if (changed === 0) return total;
   }
 }
+
+/** Chunked project wipe: keys, monitors, and alert history are untouched. */
+export async function deleteByProject(
+  db: KingletDb,
+  projectId: number,
+  range?: { from: number; to: number }
+): Promise<number> {
+  let total = 0;
+  for (;;) {
+    const rangeClause = range
+      ? sql` AND ts >= ${range.from} AND ts <= ${range.to}`
+      : sql``;
+    const result = await db.run(
+      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE project_id = ${projectId}${rangeClause} ORDER BY id LIMIT 10000)`
+    );
+    const changed = Number(result.rowsAffected ?? 0);
+    total += changed;
+    if (changed === 0) return total;
+  }
+}

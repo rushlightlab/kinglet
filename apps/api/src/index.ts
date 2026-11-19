@@ -9,6 +9,7 @@ import { serve } from "@hono/node-server";
 import { createAuth } from "./auth/auth.js";
 import { authMiddleware } from "./auth/middleware.js";
 import type { AppEnv } from "./auth/middleware.js";
+import { passwordProblem } from "./auth/password.js";
 import { ensureBootstrapAdmin, ensureSchemaExtras } from "./auth/setup.js";
 import { loadConfig } from "./env.js";
 import type { Config } from "./env.js";
@@ -154,6 +155,23 @@ async function main(): Promise<void> {
   app.post("/api/auth/sign-up/*", (c) =>
     c.json({ error: "sign-up is disabled — an administrator creates accounts" }, 403)
   );
+  // Better Auth enforces length; this adds the complexity rules before the
+  // change-password handler consumes the body.
+  app.use("/api/auth/change-password", async (c, next) => {
+    if (c.req.method !== "POST") {
+      await next();
+      return;
+    }
+    const body = (await c.req.raw
+      .clone()
+      .json()
+      .catch(() => null)) as { newPassword?: unknown } | null;
+    if (body && typeof body.newPassword === "string") {
+      const problem = passwordProblem(body.newPassword);
+      if (problem) return c.json({ error: problem }, 400);
+    }
+    await next();
+  });
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
   app.use("/v1/*", authMiddleware(storage, auth));

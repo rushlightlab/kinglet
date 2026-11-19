@@ -35,10 +35,10 @@ export default function LogTable({ events, scrollRef, onSelect, selectedId, curs
         <div className="relative flex h-full flex-col items-center justify-center gap-3 px-4 text-center">
           <Crown className="h-8 w-8 text-gold/60" />
           <p className="font-mono text-xs text-mist-dim">
-            No events match. Loosen the filters, widen the window,
+            No events match. Loosen the filters or widen the window.
           </p>
           <p className="font-mono text-xs text-mist-dim">
-            or hit <span className="text-gold">spray demo</span> to see the stream move.
+            New events appear here as they arrive.
           </p>
         </div>
       </div>

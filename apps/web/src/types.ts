@@ -96,6 +96,7 @@ export interface Project {
   name: string;
   slug: string;
   createdAt: number;
+  canClearLogs: boolean;
 }
 
 export interface ProjectMember {
@@ -103,6 +104,7 @@ export interface ProjectMember {
   email: string;
   name: string;
   role: UserRole;
+  canClearLogs: boolean;
   addedAt: number;
 }
 

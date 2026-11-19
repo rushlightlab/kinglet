@@ -2,6 +2,15 @@ import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useApp } from "../app-context";
 import Crown from "./Crown";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export default function SiteHeader({ children }: { children?: ReactNode }) {
   const { user, projects, currentProjectId, setProjectId, signOut } = useApp();
@@ -14,7 +23,7 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
         className="group flex items-center gap-2.5"
         aria-label="Kinglet home"
       >
-        <Crown className="h-5 w-5 text-gold transition-colors group-hover:text-gold-bright" />
+        <Crown className="size-5 text-gold transition-colors group-hover:text-gold-bright" />
         <span className="font-display text-[15px] font-bold tracking-[0.1em] text-mist">KINGLET</span>
       </Link>
 
@@ -36,28 +45,36 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
         </Link>
       </nav>
 
-      <select
-        value={currentProjectId}
-        onChange={(e) => setProjectId(Number(e.target.value))}
-        className="k-chip-btn cursor-pointer bg-ink-900"
-        title="Current project"
-        aria-label="Current project"
-      >
-        {projects.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </select>
+      {projects.length > 0 ? (
+        <Select
+          value={String(currentProjectId)}
+          onValueChange={(value) => setProjectId(Number(value))}
+        >
+          <SelectTrigger size="sm" className="min-w-28" aria-label="Current project">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {projects.map((project) => (
+                <SelectItem key={project.id} value={String(project.id)}>
+                  {project.name}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      ) : (
+        <span className="font-mono text-[10px] text-mist-faint">no project</span>
+      )}
 
       <div className="ml-auto flex flex-wrap items-center gap-2">
         {children}
         <span className="hidden font-mono text-[10px] text-mist-faint md:inline">
           {user.email} · {user.role}
         </span>
-        <button onClick={signOut} className="k-chip-btn">
+        <Button variant="chip" size="xs" onClick={signOut}>
           sign out
-        </button>
+        </Button>
       </div>
     </header>
   );

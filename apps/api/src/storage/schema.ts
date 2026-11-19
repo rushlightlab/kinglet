@@ -196,6 +196,7 @@ export const projectMembers = sqliteTable(
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
+    canClearLogs: integer("can_clear_logs", { mode: "boolean" }).notNull().default(false),
     createdAt: integer("created_at").notNull(),
   },
   (table) => [

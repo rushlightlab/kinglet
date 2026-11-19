@@ -1,8 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
+import { KeyRoundIcon, PlusIcon, Trash2Icon, UserPlusIcon } from "lucide-react";
+import { toast } from "sonner";
 import {
   addProjectMember,
   changePassword,
+  clearProjectLogs,
   createKey,
   createProject,
   createUser,
@@ -13,11 +16,46 @@ import {
   fetchProjectMembers,
   fetchUsers,
   removeProjectMember,
+  updateProjectMember,
   updateUser,
 } from "../api";
 import { hasPermission, useApp } from "../app-context";
 import type { ApiKeyInfo, AppUser, ProjectMember } from "../types";
-import SiteHeader from "../components/SiteHeader";
+import CopyButton from "../components/CopyButton";
+import ErrorAlert from "../components/ErrorAlert";
+import PageShell from "../components/PageShell";
+import PasswordInput from "../components/PasswordInput";
+import PasswordRequirements from "../components/PasswordRequirements";
+import { passwordProblem } from "../lib/password";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export const Route = createFileRoute("/settings")({
   component: SettingsPage,
@@ -38,40 +76,35 @@ function SettingsPage() {
   ];
 
   return (
-    <div className="flex h-screen flex-col bg-ink-950 text-mist">
-      <SiteHeader />
-      <main className="relative flex-1 overflow-y-auto">
-        <div className="k-bg-grid absolute inset-0" aria-hidden="true" />
-        <div className="relative mx-auto w-full max-w-3xl px-6 py-8">
-          <div className="k-kicker">
-            <span className="text-gold">/</span> settings
-          </div>
-          <h1 className="font-display mt-2 text-2xl font-bold tracking-wide">Workspace.</h1>
+    <PageShell kicker="settings" title="Workspace.">
+      <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="mt-6">
+        <TabsList>
+          {tabs
+            .filter((t) => t.visible)
+            .map((t) => (
+              <TabsTrigger key={t.id} value={t.id}>
+                {t.label}
+              </TabsTrigger>
+            ))}
+        </TabsList>
 
-          <div className="mt-6 flex items-center gap-1 border-b border-white/[0.08]">
-            {tabs
-              .filter((t) => t.visible)
-              .map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => setTab(t.id)}
-                  className={`-mb-px border-b-2 px-3 py-2 font-mono text-xs transition-colors ${
-                    tab === t.id
-                      ? "border-gold text-gold"
-                      : "border-transparent text-mist-dim hover:text-mist"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-          </div>
-
-          {tab === "keys" && canKeys && <KeysPanel />}
-          {tab === "users" && canUsers && <UsersPanel />}
-          {tab === "account" && <AccountPanel />}
-        </div>
-      </main>
-    </div>
+        {tab === "keys" && canKeys && (
+          <TabsContent value="keys">
+            <KeysPanel />
+          </TabsContent>
+        )}
+        {tab === "users" && canUsers && (
+          <TabsContent value="users">
+            <UsersPanel />
+          </TabsContent>
+        )}
+        {tab === "account" && (
+          <TabsContent value="account">
+            <AccountPanel />
+          </TabsContent>
+        )}
+      </Tabs>
+    </PageShell>
   );
 }
 
@@ -92,7 +125,6 @@ function KeysPanel() {
   const [busy, setBusy] = useState(false);
 
   const [projectName, setProjectName] = useState("");
-  const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [allUsers, setAllUsers] = useState<AppUser[]>([]);
   const [memberToAdd, setMemberToAdd] = useState("");
@@ -127,9 +159,14 @@ function KeysPanel() {
     void loadMembers();
   }, [loadMembers]);
 
-  const candidates = allUsers.filter(
-    (u) => u.role !== "admin" && !members.some((m) => m.userId === u.id)
+  const eligibleUsers = allUsers.filter((u) => u.role !== "admin");
+  const candidates = eligibleUsers.filter(
+    (u) => !members.some((m) => m.userId === u.id)
   );
+  const noCandidatesMessage =
+    eligibleUsers.length === 0
+      ? "No member accounts yet. Create one under the Users tab."
+      : "Every member account is already assigned to this project.";
 
   const addMember = async (): Promise<void> => {
     if (!memberToAdd) return;
@@ -137,6 +174,7 @@ function KeysPanel() {
       await addProjectMember(currentProjectId, memberToAdd);
       setMemberToAdd("");
       await loadMembers();
+      toast.success("Member added");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -146,6 +184,24 @@ function KeysPanel() {
     try {
       await removeProjectMember(currentProjectId, userId);
       await loadMembers();
+      toast.success("Member removed");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const setMemberClearLogs = async (
+    member: ProjectMember,
+    canClearLogs: boolean
+  ): Promise<void> => {
+    try {
+      await updateProjectMember(currentProjectId, member.userId, { canClearLogs });
+      await loadMembers();
+      toast.success(
+        canClearLogs
+          ? `Allowed ${member.email} to clear logs`
+          : `Revoked clear logs from ${member.email}`
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -173,6 +229,7 @@ function KeysPanel() {
     try {
       await deleteKey(key.id, currentProjectId);
       await load();
+      toast.success("Key revoked");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -184,6 +241,7 @@ function KeysPanel() {
       await createProject(projectName.trim());
       setProjectName("");
       await refreshProjects();
+      toast.success("Project created");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -192,8 +250,8 @@ function KeysPanel() {
   const removeProject = async (): Promise<void> => {
     try {
       await deleteProject(currentProjectId);
-      setConfirmDeleteProject(false);
       await refreshProjects();
+      toast.success("Project deleted");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -201,230 +259,480 @@ function KeysPanel() {
 
   return (
     <div className="mt-5 flex flex-col gap-3">
-      {error && (
-        <p className="rounded-[5px] border border-coral/25 bg-coral/[0.05] px-3 py-2 font-mono text-xs text-coral">
-          {error}
-        </p>
-      )}
+      <ErrorAlert error={error} />
 
-      <section className="k-card p-4">
-        <h2 className="font-display text-[15px] font-semibold tracking-wide">
-          API keys — {project?.name ?? "project"}
-        </h2>
-        <p className="mt-1 font-mono text-xs text-mist-dim">
-          Keys are machine credentials with scopes: <span className="text-gold">ingest</span> writes logs,{" "}
-          <span className="text-gold">query</span> reads them. The full key is shown once.
-        </p>
-
-        {createdKey && (
-          <div className="mt-3 rounded-[5px] border border-gold/40 bg-gold/[0.06] p-3">
-            <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-gold">
-              copy this key now — it won&apos;t be shown again
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <code className="break-all rounded-[3px] bg-ink-900 px-2 py-1 font-mono text-xs text-mist">
-                {createdKey}
-              </code>
-              <button
-                onClick={() => void navigator.clipboard?.writeText(createdKey)}
-                className="k-chip-btn"
-              >
-                copy
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div className="mt-4 flex flex-col gap-2">
-          {keys.map((key) => (
-            <div
-              key={key.id}
-              className="flex flex-wrap items-center gap-2 border-b border-white/[0.04] py-2 font-mono text-xs"
-            >
-              <span className="text-mist">{key.name}</span>
-              <span className="text-mist-faint">{key.prefix}</span>
-              {key.scopes.map((scope) => (
-                <span
-                  key={scope}
-                  className="rounded-[3px] border border-gold/25 bg-gold/[0.06] px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-gold"
-                >
-                  {scope}
-                </span>
-              ))}
-              <span className="text-[10px] text-mist-faint">
-                {key.createdByEmail ? `by ${key.createdByEmail} · ` : ""}
-                {key.lastUsedAt ? `last used ${new Date(key.lastUsedAt).toLocaleDateString()}` : "never used"}
-              </span>
-              {canWriteKeys && (
-                <button
-                  onClick={() => void revoke(key)}
-                  className="k-chip-btn ml-auto hover:!border-coral/35 hover:!text-coral"
-                >
-                  revoke
-                </button>
-              )}
-            </div>
-          ))}
-          {keys.length === 0 && (
-            <p className="py-3 font-mono text-xs text-mist-faint">No keys for this project yet.</p>
-          )}
-        </div>
-
-        {canWriteKeys && (
-          <div className="mt-4 flex flex-wrap items-end gap-2 border-t border-white/[0.06] pt-4">
-            <label className="min-w-40 flex-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
-                key name
-              </span>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="api-prod"
-                className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
-              />
-            </label>
-            <label className="flex items-center gap-1.5 font-mono text-xs text-mist-dim">
-              <input
-                type="checkbox"
-                checked={scopeIngest}
-                onChange={(e) => setScopeIngest(e.target.checked)}
-                className="accent-gold"
-              />
-              ingest
-            </label>
-            <label className="flex items-center gap-1.5 font-mono text-xs text-mist-dim">
-              <input
-                type="checkbox"
-                checked={scopeQuery}
-                onChange={(e) => setScopeQuery(e.target.checked)}
-                className="accent-gold"
-              />
-              query
-            </label>
-            <button
-              onClick={() => void create()}
-              disabled={busy || !name.trim() || (!scopeIngest && !scopeQuery)}
-              className="k-btn k-btn-primary k-btn-sm disabled:opacity-40"
-            >
-              create key
-            </button>
-          </div>
-        )}
-      </section>
-
-      <section className="k-card p-4">
-        <h2 className="font-display text-[15px] font-semibold tracking-wide">Projects</h2>
-        <div className="mt-3 flex flex-wrap items-center gap-2 font-mono text-xs">
-          {projects.map((p) => (
-            <span
-              key={p.id}
-              className={`rounded-[3px] border px-2 py-0.5 ${
-                p.id === currentProjectId
-                  ? "border-gold/40 bg-gold/[0.08] text-gold"
-                  : "border-white/[0.08] text-mist-dim"
-              }`}
-            >
-              {p.name}
-            </span>
-          ))}
-        </div>
-        {canWriteProjects && (
-          <div className="mt-4 border-t border-white/[0.06] pt-4">
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
-              members — {project?.name ?? "project"}
-            </span>
-            <p className="mt-1 font-mono text-[11px] leading-relaxed text-mist-faint">
-              Admins see every project. Members and viewers see only the projects assigned here.
-            </p>
-            <div className="mt-3 flex flex-col gap-1">
-              {members.map((m) => (
-                <div
-                  key={m.userId}
-                  className="flex items-center gap-2 border-b border-white/[0.04] py-1.5 font-mono text-xs"
-                >
-                  <span className="truncate text-mist">{m.email}</span>
-                  <span className="text-[9px] uppercase tracking-[0.12em] text-mist-faint">{m.role}</span>
-                  <button
-                    onClick={() => void removeMember(m.userId)}
-                    className="k-chip-btn ml-auto hover:!border-coral/35 hover:!text-coral"
-                  >
-                    remove
-                  </button>
+      <Card>
+        <CardHeader>
+          <CardTitle>API keys — {project?.name ?? "project"}</CardTitle>
+          <CardDescription>
+            Keys are machine credentials: <span className="text-gold">ingest</span> writes logs,{" "}
+            <span className="text-gold">query</span> reads them. The full key is shown once.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {createdKey && (
+            <Alert variant="gold">
+              <KeyRoundIcon />
+              <AlertTitle>Copy this key now — it won&apos;t be shown again</AlertTitle>
+              <AlertDescription>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <code className="break-all rounded-[3px] bg-ink-900 px-2 py-1 text-mist">
+                    {createdKey}
+                  </code>
+                  <CopyButton value={createdKey} />
                 </div>
-              ))}
-              {members.length === 0 && (
-                <p className="py-1 font-mono text-xs text-mist-faint">No members assigned yet.</p>
-              )}
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <select
-                value={memberToAdd}
-                onChange={(e) => setMemberToAdd(e.target.value)}
-                className="cursor-pointer rounded-[5px] border border-white/[0.08] bg-ink-900 px-2 py-2 font-mono text-xs text-mist outline-none focus:border-gold/40"
-              >
-                <option value="">select a user…</option>
-                {candidates.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.email}
-                  </option>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          <div className="divide-y divide-white/[0.04]">
+            {keys.map((key) => (
+              <div key={key.id} className="flex flex-wrap items-center gap-2 py-2 font-mono text-xs">
+                <span className="text-mist">{key.name}</span>
+                <span className="text-mist-faint">{key.prefix}</span>
+                {key.scopes.map((scope) => (
+                  <Badge key={scope}>{scope}</Badge>
                 ))}
-              </select>
-              <button
-                onClick={() => void addMember()}
-                disabled={!memberToAdd}
-                className="k-btn k-btn-ghost k-btn-sm disabled:opacity-40"
-              >
-                add member
-              </button>
-            </div>
-          </div>
-        )}
-        {canWriteProjects && (
-          <div className="mt-4 flex flex-wrap items-end gap-2 border-t border-white/[0.06] pt-4">
-            <label className="min-w-40 flex-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
-                new project
-              </span>
-              <input
-                value={projectName}
-                onChange={(e) => setProjectName(e.target.value)}
-                placeholder="acme-production"
-                className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
-              />
-            </label>
-            <button
-              onClick={() => void addProject()}
-              disabled={!projectName.trim()}
-              className="k-btn k-btn-ghost k-btn-sm disabled:opacity-40"
-            >
-              add project
-            </button>
-            {confirmDeleteProject ? (
-              <>
-                <button onClick={() => void removeProject()} className="k-chip-btn border-coral/40 text-coral">
-                  confirm delete project
-                </button>
-                <button onClick={() => setConfirmDeleteProject(false)} className="k-chip-btn">
-                  cancel
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={() => setConfirmDeleteProject(true)}
-                className="k-chip-btn hover:!border-coral/35 hover:!text-coral"
-                title="Delete the current project and all its logs"
-              >
-                delete current project
-              </button>
+                <span className="text-[10px] text-mist-faint">
+                  {key.createdByEmail ? `by ${key.createdByEmail} · ` : ""}
+                  {key.lastUsedAt
+                    ? `last used ${new Date(key.lastUsedAt).toLocaleDateString()}`
+                    : "never used"}
+                </span>
+                {canWriteKeys && (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button variant="destructive" size="xs" className="ml-auto">
+                        revoke
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Revoke {key.name}?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Anything still using this key will start receiving 401s.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction variant="destructive" onClick={() => void revoke(key)}>
+                          Revoke key
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                )}
+              </div>
+            ))}
+            {keys.length === 0 && (
+              <p className="py-3 font-mono text-xs text-mist-faint">No keys for this project yet.</p>
             )}
           </div>
-        )}
-      </section>
+
+          {canWriteKeys && (
+            <form
+              className="flex flex-wrap items-end gap-3 border-t border-white/[0.06] pt-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void create();
+              }}
+            >
+              <Field className="min-w-40 flex-1">
+                <FieldLabel htmlFor="key-name">key name</FieldLabel>
+                <Input
+                  id="key-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="api-prod"
+                />
+              </Field>
+              <Field orientation="horizontal" className="h-9 w-auto">
+                <Checkbox
+                  id="scope-ingest"
+                  aria-label="ingest"
+                  checked={scopeIngest}
+                  onCheckedChange={(checked) => setScopeIngest(checked === true)}
+                />
+                <FieldLabel
+                  htmlFor="scope-ingest"
+                  className="normal-case tracking-normal text-xs text-mist-dim"
+                >
+                  ingest
+                </FieldLabel>
+              </Field>
+              <Field orientation="horizontal" className="h-9 w-auto">
+                <Checkbox
+                  id="scope-query"
+                  aria-label="query"
+                  checked={scopeQuery}
+                  onCheckedChange={(checked) => setScopeQuery(checked === true)}
+                />
+                <FieldLabel
+                  htmlFor="scope-query"
+                  className="normal-case tracking-normal text-xs text-mist-dim"
+                >
+                  query
+                </FieldLabel>
+              </Field>
+              <Button
+                type="submit"
+                size="sm"
+                className="h-9"
+                disabled={busy || !name.trim() || (!scopeIngest && !scopeQuery)}
+              >
+                <PlusIcon data-icon="inline-start" />
+                create key
+              </Button>
+            </form>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Projects</CardTitle>
+          <CardDescription>Each project has its own logs, keys, and monitors.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center gap-2">
+            {projects.map((p) => (
+              <Badge key={p.id} variant={p.id === currentProjectId ? "default" : "outline"}>
+                {p.name}
+              </Badge>
+            ))}
+          </div>
+
+          {canWriteProjects && (
+            <div className="border-t border-white/[0.06] pt-4">
+              <FieldLabel>members — {project?.name ?? "project"}</FieldLabel>
+              <p className="mt-1 font-mono text-[10px] leading-relaxed text-mist-faint">
+                Admins see every project. Members and viewers see only the projects assigned here.
+              </p>
+              <div className="mt-3 flex flex-col gap-1">
+                {members.map((m) => (
+                  <div
+                    key={m.userId}
+                    className="flex items-center gap-2 border-b border-white/[0.04] py-1.5 font-mono text-xs"
+                  >
+                    <span className="truncate text-mist">{m.email}</span>
+                    <Badge variant="outline">{m.role}</Badge>
+                    {m.role !== "viewer" && (
+                      <div className="ml-auto flex items-center gap-1.5 font-mono text-[10px] text-mist-faint">
+                        <Switch
+                          checked={m.canClearLogs}
+                          onCheckedChange={(checked) => void setMemberClearLogs(m, checked)}
+                          aria-label={`Allow ${m.email} to clear logs`}
+                        />
+                        clear logs
+                      </div>
+                    )}
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="destructive"
+                          size="xs"
+                          className={m.role === "viewer" ? "ml-auto" : undefined}
+                        >
+                          remove
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Remove {m.email}?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            They will lose access to this project immediately.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            variant="destructive"
+                            onClick={() => void removeMember(m.userId)}
+                          >
+                            Remove member
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </div>
+                ))}
+                {members.length === 0 && eligibleUsers.length > 0 && (
+                  <p className="py-1 font-mono text-xs text-mist-faint">No members assigned yet.</p>
+                )}
+              </div>
+              {candidates.length > 0 ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Select value={memberToAdd} onValueChange={setMemberToAdd}>
+                    <SelectTrigger className="w-64">
+                      <SelectValue placeholder="select a user…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {candidates.map((u) => (
+                          <SelectItem key={u.id} value={u.id}>
+                            {u.email}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!memberToAdd}
+                    onClick={() => void addMember()}
+                  >
+                    <UserPlusIcon data-icon="inline-start" />
+                    add member
+                  </Button>
+                </div>
+              ) : (
+                <p className="mt-3 font-mono text-[10px] text-mist-faint">{noCandidatesMessage}</p>
+              )}
+            </div>
+          )}
+
+          {canWriteProjects && (
+            <form
+              className="flex flex-wrap items-end gap-3 border-t border-white/[0.06] pt-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void addProject();
+              }}
+            >
+              <Field className="min-w-40 flex-1">
+                <FieldLabel htmlFor="project-name">new project</FieldLabel>
+                <Input
+                  id="project-name"
+                  value={projectName}
+                  onChange={(e) => setProjectName(e.target.value)}
+                  placeholder="acme-production"
+                />
+              </Field>
+              <Button type="submit" variant="outline" size="sm" className="h-9" disabled={!projectName.trim()}>
+                <PlusIcon data-icon="inline-start" />
+                add project
+              </Button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button type="button" variant="destructive" size="sm" className="h-9">
+                    <Trash2Icon data-icon="inline-start" />
+                    delete current project
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete {project?.name ?? "this project"}?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Every log, key, and monitor in this project is deleted. This cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction variant="destructive" onClick={() => void removeProject()}>
+                      Delete project
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </form>
+          )}
+        </CardContent>
+      </Card>
+
+      <ClearLogsCard
+        projectId={currentProjectId}
+        projectName={project?.name ?? "this project"}
+        canClear={project?.canClearLogs === true}
+      />
     </div>
   );
 }
 
-// ---------- users (admin) ----------
+// ---------- clear logs ----------
+
+type ClearRange = "1h" | "6h" | "24h" | "7d" | "30d" | "all" | "custom";
+
+const CLEAR_RANGE_MS: Record<Exclude<ClearRange, "all" | "custom">, number> = {
+  "1h": 60 * 60_000,
+  "6h": 6 * 60 * 60_000,
+  "24h": 24 * 60 * 60_000,
+  "7d": 7 * 24 * 60 * 60_000,
+  "30d": 30 * 24 * 60 * 60_000,
+};
+
+function toLocalInput(ts: number): string {
+  const date = new Date(ts);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+    date.getHours()
+  )}:${pad(date.getMinutes())}`;
+}
+
+function ClearLogsCard({
+  projectId,
+  projectName,
+  canClear,
+}: {
+  projectId: number;
+  projectName: string;
+  canClear: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [range, setRange] = useState<ClearRange>("24h");
+  const [customFrom, setCustomFrom] = useState(() => toLocalInput(Date.now() - CLEAR_RANGE_MS["24h"]));
+  const [customTo, setCustomTo] = useState(() => toLocalInput(Date.now()));
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  if (!canClear) return null;
+
+  const resolved = (): { from: number; to: number } | undefined => {
+    if (range === "all") return undefined;
+    const to = range === "custom" ? Date.parse(customTo) : Date.now();
+    const from = range === "custom" ? Date.parse(customFrom) : to - CLEAR_RANGE_MS[range];
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) return undefined;
+    return { from, to };
+  };
+
+  const bounds = resolved();
+  const summary =
+    range === "all"
+      ? "every stored event in this project"
+      : bounds
+        ? `${new Date(bounds.from).toLocaleString()} → ${new Date(bounds.to).toLocaleString()}`
+        : "pick a valid start and end";
+
+  const clear = async (): Promise<void> => {
+    if (confirm !== projectName) return;
+    if (range !== "all" && !bounds) {
+      setError("Choose a valid start and end.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await clearProjectLogs(projectId, bounds);
+      toast.success(`Deleted ${result.deleted.toLocaleString()} events`);
+      setOpen(false);
+      setConfirm("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Clear logs</CardTitle>
+        <CardDescription>
+          Delete stored events from this project. Keys, monitors, and alert history stay.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <AlertDialog
+          open={open}
+          onOpenChange={(next) => {
+            setOpen(next);
+            if (!next) {
+              setConfirm("");
+              setError(null);
+            }
+          }}
+        >
+          <AlertDialogTrigger asChild>
+            <Button variant="destructive" size="sm">
+              <Trash2Icon data-icon="inline-start" />
+              clear project logs
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Clear logs in {projectName}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This deletes <span className="text-mist">{summary}</span>. It cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+
+            <Field>
+              <FieldLabel htmlFor="clear-range">range</FieldLabel>
+              <Select value={range} onValueChange={(value) => setRange(value as ClearRange)}>
+                <SelectTrigger id="clear-range" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="1h">last hour</SelectItem>
+                    <SelectItem value="6h">last 6 hours</SelectItem>
+                    <SelectItem value="24h">last 24 hours</SelectItem>
+                    <SelectItem value="7d">last 7 days</SelectItem>
+                    <SelectItem value="30d">last 30 days</SelectItem>
+                    <SelectItem value="all">all time</SelectItem>
+                    <SelectItem value="custom">custom range</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+
+            {range === "custom" && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field>
+                  <FieldLabel htmlFor="clear-from">from</FieldLabel>
+                  <Input
+                    id="clear-from"
+                    type="datetime-local"
+                    value={customFrom}
+                    onChange={(e) => setCustomFrom(e.target.value)}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="clear-to">to</FieldLabel>
+                  <Input
+                    id="clear-to"
+                    type="datetime-local"
+                    value={customTo}
+                    onChange={(e) => setCustomTo(e.target.value)}
+                  />
+                </Field>
+              </div>
+            )}
+
+            <Field>
+              <FieldLabel htmlFor="clear-confirm">type {projectName} to confirm</FieldLabel>
+              <Input
+                id="clear-confirm"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                placeholder={projectName}
+                autoComplete="off"
+              />
+            </Field>
+
+            <ErrorAlert error={error} />
+
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                disabled={busy || confirm !== projectName || (range !== "all" && !bounds)}
+                onClick={() => void clear()}
+              >
+                {busy && <Spinner data-icon="inline-start" />}
+                {busy ? "clearing…" : "Clear logs"}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </CardContent>
+    </Card>
+  );
+}
 
 function UsersPanel() {
   const { user } = useApp();
@@ -434,8 +742,9 @@ function UsersPanel() {
   const [name, setName] = useState("");
   const [role, setRole] = useState("member");
   const [password, setPassword] = useState("");
-  const [createdPassword, setCreatedPassword] = useState<{ email: string; password: string } | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [createdPassword, setCreatedPassword] = useState<{ email: string; password: string } | null>(
+    null
+  );
 
   const load = useCallback(async () => {
     try {
@@ -452,6 +761,13 @@ function UsersPanel() {
 
   const add = async (): Promise<void> => {
     if (!email.trim()) return;
+    if (password) {
+      const problem = passwordProblem(password);
+      if (problem) {
+        setError(problem);
+        return;
+      }
+    }
     try {
       const result = await createUser({
         email: email.trim(),
@@ -464,6 +780,7 @@ function UsersPanel() {
       setName("");
       setPassword("");
       await load();
+      toast.success("User created");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -473,6 +790,7 @@ function UsersPanel() {
     try {
       await updateUser(target.id, { role: nextRole });
       await load();
+      toast.success("Role updated");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -481,8 +799,8 @@ function UsersPanel() {
   const remove = async (id: string): Promise<void> => {
     try {
       await deleteUser(id);
-      setConfirmDelete(null);
       await load();
+      toast.success("User deleted");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -490,143 +808,145 @@ function UsersPanel() {
 
   return (
     <div className="mt-5 flex flex-col gap-3">
-      {error && (
-        <p className="rounded-[5px] border border-coral/25 bg-coral/[0.05] px-3 py-2 font-mono text-xs text-coral">
-          {error}
-        </p>
-      )}
+      <ErrorAlert error={error} />
 
       {createdPassword && (
-        <div className="rounded-[5px] border border-gold/40 bg-gold/[0.06] p-3">
-          <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-gold">
-            password for {createdPassword.email} — copy it now
-          </div>
-          <div className="mt-2 flex items-center gap-2">
-            <code className="rounded-[3px] bg-ink-900 px-2 py-1 font-mono text-xs text-mist">
-              {createdPassword.password}
-            </code>
-            <button
-              onClick={() => void navigator.clipboard?.writeText(createdPassword.password)}
-              className="k-chip-btn"
-            >
-              copy
-            </button>
-            <button onClick={() => setCreatedPassword(null)} className="k-chip-btn">
-              dismiss
-            </button>
-          </div>
-        </div>
+        <Alert variant="gold">
+          <KeyRoundIcon />
+          <AlertTitle>Password for {createdPassword.email} — copy it now</AlertTitle>
+          <AlertDescription>
+            <div className="mt-2 flex items-center gap-2">
+              <code className="rounded-[3px] bg-ink-900 px-2 py-1 text-mist">
+                {createdPassword.password}
+              </code>
+              <CopyButton value={createdPassword.password} />
+              <Button variant="chip" size="xs" onClick={() => setCreatedPassword(null)}>
+                dismiss
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
       )}
 
-      <section className="k-card p-4">
-        <h2 className="font-display text-[15px] font-semibold tracking-wide">Users</h2>
-        <div className="mt-3 flex flex-col">
-          {users.map((u) => (
-            <div
-              key={u.id}
-              className="flex flex-wrap items-center gap-3 border-b border-white/[0.04] py-2 font-mono text-xs"
-            >
-              <span className="text-mist">{u.email}</span>
-              <span className="text-mist-faint">{u.name || "—"}</span>
-              {u.role === "admin" ? (
-                <span className="rounded-[3px] border border-gold/30 bg-gold/[0.06] px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-gold">
-                  admin
-                </span>
-              ) : (
-                <select
-                  value={u.role}
-                  onChange={(e) => void changeRole(u, e.target.value)}
-                  className="cursor-pointer rounded-[3px] border border-white/[0.08] bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-mist-dim outline-none focus:border-gold/40"
-                >
-                  <option value="member">member</option>
-                  <option value="viewer">viewer</option>
-                </select>
-              )}
-              {u.id !== user.id && u.role !== "admin" && (
-                <>
-                  {confirmDelete === u.id ? (
-                    <>
-                      <button
-                        onClick={() => void remove(u.id)}
-                        className="k-chip-btn border-coral/40 text-coral"
-                      >
-                        confirm
-                      </button>
-                      <button onClick={() => setConfirmDelete(null)} className="k-chip-btn">
-                        cancel
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      onClick={() => setConfirmDelete(u.id)}
-                      className="k-chip-btn ml-auto hover:!border-coral/35 hover:!text-coral"
-                    >
-                      delete
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          ))}
-          {users.length === 0 && (
-            <p className="py-3 font-mono text-xs text-mist-faint">No users loaded.</p>
-          )}
-        </div>
-
-        <div className="mt-4 grid gap-2 border-t border-white/[0.06] pt-4 sm:grid-cols-2">
-          <label className="block">
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">email</span>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="teammate@example.com"
-              className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
-            />
-          </label>
-          <label className="block">
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">name</span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Sam"
-              className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
-            />
-          </label>
-          <label className="block">
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">role</span>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-              className="mt-1 w-full cursor-pointer rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none focus:border-gold/40"
-            >
-              <option value="member">member — logs, monitors, keys</option>
-              <option value="viewer">viewer — read only</option>
-            </select>
-          </label>
-          <label className="block">
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
-              password (blank = generated)
-            </span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="optional"
-              className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
-            />
-          </label>
-          <div className="sm:col-span-2">
-            <button
-              onClick={() => void add()}
-              disabled={!email.trim()}
-              className="k-btn k-btn-primary k-btn-sm disabled:opacity-40"
-            >
-              add user
-            </button>
+      <Card>
+        <CardHeader>
+          <CardTitle>Users</CardTitle>
+          <CardDescription>Administrators can create accounts and assign roles.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="divide-y divide-white/[0.04]">
+            {users.map((u) => (
+              <div key={u.id} className="flex flex-wrap items-center gap-3 py-2 font-mono text-xs">
+                <span className="text-mist">{u.email}</span>
+                <span className="text-mist-faint">{u.name || "—"}</span>
+                {u.role === "admin" ? (
+                  <Badge>admin</Badge>
+                ) : (
+                  <Select value={u.role} onValueChange={(value) => void changeRole(u, value)}>
+                    <SelectTrigger size="sm" className="w-28">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="member">member</SelectItem>
+                        <SelectItem value="viewer">viewer</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                )}
+                {u.id !== user.id && u.role !== "admin" && (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button variant="destructive" size="xs" className="ml-auto">
+                        delete
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete {u.email}?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          The account and its sessions are removed immediately.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction variant="destructive" onClick={() => void remove(u.id)}>
+                          Delete user
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                )}
+              </div>
+            ))}
+            {users.length === 0 && (
+              <p className="py-3 font-mono text-xs text-mist-faint">No users loaded.</p>
+            )}
           </div>
-        </div>
-      </section>
+
+          <form
+            className="grid gap-3 border-t border-white/[0.06] pt-4 sm:grid-cols-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void add();
+            }}
+          >
+            <Field>
+              <FieldLabel htmlFor="user-email">email</FieldLabel>
+              <Input
+                id="user-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="teammate@example.com"
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="user-name">name</FieldLabel>
+              <Input
+                id="user-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Sam"
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="user-role">role</FieldLabel>
+              <Select value={role} onValueChange={setRole}>
+                <SelectTrigger id="user-role" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="member">member — logs, monitors, keys</SelectItem>
+                    <SelectItem value="viewer">viewer — read only</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="user-password">password (blank = generated)</FieldLabel>
+              <PasswordInput
+                id="user-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="optional"
+              />
+              {password && <PasswordRequirements value={password} />}
+            </Field>
+            <div className="sm:col-span-2">
+              <Button
+                type="submit"
+                size="sm"
+                disabled={!email.trim() || (password.length > 0 && passwordProblem(password) !== null)}
+              >
+                <UserPlusIcon data-icon="inline-start" />
+                add user
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -638,78 +958,100 @@ function AccountPanel() {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const nextProblem = passwordProblem(next);
 
   const submit = async (): Promise<void> => {
     if (next !== confirm) {
       setError("new passwords don't match");
       return;
     }
+    const problem = passwordProblem(next);
+    if (problem) {
+      setError(problem);
+      return;
+    }
     try {
       await changePassword(current, next);
-      setMessage("password updated");
       setError(null);
       setCurrent("");
       setNext("");
       setConfirm("");
+      toast.success("Password updated");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setMessage(null);
     }
   };
 
   return (
     <div className="mt-5 flex flex-col gap-3">
-      <section className="k-card p-4">
-        <h2 className="font-display text-[15px] font-semibold tracking-wide">Account</h2>
-        <p className="mt-2 font-mono text-xs text-mist-dim">
-          {user.email} · <span className="text-gold">{user.role}</span>
-          {user.name ? ` · ${user.name}` : ""}
-        </p>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>Account</CardTitle>
+          <CardDescription>
+            {user.email} · <span className="text-gold">{user.role}</span>
+            {user.name ? ` · ${user.name}` : ""}
+          </CardDescription>
+        </CardHeader>
+      </Card>
 
-      <section className="k-card p-4">
-        <h2 className="font-display text-[15px] font-semibold tracking-wide">Change password</h2>
-        <div className="mt-3 grid gap-2 sm:grid-cols-3">
-          <label className="block">
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">current</span>
-            <input
-              type="password"
-              value={current}
-              onChange={(e) => setCurrent(e.target.value)}
-              className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
-            />
-          </label>
-          <label className="block">
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">new</span>
-            <input
-              type="password"
-              value={next}
-              onChange={(e) => setNext(e.target.value)}
-              className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
-            />
-          </label>
-          <label className="block">
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">confirm</span>
-            <input
-              type="password"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
-            />
-          </label>
-        </div>
-        {error && <p className="mt-3 font-mono text-xs text-coral">{error}</p>}
-        {message && <p className="mt-3 font-mono text-xs text-gold">{message}</p>}
-        <button
-          onClick={() => void submit()}
-          disabled={!current || next.length < 8}
-          className="k-btn k-btn-primary k-btn-sm mt-3 disabled:opacity-40"
-        >
-          update password
-        </button>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>Change password</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form
+            className="grid gap-3 sm:grid-cols-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submit();
+            }}
+          >
+            <Field>
+              <FieldLabel htmlFor="current-password">current</FieldLabel>
+              <PasswordInput
+                id="current-password"
+                value={current}
+                onChange={(e) => setCurrent(e.target.value)}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="new-password">new</FieldLabel>
+              <PasswordInput
+                id="new-password"
+                value={next}
+                onChange={(e) => setNext(e.target.value)}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="confirm-password">confirm</FieldLabel>
+              <PasswordInput
+                id="confirm-password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+              />
+              {confirm && next !== confirm && (
+                <p className="font-mono text-[10px] text-coral">passwords don&apos;t match</p>
+              )}
+            </Field>
+            <div className="sm:col-span-3">
+              <PasswordRequirements value={next} />
+            </div>
+            <div className="sm:col-span-3">
+              <ErrorAlert error={error} />
+            </div>
+            <div className="sm:col-span-3">
+              <Button
+                type="submit"
+                size="sm"
+                disabled={!current || nextProblem !== null || next !== confirm}
+              >
+                update password
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -160,6 +160,34 @@ export async function canAccessProject(
 }
 
 /**
+ * Deleting every event in a project is destructive and project-scoped:
+ *  - admins always can
+ *  - members only with the per-project `canClearLogs` grant
+ *  - viewers and API keys never can
+ */
+export async function canClearProjectLogs(
+  auth: AuthInfo,
+  storage: Storage,
+  projectId: number
+): Promise<boolean> {
+  if (auth.kind !== "user") return false;
+  if (auth.user.role === "admin") return true;
+  // A member demoted to viewer must not keep the grant.
+  if (auth.user.role === "viewer") return false;
+  const rows = await storage.db
+    .select({ canClearLogs: schema.projectMembers.canClearLogs })
+    .from(schema.projectMembers)
+    .where(
+      and(
+        eq(schema.projectMembers.projectId, projectId),
+        eq(schema.projectMembers.userId, auth.user.id)
+      )
+    )
+    .limit(1);
+  return rows[0]?.canClearLogs === true;
+}
+
+/**
  * Resolves the project for this request: API keys are bound to theirs;
  * sessions use ?project= only when they are a member (admins bypass), else
  * the first project assigned to them.

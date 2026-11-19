@@ -1,0 +1,1 @@
+ALTER TABLE `project_members` ADD `can_clear_logs` integer DEFAULT false NOT NULL;

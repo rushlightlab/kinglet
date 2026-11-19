@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
+import { PencilIcon, PlusIcon, RefreshCwIcon, SendIcon, Trash2Icon } from "lucide-react";
+import { toast } from "sonner";
 import {
   createMonitor,
   deleteMonitor,
@@ -10,7 +12,50 @@ import {
 } from "../api";
 import { useApp } from "../app-context";
 import type { AlertRecord, Monitor, MonitorKind, NotifyChannel } from "../types";
-import SiteHeader from "../components/SiteHeader";
+import ErrorAlert from "../components/ErrorAlert";
+import PageShell from "../components/PageShell";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export const Route = createFileRoute("/monitors")({
   component: MonitorsPage,
@@ -55,12 +100,13 @@ function MonitorsPage() {
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [editing, setEditing] = useState<number | "new" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
-  const [testMsg, setTestMsg] = useState<Record<number, string>>({});
 
   const load = useCallback(async () => {
     try {
-      const [m, a] = await Promise.all([fetchMonitors(currentProjectId), fetchAlerts(currentProjectId, 50)]);
+      const [m, a] = await Promise.all([
+        fetchMonitors(currentProjectId),
+        fetchAlerts(currentProjectId, 50),
+      ]);
       setMonitors(m.monitors);
       setAlerts(a.alerts);
       setError(null);
@@ -78,83 +124,224 @@ function MonitorsPage() {
     try {
       await updateMonitor(currentProjectId, m.id, { ...m, enabled: !m.enabled });
       await load();
+      toast.success(m.enabled ? "Monitor paused" : "Monitor enabled");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
 
-  const remove = async (id: number): Promise<void> => {
+  const remove = async (m: Monitor): Promise<void> => {
     try {
-      await deleteMonitor(currentProjectId, id);
-      setConfirmDelete(null);
+      await deleteMonitor(currentProjectId, m.id);
       await load();
+      toast.success("Monitor deleted");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
 
   const runTest = async (m: Monitor): Promise<void> => {
-    setTestMsg((prev) => ({ ...prev, [m.id]: "testing…" }));
     try {
       const r = await testMonitor(currentProjectId, m.id);
-      const ok = r.results.filter((x) => x.ok).length;
-      const text =
-        r.results.length === 0
-          ? "no channels configured"
-          : ok === r.results.length
-            ? `✓ sent to ${ok} channel${ok === 1 ? "" : "s"}`
-            : r.results.map((x) => (x.ok ? `✓ ${x.type}` : `✗ ${x.type}: ${x.error ?? "failed"}`)).join("  ·  ");
-      setTestMsg((prev) => ({ ...prev, [m.id]: text }));
+      if (r.results.length === 0) {
+        toast.info("No channels configured");
+        return;
+      }
+      const failed = r.results.filter((x) => !x.ok);
+      if (failed.length === 0) {
+        toast.success(`Sent to ${r.results.length} channel${r.results.length === 1 ? "" : "s"}`);
+      } else {
+        toast.error(
+          failed.map((x) => `${x.type}: ${x.error ?? "failed"}`).join(" · ")
+        );
+      }
     } catch (err) {
-      setTestMsg((prev) => ({ ...prev, [m.id]: err instanceof Error ? err.message : "test failed" }));
+      toast.error(err instanceof Error ? err.message : "test failed");
     }
-    setTimeout(() => {
-      setTestMsg((prev) => {
-        const next = { ...prev };
-        delete next[m.id];
-        return next;
-      });
-    }, 8000);
   };
 
-  const editingMonitor = typeof editing === "number" ? monitors.find((m) => m.id === editing) ?? null : null;
+  const editingMonitor =
+    typeof editing === "number" ? monitors.find((m) => m.id === editing) ?? null : null;
 
   return (
-    <div className="flex h-screen flex-col bg-ink-950 text-mist">
-      <SiteHeader>
-        <button onClick={() => void load()} className="k-chip-btn" title="Refresh">
-          ↻
-        </button>
-      </SiteHeader>
+    <PageShell
+      kicker="monitors"
+      title="Alerts on your terms."
+      description="Get notified when logs match a query — or when expected logs go missing. Channels are plain webhook URLs: anything that accepts a POST works."
+      headerExtra={
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="chip" size="icon-xs" onClick={() => void load()} aria-label="Refresh">
+              <RefreshCwIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Refresh monitors</TooltipContent>
+        </Tooltip>
+      }
+    >
+      <div className="mt-6 flex flex-col gap-3">
+        <ErrorAlert error={error} />
 
-      <main className="relative flex-1 overflow-y-auto">
-        <div className="k-bg-grid absolute inset-0" aria-hidden="true" />
-        <div className="relative mx-auto w-full max-w-3xl px-6 py-8">
-          <div className="k-kicker">
-            <span className="text-gold">/</span> monitors
-          </div>
-          <h1 className="font-display mt-2 text-2xl font-bold tracking-wide">Alerts on your terms.</h1>
-          <p className="mt-2 max-w-lg font-mono text-xs leading-relaxed text-mist-dim">
-            Get notified when logs match a query — or when expected logs go missing.
-            Channels are plain webhook URLs: anything that accepts a POST works.
-          </p>
+        <div className="flex items-center justify-between">
+          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
+            {monitors.length} monitor{monitors.length === 1 ? "" : "s"}
+          </span>
+          <Button size="sm" onClick={() => setEditing("new")}>
+            <PlusIcon data-icon="inline-start" />
+            new monitor
+          </Button>
+        </div>
 
-          {error && (
-            <p className="mt-4 rounded-[5px] border border-coral/25 bg-coral/[0.05] px-3 py-2 font-mono text-xs text-coral">
-              {error}
-            </p>
+        <div className="flex flex-col gap-3">
+          {monitors.map((m) => (
+            <Card key={m.id} className={m.enabled ? undefined : "opacity-60"}>
+              <CardHeader>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <CardTitle className="truncate">{m.name}</CardTitle>
+                      <Badge>{KIND_LABELS[m.kind]}</Badge>
+                      {!m.enabled && <Badge variant="outline">paused</Badge>}
+                      {m.lastError && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge variant="destructive">degraded</Badge>
+                          </TooltipTrigger>
+                          <TooltipContent>{m.lastError}</TooltipContent>
+                        </Tooltip>
+                      )}
+                    </div>
+                    <CardDescription>{describe(m)}</CardDescription>
+                  </div>
+                  <Switch
+                    checked={m.enabled}
+                    onCheckedChange={() => void toggleEnabled(m)}
+                    aria-label={m.enabled ? "Pause monitor" : "Enable monitor"}
+                  />
+                </div>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-2">
+                <code className="inline-block max-w-full truncate rounded-[3px] border border-white/[0.08] bg-ink-850 px-2 py-1 font-mono text-[11px] text-mist">
+                  {m.query || "(all events)"}
+                </code>
+                <p className="font-mono text-[10px] text-mist-faint">
+                  checked every {fmtDur(m.kind === "match" ? 0 : m.intervalMs)}
+                  {m.kind !== "match" && ` · cooldown ${fmtDur(m.cooldownMs)}`} ·{" "}
+                  {m.channels.length === 0
+                    ? "no channels (history only)"
+                    : `${m.channels.length} channel${m.channels.length === 1 ? "" : "s"}`}
+                </p>
+              </CardContent>
+              <CardFooter className="gap-2">
+                <Button variant="chip" size="xs" onClick={() => void runTest(m)}>
+                  <SendIcon data-icon="inline-start" />
+                  test
+                </Button>
+                <Button variant="chip" size="xs" onClick={() => setEditing(m.id)}>
+                  <PencilIcon data-icon="inline-start" />
+                  edit
+                </Button>
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="destructive" size="xs" className="ml-auto">
+                      <Trash2Icon data-icon="inline-start" />
+                      delete
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete {m.name}?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        The monitor stops checking and its alert history stays behind. This cannot be
+                        undone.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction variant="destructive" onClick={() => void remove(m)}>
+                        Delete monitor
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </CardFooter>
+            </Card>
+          ))}
+
+          {monitors.length === 0 && (
+            <Card className="items-center px-4 py-10 text-center">
+              <p className="font-mono text-xs text-mist-dim">No monitors yet.</p>
+              <p className="font-mono text-[11px] text-mist-faint">
+                Watch for <span className="text-gold">level:fatal</span>, spike rates, or a cron
+                that went quiet.
+              </p>
+              <Button size="sm" className="mt-1" onClick={() => setEditing("new")}>
+                <PlusIcon data-icon="inline-start" />
+                Create your first monitor
+              </Button>
+            </Card>
           )}
+        </div>
 
-          <div className="mt-6 flex items-center justify-between">
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
-              {monitors.length} monitor{monitors.length === 1 ? "" : "s"}
-            </span>
-            <button onClick={() => setEditing("new")} className="k-btn k-btn-primary k-btn-sm">
-              + new monitor
-            </button>
+        <div className="mt-10">
+          <div className="k-kicker">
+            <span className="text-gold">/</span> alerts
           </div>
+          <h2 className="font-display mt-2 text-lg font-semibold tracking-wide">Recent alerts</h2>
+          <div className="mt-3">
+            {alerts.map((a) => (
+              <div
+                key={a.id}
+                className="flex items-center gap-3 border-b border-white/[0.04] py-2.5 font-mono text-xs"
+              >
+                <span
+                  className={`size-1.5 shrink-0 rounded-full ${
+                    a.state === "fired" && a.resolvedAt === null ? "bg-coral" : "bg-gold"
+                  }`}
+                />
+                <span className="w-24 shrink-0 text-mist-faint">{relTime(a.firedAt)}</span>
+                <span className="w-36 shrink-0 truncate text-mist-dim">{a.monitorName ?? "monitor"}</span>
+                <span className="truncate text-mist">{a.summary}</span>
+                <span className="ml-auto flex shrink-0 items-center gap-2">
+                  {a.state === "fired" && a.notifyStatus && a.notifyStatus !== "none" && (
+                    <Badge
+                      variant={
+                        a.notifyStatus === "sent"
+                          ? "ghost"
+                          : a.notifyStatus === "partial"
+                            ? "outline"
+                            : "destructive"
+                      }
+                      title={a.notifyError ?? "Notification delivery"}
+                    >
+                      notify {a.notifyStatus}
+                    </Badge>
+                  )}
+                  {a.state === "fired" && a.resolvedAt === null ? (
+                    <Badge variant="destructive">fired</Badge>
+                  ) : (
+                    <Badge variant="ghost">resolved</Badge>
+                  )}
+                </span>
+              </div>
+            ))}
+            {alerts.length === 0 && (
+              <p className="py-6 font-mono text-xs text-mist-faint">
+                No alerts yet. When a monitor fires, its story lands here.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
 
-          {(editing === "new" || editingMonitor) && (
+      <Dialog
+        open={editing !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null);
+        }}
+      >
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+          {editing !== null && (
             <MonitorForm
               key={editing === "new" ? "new" : `edit-${editing}`}
               initial={editingMonitor}
@@ -166,156 +353,9 @@ function MonitorsPage() {
               onCancel={() => setEditing(null)}
             />
           )}
-
-          <div className="mt-4 flex flex-col gap-3">
-            {monitors.map((m) => (
-              <article key={m.id} className={`k-card p-4 ${m.enabled ? "" : "opacity-60"}`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="font-display truncate text-[15px] font-semibold tracking-wide">{m.name}</h3>
-                      <span className="rounded-[3px] border border-gold/25 bg-gold/[0.06] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-gold">
-                        {KIND_LABELS[m.kind]}
-                      </span>
-                      {!m.enabled && (
-                        <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-mist-faint">
-                          paused
-                        </span>
-                      )}
-                      {m.lastError && (
-                        <span
-                          title={m.lastError}
-                          className="rounded-[3px] border border-coral/30 bg-coral/[0.06] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-coral"
-                        >
-                          degraded
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-1.5 font-mono text-xs text-mist-dim">{describe(m)}</p>
-                    <code className="mt-2 inline-block max-w-full truncate rounded-[3px] border border-white/[0.08] bg-ink-850 px-2 py-1 font-mono text-[11px] text-mist">
-                      {m.query || "(all events)"}
-                    </code>
-                    <p className="mt-2 font-mono text-[10px] text-mist-faint">
-                      checked every {fmtDur(m.kind === "match" ? 0 : m.intervalMs)}
-                      {m.kind !== "match" && ` · cooldown ${fmtDur(m.cooldownMs)}`} ·{" "}
-                      {m.channels.length === 0
-                        ? "no channels (history only)"
-                        : `${m.channels.length} channel${m.channels.length === 1 ? "" : "s"}`}
-                    </p>
-                    {testMsg[m.id] && (
-                      <p className="mt-2 font-mono text-[11px] text-gold">{testMsg[m.id]}</p>
-                    )}
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <button
-                      onClick={() => void toggleEnabled(m)}
-                      role="switch"
-                      aria-checked={m.enabled}
-                      title={m.enabled ? "Pause" : "Enable"}
-                      className={`relative h-5 w-9 rounded-full border transition-colors ${
-                        m.enabled ? "border-gold/40 bg-gold/20" : "border-white/[0.08] bg-white/[0.03]"
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full transition-all ${
-                          m.enabled ? "left-[18px] bg-gold" : "left-1 bg-mist-faint"
-                        }`}
-                      />
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/[0.06] pt-3">
-                  <button onClick={() => void runTest(m)} className="k-chip-btn" title="Send a test notification">
-                    test
-                  </button>
-                  <button onClick={() => setEditing(m.id)} className="k-chip-btn">
-                    edit
-                  </button>
-                  {confirmDelete === m.id ? (
-                    <>
-                      <button onClick={() => void remove(m.id)} className="k-chip-btn border-coral/40 text-coral">
-                        confirm delete
-                      </button>
-                      <button onClick={() => setConfirmDelete(null)} className="k-chip-btn">
-                        cancel
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      onClick={() => setConfirmDelete(m.id)}
-                      className="k-chip-btn hover:!border-coral/35 hover:!text-coral"
-                    >
-                      delete
-                    </button>
-                  )}
-                </div>
-              </article>
-            ))}
-
-            {monitors.length === 0 && editing === null && (
-              <div className="k-card flex flex-col items-center gap-3 px-4 py-10 text-center">
-                <p className="font-mono text-xs text-mist-dim">No monitors yet.</p>
-                <p className="font-mono text-[11px] text-mist-faint">
-                  Watch for <span className="text-gold">level:fatal</span>, spike rates, or a cron that went quiet.
-                </p>
-                <button onClick={() => setEditing("new")} className="k-btn k-btn-primary k-btn-sm mt-1">
-                  Create your first monitor
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="mt-14">
-            <div className="k-kicker">
-              <span className="text-gold">/</span> alerts
-            </div>
-            <h2 className="font-display mt-2 text-lg font-semibold tracking-wide">Recent alerts</h2>
-            <div className="mt-3">
-              {alerts.map((a) => (
-                <div key={a.id} className="flex items-center gap-3 border-b border-white/[0.04] py-2.5 font-mono text-xs">
-                  <span
-                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                      a.state === "fired" && a.resolvedAt === null ? "bg-coral" : "bg-gold"
-                    }`}
-                  />
-                  <span className="w-24 shrink-0 text-mist-faint">{relTime(a.firedAt)}</span>
-                  <span className="w-36 shrink-0 truncate text-mist-dim">{a.monitorName ?? "monitor"}</span>
-                  <span className="truncate text-mist">{a.summary}</span>
-                  <span className="ml-auto flex shrink-0 items-center gap-2">
-                    {a.state === "fired" && a.notifyStatus && a.notifyStatus !== "none" && (
-                      <span
-                        title={a.notifyError ?? "Notification delivery"}
-                        className={`text-[10px] uppercase tracking-[0.12em] ${
-                          a.notifyStatus === "sent"
-                            ? "text-mist-faint"
-                            : a.notifyStatus === "partial"
-                              ? "text-gold"
-                              : "text-coral"
-                        }`}
-                      >
-                        notify {a.notifyStatus}
-                      </span>
-                    )}
-                    {a.state === "fired" && a.resolvedAt === null ? (
-                      <span className="text-[10px] uppercase tracking-[0.12em] text-coral">fired</span>
-                    ) : (
-                      <span className="text-[10px] uppercase tracking-[0.12em] text-gold-dim">
-                        resolved
-                      </span>
-                    )}
-                  </span>
-                </div>
-              ))}
-              {alerts.length === 0 && (
-                <p className="py-6 font-mono text-xs text-mist-faint">
-                  No alerts yet. When a monitor fires, its story lands here.
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-      </main>
-    </div>
+        </DialogContent>
+      </Dialog>
+    </PageShell>
   );
 }
 
@@ -393,6 +433,7 @@ function MonitorForm({
       };
       if (initial) await updateMonitor(projectId, initial.id, payload);
       else await createMonitor(projectId, payload);
+      toast.success(initial ? "Monitor updated" : "Monitor created");
       await onDone();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));
@@ -404,150 +445,190 @@ function MonitorForm({
   const isCount = form.kind !== "match";
 
   return (
-    <div className="k-card mt-4 border-gold/20 p-5">
-      <div className="k-kicker">{initial ? `edit monitor / ${initial.name}` : "new monitor"}</div>
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void save();
+      }}
+    >
+      <DialogHeader>
+        <DialogTitle>{initial ? `Edit ${initial.name}` : "New monitor"}</DialogTitle>
+        <DialogDescription>
+          Use the same query grammar as the log view. Channels are optional; without one, the
+          monitor still records alert history.
+        </DialogDescription>
+      </DialogHeader>
 
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <label className="block sm:col-span-2">
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">name</span>
-          <input
+      <FieldGroup className="mt-4 grid gap-4 sm:grid-cols-2">
+        <Field className="sm:col-span-2">
+          <FieldLabel htmlFor="monitor-name">name</FieldLabel>
+          <Input
+            id="monitor-name"
             value={form.name}
             onChange={(e) => set("name", e.target.value)}
             placeholder="payment errors"
-            className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
+            autoFocus
           />
-        </label>
+        </Field>
 
-        <label className="block sm:col-span-2">
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
-            query — same grammar as the log view
-          </span>
-          <input
+        <Field className="sm:col-span-2">
+          <FieldLabel htmlFor="monitor-query">query — same grammar as the log view</FieldLabel>
+          <Input
+            id="monitor-query"
             value={form.query}
             onChange={(e) => set("query", e.target.value)}
-            placeholder={`level>=error service:billing`}
+            placeholder="level>=error service:billing"
             spellCheck={false}
-            className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
           />
-        </label>
+        </Field>
 
-        <label className="block">
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">condition</span>
-          <select
+        <Field>
+          <FieldLabel htmlFor="monitor-kind">condition</FieldLabel>
+          <Select
             value={form.kind}
-            onChange={(e) => set("kind", e.target.value as MonitorKind)}
-            className="mt-1 w-full cursor-pointer rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
+            onValueChange={(value) => set("kind", value as MonitorKind)}
           >
-            <option value="match">instant match — any event fires</option>
-            <option value="count_above">spike — more than N in a window</option>
-            <option value="count_below">silence — fewer than N in a window</option>
-          </select>
-        </label>
+            <SelectTrigger id="monitor-kind" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="match">instant match — any event fires</SelectItem>
+                <SelectItem value="count_above">spike — more than N in a window</SelectItem>
+                <SelectItem value="count_below">silence — fewer than N in a window</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
 
         {isCount && (
-          <label className="block">
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">threshold</span>
-            <input
+          <Field>
+            <FieldLabel htmlFor="monitor-threshold">threshold</FieldLabel>
+            <Input
+              id="monitor-threshold"
               type="number"
               min={1}
               value={form.threshold}
-              onChange={(e) => set("threshold", Math.max(1, Math.trunc(Number(e.target.value)) || 1))}
-              className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
+              onChange={(e) =>
+                set("threshold", Math.max(1, Math.trunc(Number(e.target.value)) || 1))
+              }
             />
-          </label>
+          </Field>
         )}
 
         {isCount && (
-          <label className="block">
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">window (minutes)</span>
-            <input
+          <Field>
+            <FieldLabel htmlFor="monitor-window">window (minutes)</FieldLabel>
+            <Input
+              id="monitor-window"
               type="number"
               min={1}
               value={form.windowMin}
-              onChange={(e) => set("windowMin", Math.max(1, Math.trunc(Number(e.target.value)) || 1))}
-              className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
+              onChange={(e) =>
+                set("windowMin", Math.max(1, Math.trunc(Number(e.target.value)) || 1))
+              }
             />
-          </label>
+          </Field>
         )}
 
         {isCount && (
-          <label className="block">
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
-              check every (seconds)
-            </span>
-            <input
+          <Field>
+            <FieldLabel htmlFor="monitor-interval">check every (seconds)</FieldLabel>
+            <Input
+              id="monitor-interval"
               type="number"
               min={10}
               value={form.intervalSec}
-              onChange={(e) => set("intervalSec", Math.max(10, Math.trunc(Number(e.target.value)) || 60))}
-              className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
+              onChange={(e) =>
+                set("intervalSec", Math.max(10, Math.trunc(Number(e.target.value)) || 60))
+              }
             />
-          </label>
+          </Field>
         )}
 
-        <label className="block">
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
-            cooldown (minutes)
-          </span>
-          <input
+        <Field>
+          <FieldLabel htmlFor="monitor-cooldown">cooldown (minutes)</FieldLabel>
+          <Input
+            id="monitor-cooldown"
             type="number"
             min={0}
             value={form.cooldownMin}
-            onChange={(e) => set("cooldownMin", Math.max(0, Math.trunc(Number(e.target.value)) || 0))}
-            className="mt-1 w-full rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
+            onChange={(e) =>
+              set("cooldownMin", Math.max(0, Math.trunc(Number(e.target.value)) || 0))
+            }
           />
-        </label>
-      </div>
+        </Field>
 
-      <div className="mt-5">
-        <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">channels</span>
-        <div className="mt-2 flex flex-col gap-2">
-          {form.channels.map((c, i) => (
-            <div key={i} className="flex flex-wrap gap-2">
-              <select
-                value={c.type}
-                onChange={(e) => setChannel(i, { type: e.target.value as NotifyChannel["type"] })}
-                className="cursor-pointer rounded-[5px] border border-white/[0.08] bg-ink-900 px-2 py-2 font-mono text-xs text-mist outline-none focus:border-gold/40"
-              >
-                <option value="webhook">webhook</option>
-                <option value="discord">discord</option>
-                <option value="slack">slack</option>
-              </select>
-              <input
-                value={c.url}
-                onChange={(e) => setChannel(i, { url: e.target.value })}
-                placeholder={CHANNEL_PLACEHOLDERS[c.type]}
-                spellCheck={false}
-                className="min-w-0 flex-1 rounded-[5px] border border-white/[0.08] bg-ink-900 px-3 py-2 font-mono text-xs text-mist outline-none transition-colors focus:border-gold/40"
-              />
-              <button
-                onClick={() => set("channels", form.channels.filter((_, j) => j !== i))}
-                className="k-chip-btn"
-                title="Remove channel"
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-          <button
-            onClick={() => set("channels", [...form.channels, { type: "webhook", url: "" }])}
-            className="k-chip-btn self-start"
-          >
-            + channel
-          </button>
+        <div className="sm:col-span-2">
+          <FieldLabel>channels</FieldLabel>
+          <div className="mt-2 flex flex-col gap-2">
+            {form.channels.map((c, i) => (
+              <div key={i} className="flex flex-wrap gap-2">
+                <Select
+                  value={c.type}
+                  onValueChange={(value) =>
+                    setChannel(i, { type: value as NotifyChannel["type"] })
+                  }
+                >
+                  <SelectTrigger className="w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="webhook">webhook</SelectItem>
+                      <SelectItem value="discord">discord</SelectItem>
+                      <SelectItem value="slack">slack</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <Input
+                  value={c.url}
+                  onChange={(e) => setChannel(i, { url: e.target.value })}
+                  placeholder={CHANNEL_PLACEHOLDERS[c.type]}
+                  spellCheck={false}
+                  className="min-w-0 flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="chip"
+                  size="icon-xs"
+                  className="self-center"
+                  aria-label="Remove channel"
+                  onClick={() => set("channels", form.channels.filter((_, j) => j !== i))}
+                >
+                  ✕
+                </Button>
+              </div>
+            ))}
+            <Button
+              type="button"
+              variant="chip"
+              size="xs"
+              className="self-start"
+              onClick={() => set("channels", [...form.channels, { type: "webhook", url: "" }])}
+            >
+              <PlusIcon data-icon="inline-start" />
+              channel
+            </Button>
+          </div>
         </div>
-      </div>
 
-      {formError && <p className="mt-4 font-mono text-xs text-coral">{formError}</p>}
+        {formError && (
+          <div className="sm:col-span-2">
+            <ErrorAlert error={formError} />
+          </div>
+        )}
+      </FieldGroup>
 
-      <div className="mt-5 flex items-center gap-2 border-t border-white/[0.06] pt-4">
-        <button onClick={() => void save()} disabled={saving} className="k-btn k-btn-primary k-btn-sm disabled:opacity-40">
-          {saving ? "saving…" : initial ? "Save changes" : "Create monitor"}
-        </button>
-        <button onClick={onCancel} className="k-btn k-btn-ghost k-btn-sm">
+      <DialogFooter className="mt-5">
+        <Button type="button" variant="outline" size="sm" onClick={onCancel}>
           Cancel
-        </button>
-      </div>
-    </div>
+        </Button>
+        <Button type="submit" size="sm" disabled={saving}>
+          {saving && <Spinner data-icon="inline-start" />}
+          {saving ? "saving…" : initial ? "Save changes" : "Create monitor"}
+        </Button>
+      </DialogFooter>
+    </form>
   );
 }

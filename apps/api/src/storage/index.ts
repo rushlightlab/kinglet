@@ -24,6 +24,7 @@ export async function createStorage(settings: StorageSettings): Promise<Storage>
       eventsRepo.histogramPoints(db, projectId, from, to, bucketMs),
     listServices: (projectId) => eventsRepo.listServices(db, projectId),
     deleteOlderThan: (ts) => eventsRepo.deleteOlderThan(db, ts),
+    deleteByProject: (projectId, range) => eventsRepo.deleteByProject(db, projectId, range),
     runMaintenance: async () => {
       // Local WAL files grow; SQLite reuses pages automatically. A full
       // VACUUM on a live log store costs more than it frees — skip.

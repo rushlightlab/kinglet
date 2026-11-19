@@ -47,6 +47,8 @@ export interface Storage {
   listServices(projectId: number): Promise<ServiceRow[]>;
   /** Chunked delete; returns how many events were dropped. */
   deleteOlderThan(ts: number): Promise<number>;
+  /** Chunked delete of every event in one project; returns the count. */
+  deleteByProject(projectId: number, range?: { from: number; to: number }): Promise<number>;
   /** Housekeeping after big deletes (vacuum etc.). No-op on managed backends. */
   runMaintenance(): Promise<void>;
   close(): Promise<void>;

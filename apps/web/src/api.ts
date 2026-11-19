@@ -11,7 +11,6 @@ import type {
   ProjectMember,
   Service,
 } from "./types";
-import { LEVEL_NAMES } from "./types";
 import { createAuthClient } from "better-auth/react";
 
 export class UnauthorizedError extends Error {}
@@ -141,6 +140,17 @@ export function removeProjectMember(
   });
 }
 
+export function updateProjectMember(
+  projectId: number,
+  userId: string,
+  body: { canClearLogs: boolean }
+): Promise<{ ok: true; canClearLogs: boolean }> {
+  return api<{ ok: true; canClearLogs: boolean }>(
+    `/v1/projects/${projectId}/members/${userId}`,
+    { method: "PATCH", body: JSON.stringify(body) }
+  );
+}
+
 // ---------- users (admin) ----------
 
 export function fetchUsers(): Promise<{ users: AppUser[] }> {
@@ -210,6 +220,22 @@ export function fetchEvents(opts: {
   return api<EventPage>(withProject(`/v1/events?${params.toString()}`, opts.projectId));
 }
 
+/** Deletes events in the project, optionally within an epoch-ms range. */
+export function clearProjectLogs(
+  projectId: number,
+  range?: { from: number; to: number }
+): Promise<{ deleted: number; projectId: number; from?: number; to?: number }> {
+  const params = new URLSearchParams({ project: String(projectId) });
+  if (range) {
+    params.set("from", String(range.from));
+    params.set("to", String(range.to));
+  }
+  return api<{ deleted: number; projectId: number; from?: number; to?: number }>(
+    `/v1/events?${params.toString()}`,
+    { method: "DELETE" }
+  );
+}
+
 export function fetchHistogram(opts: {
   projectId: number;
   from: number;
@@ -268,59 +294,4 @@ export function testMonitor(projectId: number, id: number): Promise<{ results: C
 
 export function fetchAlerts(projectId: number, limit = 100): Promise<{ alerts: AlertRecord[] }> {
   return api<{ alerts: AlertRecord[] }>(withProject(`/v1/alerts?limit=${limit}`, projectId));
-}
-
-// ---------- demo traffic ----------
-
-const DEMO_TEMPLATES: { level: number; message: string }[] = [
-  { level: 2, message: "user signed in" },
-  { level: 2, message: "request served in 42ms" },
-  { level: 2, message: "health check ok" },
-  { level: 1, message: "cache miss for user:2049" },
-  { level: 1, message: "connection pool resized to 12" },
-  { level: 3, message: "slow query detected (812ms)" },
-  { level: 3, message: "retrying background job in 2s" },
-  { level: 3, message: "queue depth above target: 312 jobs" },
-  { level: 4, message: "payment failed: card_declined" },
-  { level: 4, message: "connection refused by upstream" },
-  { level: 4, message: "rate limit exceeded for key 84f2" },
-  { level: 5, message: "queue depth critical: 4096 jobs waiting" },
-];
-
-/** Generates some noisy demo traffic, spread over the last hour. */
-export async function sprayDemoEvents(projectId: number, count = 80): Promise<void> {
-  const services = ["api", "web", "worker", "billing"];
-  const now = Date.now();
-  const lines: string[] = [];
-  for (let i = 0; i < count; i++) {
-    const template = DEMO_TEMPLATES[Math.floor(Math.random() * DEMO_TEMPLATES.length)] ?? DEMO_TEMPLATES[0]!;
-    lines.push(
-      JSON.stringify({
-        level: LEVEL_NAMES[template.level],
-        message: template.message,
-        service: services[Math.floor(Math.random() * services.length)] ?? "api",
-        env: "demo",
-        ts: now - Math.floor(Math.random() * 55 * 60_000),
-        fields: {
-          request_id: crypto.randomUUID(),
-          region: Math.random() > 0.5 ? "eu-1" : "us-1",
-          ms: Math.floor(Math.random() * 900),
-        },
-      })
-    );
-  }
-  const res = await fetch(withProject("/v1/events", projectId), {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "content-type": "application/x-ndjson", "x-kinglet-request": "1" },
-    body: lines.join("\n"),
-  });
-  if (res.status === 401) throw new UnauthorizedError("unauthorized");
-  if (!res.ok) {
-    throw new Error(
-      res.status >= 500
-        ? "the Kinglet API returned an internal error — check the server terminal"
-        : `spray failed: HTTP ${res.status}`
-    );
-  }
 }

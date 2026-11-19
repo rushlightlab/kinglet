@@ -22,6 +22,13 @@
       "when": 1794994824975,
       "tag": "0002_mushy_venus",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1795071221151,
+      "tag": "0003_premium_slyde",
+      "breakpoints": true
     }
   ]
 }

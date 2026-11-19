@@ -2,6 +2,7 @@ import { asc, count, eq } from "drizzle-orm";
 import type { Storage } from "../storage/index.js";
 import * as schema from "../storage/schema.js";
 import type { KingletAuth } from "./auth.js";
+import { passwordProblem } from "./password.js";
 import type { Role } from "./roles.js";
 import { isRole } from "./roles.js";
 import { generatePassword } from "./tokens.js";
@@ -57,6 +58,10 @@ export async function createManagedUser(
   headers: Headers,
   input: { email: string; name: string; role: Role; password?: string }
 ): Promise<{ user: AdminUser; password?: string }> {
+  if (input.password) {
+    const problem = passwordProblem(input.password);
+    if (problem) throw new Error(problem);
+  }
   const password = input.password ?? generatePassword();
   const created = (await auth.api.createUser({
     body: {
