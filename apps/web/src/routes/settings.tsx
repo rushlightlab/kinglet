@@ -99,16 +99,37 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export const Route = createFileRoute("/settings")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    tab: isTab(search.tab) ? search.tab : undefined,
+  }),
   component: SettingsPage,
 });
 
 type Tab = "keys" | "users" | "account";
 
+function isTab(value: unknown): value is Tab {
+  return value === "keys" || value === "users" || value === "account";
+}
+
 function SettingsPage() {
   const { permissions } = useApp();
+  const navigate = useNavigate();
+  const search = Route.useSearch();
   const canKeys = hasPermission(permissions, "keys.read");
   const canUsers = hasPermission(permissions, "users.read");
-  const [tab, setTab] = useState<Tab>(canKeys ? "keys" : canUsers ? "users" : "account");
+  const requested = search.tab;
+  const tab: Tab =
+    requested === "keys" && canKeys
+      ? "keys"
+      : requested === "users" && canUsers
+        ? "users"
+        : requested === "account"
+          ? "account"
+          : canKeys
+            ? "keys"
+            : canUsers
+              ? "users"
+              : "account";
 
   const tabs: { id: Tab; label: string; visible: boolean }[] = [
     { id: "keys", label: "projects & keys", visible: canKeys },
@@ -118,7 +139,14 @@ function SettingsPage() {
 
   return (
     <PageShell kicker="settings" title="Workspace.">
-      <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="mt-6">
+      <Tabs
+        value={tab}
+        onValueChange={(value) => {
+          if (!isTab(value)) return;
+          void navigate({ to: "/settings", search: { tab: value } });
+        }}
+        className="mt-6"
+      >
         <TabsList>
           {tabs
             .filter((t) => t.visible)
