@@ -355,7 +355,14 @@ function KeysPanel() {
                         </AlertDialogContent>
                       </AlertDialog>
                     ) : (
-                      <span className="text-[10px] text-mist-faint">—</span>
+                      <Button
+                        variant="destructive"
+                        size="xs"
+                        disabled
+                        title="Requires the keys.write permission"
+                      >
+                        revoke
+                      </Button>
                     )}
                   </TableCell>
                 </TableRow>
@@ -467,15 +474,19 @@ function KeysPanel() {
                           <Badge variant="outline">{m.role}</Badge>
                         </TableCell>
                         <TableCell>
-                          {m.role === "viewer" ? (
-                            <span className="text-[10px] text-mist-faint">—</span>
-                          ) : (
-                            <Switch
-                              checked={m.canClearLogs}
-                              onCheckedChange={(checked) => void setMemberClearLogs(m, checked)}
-                              aria-label={`Allow ${m.email} to clear logs`}
-                            />
-                          )}
+                          <Switch
+                            checked={m.canClearLogs}
+                            onCheckedChange={(checked) => void setMemberClearLogs(m, checked)}
+                            disabled={m.role === "viewer"}
+                            title={
+                              m.role === "viewer"
+                                ? "Viewers cannot be granted clear logs"
+                                : m.canClearLogs
+                                  ? "Revoke clear logs"
+                                  : "Allow clear logs"
+                            }
+                            aria-label={`Allow ${m.email} to clear logs`}
+                          />
                         </TableCell>
                         <TableCell className="text-right">
                           <AlertDialog>
@@ -954,7 +965,18 @@ function UsersPanel() {
                         </AlertDialogContent>
                       </AlertDialog>
                     ) : (
-                      <span className="text-[10px] text-mist-faint">—</span>
+                      <Button
+                        variant="destructive"
+                        size="xs"
+                        disabled
+                        title={
+                          u.role === "admin"
+                            ? "Administrators cannot be deleted"
+                            : "You cannot delete your own account"
+                        }
+                      >
+                        delete
+                      </Button>
                     )}
                   </TableCell>
                 </TableRow>

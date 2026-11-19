@@ -10,7 +10,7 @@ import {
   testMonitor,
   updateMonitor,
 } from "../api";
-import { useApp } from "../app-context";
+import { hasPermission, useApp } from "../app-context";
 import type { AlertRecord, Monitor, MonitorKind, NotifyChannel } from "../types";
 import ErrorAlert from "../components/ErrorAlert";
 import PageShell from "../components/PageShell";
@@ -103,7 +103,8 @@ function describe(m: Monitor): string {
 }
 
 function MonitorsPage() {
-  const { currentProjectId } = useApp();
+  const { currentProjectId, permissions } = useApp();
+  const canWrite = hasPermission(permissions, "monitors.write");
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [editing, setEditing] = useState<number | "new" | null>(null);
@@ -194,7 +195,12 @@ function MonitorsPage() {
           <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
             {monitors.length} monitor{monitors.length === 1 ? "" : "s"}
           </span>
-          <Button size="sm" onClick={() => setEditing("new")}>
+          <Button
+            size="sm"
+            disabled={!canWrite}
+            title={canWrite ? undefined : "Requires the monitors.write permission"}
+            onClick={() => setEditing("new")}
+          >
             <PlusIcon data-icon="inline-start" />
             new monitor
           </Button>
@@ -224,6 +230,14 @@ function MonitorsPage() {
                   <Switch
                     checked={m.enabled}
                     onCheckedChange={() => void toggleEnabled(m)}
+                    disabled={!canWrite}
+                    title={
+                      canWrite
+                        ? m.enabled
+                          ? "Pause monitor"
+                          : "Enable monitor"
+                        : "Requires the monitors.write permission"
+                    }
                     aria-label={m.enabled ? "Pause monitor" : "Enable monitor"}
                   />
                 </div>
@@ -241,17 +255,35 @@ function MonitorsPage() {
                 </p>
               </CardContent>
               <CardFooter className="gap-2">
-                <Button variant="chip" size="xs" onClick={() => void runTest(m)}>
+                <Button
+                  variant="chip"
+                  size="xs"
+                  onClick={() => void runTest(m)}
+                  disabled={!canWrite}
+                  title={canWrite ? undefined : "Requires the monitors.write permission"}
+                >
                   <SendIcon data-icon="inline-start" />
                   test
                 </Button>
-                <Button variant="chip" size="xs" onClick={() => setEditing(m.id)}>
+                <Button
+                  variant="chip"
+                  size="xs"
+                  onClick={() => setEditing(m.id)}
+                  disabled={!canWrite}
+                  title={canWrite ? undefined : "Requires the monitors.write permission"}
+                >
                   <PencilIcon data-icon="inline-start" />
                   edit
                 </Button>
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
-                    <Button variant="destructive" size="xs" className="ml-auto">
+                    <Button
+                      variant="destructive"
+                      size="xs"
+                      className="ml-auto"
+                      disabled={!canWrite}
+                      title={canWrite ? undefined : "Requires the monitors.write permission"}
+                    >
                       <Trash2Icon data-icon="inline-start" />
                       delete
                     </Button>
@@ -283,7 +315,13 @@ function MonitorsPage() {
                 Watch for <span className="text-gold">level:fatal</span>, spike rates, or a cron
                 that went quiet.
               </p>
-              <Button size="sm" className="mt-1" onClick={() => setEditing("new")}>
+              <Button
+                size="sm"
+                className="mt-1"
+                disabled={!canWrite}
+                title={canWrite ? undefined : "Requires the monitors.write permission"}
+                onClick={() => setEditing("new")}
+              >
                 <PlusIcon data-icon="inline-start" />
                 Create your first monitor
               </Button>
