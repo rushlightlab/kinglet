@@ -8,6 +8,7 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -55,6 +56,7 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
           </SelectTrigger>
           <SelectContent>
             <SelectGroup>
+              <SelectLabel>Project</SelectLabel>
               {projects.map((project) => (
                 <SelectItem key={project.id} value={String(project.id)}>
                   {project.name}

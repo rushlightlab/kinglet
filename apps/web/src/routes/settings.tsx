@@ -60,6 +60,7 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -534,6 +535,7 @@ function KeysPanel() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
+                        <SelectLabel>Available users</SelectLabel>
                         {candidates.map((u) => (
                           <SelectItem key={u.id} value={u.id}>
                             {u.email}
@@ -736,6 +738,7 @@ function ClearLogsCard({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
+                    <SelectLabel>Range</SelectLabel>
                     <SelectItem value="1h">last hour</SelectItem>
                     <SelectItem value="6h">last 6 hours</SelectItem>
                     <SelectItem value="24h">last 24 hours</SelectItem>
@@ -931,6 +934,7 @@ function UsersPanel() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectGroup>
+                            <SelectLabel>Role</SelectLabel>
                             <SelectItem value="member">member</SelectItem>
                             <SelectItem value="viewer">viewer</SelectItem>
                           </SelectGroup>
@@ -1025,6 +1029,7 @@ function UsersPanel() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
+                    <SelectLabel>Role</SelectLabel>
                     <SelectItem value="member">member — logs, monitors, keys</SelectItem>
                     <SelectItem value="viewer">viewer — read only</SelectItem>
                   </SelectGroup>

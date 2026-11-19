@@ -20,6 +20,7 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -245,6 +246,7 @@ function Explorer() {
           </SelectTrigger>
           <SelectContent>
             <SelectGroup>
+              <SelectLabel>Time window</SelectLabel>
               {Object.keys(WINDOWS).map((k) => (
                 <SelectItem key={k} value={k}>
                   {k}

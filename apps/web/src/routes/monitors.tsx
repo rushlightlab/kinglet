@@ -50,6 +50,7 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -568,6 +569,7 @@ function MonitorForm({
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
+                <SelectLabel>Condition</SelectLabel>
                 <SelectItem value="match">instant match — any event fires</SelectItem>
                 <SelectItem value="count_above">spike — more than N in a window</SelectItem>
                 <SelectItem value="count_below">silence — fewer than N in a window</SelectItem>
@@ -650,6 +652,7 @@ function MonitorForm({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
+                      <SelectLabel>Channel type</SelectLabel>
                       <SelectItem value="webhook">webhook</SelectItem>
                       <SelectItem value="discord">discord</SelectItem>
                       <SelectItem value="slack">slack</SelectItem>
