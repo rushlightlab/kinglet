@@ -4,6 +4,11 @@ node_modules
 **/node_modules
 **/dist
 .turbo
+**/.turbo
+**/*.tsbuildinfo
+**/coverage
+**/.DS_Store
+**/*.log
 data
 **/data
 **/*.db
