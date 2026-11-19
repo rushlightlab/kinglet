@@ -83,7 +83,7 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
         <span className="font-mono text-[10px] text-mist-faint">no project</span>
       )}
 
-      <div className="ml-auto flex flex-wrap items-center gap-2">
+      <div className="ml-auto flex flex-wrap items-center gap-3">
         {children}
 
         <DropdownMenu>
@@ -91,23 +91,17 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
             <Button
               variant="outline"
               size="sm"
-              className="gap-2 rounded-[5px] border-white/[0.08] bg-ink-900 px-2 hover:bg-ink-900"
+              className="gap-2.5 rounded-[5px] border-white/[0.08] bg-ink-900 py-0 pr-2.5 pl-1.5 hover:bg-ink-900"
               aria-label="Account menu"
             >
-              <Avatar size="sm" className="border border-white/[0.1]">
-                <AvatarFallback className="bg-ink-800 font-mono text-[10px] text-gold">
+              <Avatar size="sm">
+                <AvatarFallback className="bg-gold/[0.08] font-mono text-[9px] font-semibold text-gold">
                   {initials}
                 </AvatarFallback>
               </Avatar>
               <span className="hidden max-w-36 truncate font-mono text-[10px] text-mist-dim md:inline">
                 {user.email}
               </span>
-              <Badge
-                variant="outline"
-                className="hidden text-[9px] normal-case tracking-normal sm:inline-flex"
-              >
-                {user.role}
-              </Badge>
               <ChevronDownIcon className="size-3 text-mist-faint" />
             </Button>
           </DropdownMenuTrigger>
