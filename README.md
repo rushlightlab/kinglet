@@ -341,6 +341,11 @@ git push origin v0.3.0
 After the first publish, make the package public (GitHub → Packages → kinglet
 → Package settings → Change visibility) if you want anonymous pulls.
 
+The docs changelog and landing version badge are generated from GitHub
+Releases. Publishing a release updates them on the next docs build; to trigger
+that build automatically, add a Cloudflare deploy hook as the
+`CLOUDFLARE_DOCS_DEPLOY_HOOK` Actions secret in this repository.
+
 ## Roadmap
 
 - [x] v0.1 — HTTP ingest, live tail, filter grammar, histogram, retention, Docker

@@ -1,0 +1,28 @@
+name: Refresh docs changelog
+
+# GitHub Releases are the source of truth for the docs changelog. A release
+# changes the landing version badge and /changelog/ on the next docs build.
+# To rebuild the docs immediately, add a Cloudflare deploy hook as the
+# CLOUDFLARE_DOCS_DEPLOY_HOOK repository secret; without it this is a no-op.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Cloudflare docs build
+        env:
+          DEPLOY_HOOK: ${{ secrets.CLOUDFLARE_DOCS_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "::notice::CLOUDFLARE_DOCS_DEPLOY_HOOK is not configured; the docs will refresh on the next site build."
+            exit 0
+          fi
+          curl -fsS -X POST "$DEPLOY_HOOK"
