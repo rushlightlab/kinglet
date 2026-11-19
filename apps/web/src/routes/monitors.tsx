@@ -669,8 +669,7 @@ function MonitorForm({
                 <Button
                   type="button"
                   variant="chip"
-                  size="icon-xs"
-                  className="self-center"
+                  size="icon"
                   aria-label="Remove channel"
                   onClick={() => set("channels", form.channels.filter((_, j) => j !== i))}
                 >

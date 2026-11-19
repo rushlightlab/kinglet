@@ -652,6 +652,7 @@ function KeysPanel() {
                     type="button"
                     variant="outline"
                     size="sm"
+                    className="h-9"
                     disabled={!memberToAdd}
                     onClick={() => void addMember()}
                   >
