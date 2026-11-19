@@ -297,7 +297,7 @@ export default function LogControls(props: LogControlsProps) {
             onClick={props.onToggleLive}
             className={`${segmentClass} ${
               props.live
-                ? "bg-gold/[0.07] text-gold"
+                ? "text-gold hover:bg-gold/[0.04]"
                 : "text-mist-dim hover:bg-white/[0.025] hover:text-mist"
             }`}
           >
