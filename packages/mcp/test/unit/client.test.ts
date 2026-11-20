@@ -1,66 +1,33 @@
-import { createServer } from "node:http";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { KingletApiError, KingletClient } from "../../src/client.js";
 import type { McpConfig } from "../../src/config.js";
 
 const TEST_KEY = "km_client_error_bound_not_a_real_secret";
 
-interface FakeApi extends McpConfig {
-  close(): Promise<void>;
-}
-
-/** Local type guard: `server.address()` returns a string for a pipe. */
-function isString(value: unknown): value is string {
-  return typeof value === "string";
-}
-
-/** Loopback-only API stub; no test in this suite may use a real network. */
-async function startErrorServer(status: number, body: string): Promise<FakeApi> {
-  const server = createServer((_request, response) => {
-    response.statusCode = status;
-    response.setHeader("content-type", "application/json");
-    response.end(body);
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-
-  const address = server.address();
-
-  if (address === null || isString(address)) {
-    throw new Error("MCP client suite: fake server has no port");
-  }
-
-  return {
-    url: `http://127.0.0.1:${address.port}`,
-    key: TEST_KEY,
-    timeoutMs: 5_000,
-    userAgent: "kinglet-mcp-test",
-    close: async () => {
-      server.closeAllConnections();
-
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      });
-    },
-  };
-}
+const TEST_CONFIG: McpConfig = {
+  url: "http://kinglet.test",
+  key: TEST_KEY,
+  timeoutMs: 5_000,
+  userAgent: "kinglet-mcp-test",
+};
 
 describe("KingletClient error text", () => {
   it("bounds a hostile API error body and strips line breaks", async () => {
     const hostile = `first line\nsecond line\r\n${"x".repeat(5_000)}`;
-    const api = await startErrorServer(400, JSON.stringify({ error: hostile }));
+
+    // A stubbed fetch keeps this a unit test: no socket, no port.
+    const fetchMock = vi.fn(
+      async (): Promise<Response> =>
+        new Response(JSON.stringify({ error: hostile }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
 
     try {
-      const client = new KingletClient(api);
+      const client = new KingletClient(TEST_CONFIG);
       let thrown: Error | null = null;
 
       try {
@@ -84,8 +51,9 @@ describe("KingletClient error text", () => {
       expect(thrown.message).not.toContain("\r");
       expect(thrown.message.startsWith("first line second line")).toBe(true);
       expect(thrown.message).not.toContain("x".repeat(600));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
-      await api.close();
+      vi.unstubAllGlobals();
     }
   });
 });

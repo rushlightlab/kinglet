@@ -183,12 +183,14 @@ These are intentional gaps, not claims of coverage:
 - The SDK batches by event count, not bytes (`batchSize` is a count). A batch of
   very large events can exceed the server body limit and is re-queued on the
   rejection; byte-based batching is a product follow-up.
-- Archive import caps decompressed NDJSON at 512 MiB per part (`MAX_SPOOL_BYTES`;
-  legitimate parts hold at most 10,000 events) and spools under
-  `<dataDir>/tmp`. It does not preflight free space with `statfs`, so that path
-  needs room for the largest part. The cap test injects a small limit instead
-  of writing a 512 MiB fixture.
+- Archive import caps decompressed NDJSON at 1 GiB per part (`MAX_SPOOL_BYTES`;
+  legitimate parts hold at most 10,000 events, and escaped control characters
+  can push a part past 512 MiB) and spools under `<dataDir>/tmp`. It does not
+  enforce the 10,000-event part limit or preflight free space with `statfs`, so
+  the spool path needs room for the largest part; both remain Task 10
+  follow-ups. The cap test injects a small limit instead of writing a 1 GiB
+  fixture.
 - Test coverage is not measured or enforced. There are no coverage thresholds.
 
-Task 9 and the final suite review track the remaining hardening items; do not
+Task 10 and the final suite review track the remaining hardening items; do not
 describe the gaps above as covered.

@@ -321,7 +321,12 @@ describe("manifest signing payload", () => {
     const manifest = sampleManifest();
 
     const reordered: BackupManifest = {
-      counts: manifest.counts,
+      counts: {
+        monitors: manifest.counts.monitors,
+        events: manifest.counts.events,
+        users: manifest.counts.users,
+        projects: manifest.counts.projects,
+      },
       storage: manifest.storage,
       encryption: manifest.encryption,
       compression: manifest.compression,

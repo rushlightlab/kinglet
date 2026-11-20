@@ -15,6 +15,7 @@ import type { KingletDb } from "../storage/db.js";
 import type { Storage } from "../storage/index.js";
 import * as schema from "../storage/schema.js";
 import { archiveLevelIndex, parseArchiveLine } from "./ndjson.js";
+import { resolveMaxSpoolBytes } from "./spool.js";
 import { ArchiveError, isArchiveDate } from "./types.js";
 import type { ArchiveImportResult, ArchiveLine } from "./types.js";
 
@@ -36,18 +37,6 @@ const PART_RE =
 const MAX_IMPORT_MESSAGE = 8_000;
 const MAX_IMPORT_FIELDS = 32_768;
 const MAX_IMPORT_FUTURE_SKEW_MS = 5 * 60_000;
-
-/**
- * Decompressed spool cap for one archive part.
- *
- * The exporter writes at most 10,000 events per part; ingest caps a message at
- * 8,000 characters and serialized fields at 32 KiB. Add ~1 KiB per line for
- * `uid`, `projectId`, `service`, `env`, and JSON punctuation, and the
- * theoretical worst case is about 400 MiB. 512 MiB leaves room for JSON
- * escaping without letting a hostile bucket object spool without bound. A
- * legitimate part is orders of magnitude smaller.
- */
-export const MAX_SPOOL_BYTES = 512 * 1024 * 1024;
 
 export interface ImportArchiveOptions {
   projectId: string;
@@ -207,7 +196,7 @@ async function importPart(
   }
 
   const digest = createHash("sha256");
-  const maxSpoolBytes = options.maxSpoolBytes ?? MAX_SPOOL_BYTES;
+  const maxSpoolBytes = resolveMaxSpoolBytes(options.maxSpoolBytes);
   let spooledBytes = 0;
 
   // Count decompressed bytes before they reach the spool file. Failing inside

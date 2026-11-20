@@ -168,15 +168,23 @@ describe("runTool", () => {
     expect(resultText(outcome)).toBe("monitor not found");
   });
 
-  it("hides unexpected error details in the tool result", async () => {
-    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  it("hides unexpected error details from the result and the audit line", async () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const eventContent = "secret error event content";
+    const apiKey = "km_error_audit_must_not_print_this_key";
 
     const outcome = await runTool("search_logs", async () => {
-      throw new Error("SQLITE_ERROR near SELECT");
+      throw new Error(`SQLITE_ERROR near SELECT ${eventContent} ${apiKey}`);
     });
+
+    const audit = write.mock.calls.map((call) => String(call[0])).join("");
 
     expect(outcome.isError).toBe(true);
     expect(resultText(outcome)).toBe("unexpected error while calling Kinglet");
     expect(resultText(outcome)).not.toContain("SQLITE");
+    expect(audit).toContain("status=error");
+    expect(audit).toContain("rows=0");
+    expect(audit).not.toContain(eventContent);
+    expect(audit).not.toContain(apiKey);
   });
 });

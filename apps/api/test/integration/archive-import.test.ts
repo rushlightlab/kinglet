@@ -212,6 +212,13 @@ async function eventCount(projectId: string): Promise<number> {
   return rows.length;
 }
 
+/** Names left under `<dataDir>/tmp`; [] when the root does not exist. */
+function spoolEntries(dataDir: string): string[] {
+  const root = path.join(dataDir, "tmp");
+
+  return fs.existsSync(root) ? fs.readdirSync(root) : [];
+}
+
 describe("archive import integrity", () => {
   it("rejects a part whose digest differs from the cached archive row", async () => {
     const { storage } = current();
@@ -266,7 +273,7 @@ describe("archive import integrity", () => {
         projectId,
         dataDir: config.dataDir,
         s3: store,
-        // Injected so the cap is exercised without a 512 MiB fixture.
+        // Injected so the cap is exercised without a 1 GiB fixture.
         maxSpoolBytes: 1_000,
       }),
     );
@@ -275,9 +282,39 @@ describe("archive import integrity", () => {
     expect(error.message).toBe("archive part is too large to import");
     expect(await eventCount(projectId)).toBe(0);
 
-    const spoolRoot = path.join(config.dataDir, "tmp");
+    const leftovers = spoolEntries(config.dataDir);
 
-    expect(fs.existsSync(spoolRoot) ? fs.readdirSync(spoolRoot) : []).toEqual([]);
+    expect(leftovers.filter((name) => name.startsWith("archive-import-"))).toEqual([]);
+  });
+
+  it("rejects a part whose downloaded bytes are not valid zstd", async () => {
+    const { config, storage } = current();
+    const projectId = await newProject("corrupt-zstd");
+    const store = new InMemoryBackupStore();
+    const key = partKey(projectId, store.prefix, "deadbeef0000");
+    const corrupt = Buffer.from("this is not a zstd frame", "utf8");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    store.putObject(key, corrupt);
+    stubDownload(corrupt);
+
+    try {
+      const error = await archiveErrorOf(
+        importArchive(storage, {
+          projectId,
+          dataDir: config.dataDir,
+          s3: store,
+        }),
+      );
+
+      expect(error.status).toBe(500);
+      expect(error.message).toBe("archive import failed");
+      expect(error.message).not.toContain("zstd");
+      expect(await eventCount(projectId)).toBe(0);
+      expect(spoolEntries(config.dataDir)).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("rejects an uncached part whose key prefix does not match its digest", async () => {
