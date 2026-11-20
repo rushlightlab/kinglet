@@ -3,6 +3,7 @@
   "version": "0.3.0",
   "private": true,
   "description": "Small. Light. King. — a tiny self-hostable log platform.",
+  "type": "module",
   "packageManager": "pnpm@12.21.0",
   "engines": {
     "node": ">=26"
@@ -15,13 +16,19 @@
     "lint:fix": "oxlint . --fix",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
+    "test": "pnpm test:unit && pnpm test:integration",
+    "test:unit": "vitest run --config vitest.unit.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "demo:logs": "node scripts/demo-logs.mjs",
     "demo:webhook": "node scripts/webhook-catcher.mjs"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.94.0",
+    "@playwright/test": "^1.65.1",
+    "@vitest/coverage-v8": "^5.1.1",
     "oxfmt": "0.79.0",
     "oxlint": "1.94.0",
-    "turbo": "^2.11.13"
+    "turbo": "^2.11.13",
+    "vitest": "^5.1.1"
   }
 }
