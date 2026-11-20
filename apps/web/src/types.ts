@@ -86,7 +86,12 @@ export interface Monitor {
   intervalMs: number;
   cooldownMs: number;
   enabled: boolean;
-  channels: NotifyChannel[];
+  /** Legacy inline channels. Kept for one release; prefer `channelIds`. */
+  channels?: NotifyChannel[];
+  /** Channel ids selected on the monitor. Preferred over legacy `channels`. */
+  channelIds?: string[];
+  /** Server-resolved channel summaries; never contain webhook URLs. */
+  resolvedChannels?: NotificationChannelSummary[];
   createdAt: number;
   updatedAt: number;
   /** Runtime observability from the alert engine. */
@@ -122,6 +127,8 @@ export interface Project {
   slug: string;
   createdAt: number;
   canClearLogs: boolean;
+  /** Present once the archive settings endpoint reports per-project state. */
+  archiveEnabled?: boolean;
 }
 
 export interface ProjectMember {
@@ -145,14 +152,187 @@ export interface AppUser {
   updatedAt: number;
 }
 
+export type KeyType = "api" | "mcp";
+
 export interface ApiKeyInfo {
   id: string;
   projectId: string;
   name: string;
   prefix: string;
   scopes: string[];
+  /** Defaults to `api` when an older server omits it. */
+  keyType?: KeyType;
   createdBy: string | null;
   createdByEmail: string | null;
   createdAt: number;
   lastUsedAt: number | null;
+}
+
+// ---------- notification channels ----------
+
+export type NotificationAction =
+  | "backup.succeeded"
+  | "backup.failed"
+  | "backup.restore_staged"
+  | "archive.succeeded"
+  | "archive.failed"
+  | "system.warning";
+
+export interface NotificationChannelHealth {
+  status: string;
+  lastDeliveryAt: number | null;
+  error?: string | null;
+}
+
+export interface NotificationChannelSummary {
+  id: string;
+  name: string;
+  type: ChannelType;
+  enabled: boolean;
+  health: NotificationChannelHealth;
+}
+
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  type: ChannelType;
+  /** Masked in list responses; the single-channel read returns the full URL. */
+  url: string;
+  enabled: boolean;
+  decoration: boolean;
+  actions: NotificationAction[];
+  createdAt: number;
+  updatedAt: number;
+  lastTestAt: number | null;
+  lastTestStatus: string | null;
+  lastTestError: string | null;
+}
+
+export interface NotificationChannelInput {
+  name: string;
+  type: ChannelType;
+  url: string;
+  enabled: boolean;
+  decoration: boolean;
+  actions: NotificationAction[];
+}
+
+export interface NotificationDelivery {
+  id: string;
+  channelId: string;
+  scope: string;
+  event: string;
+  subject: string | null;
+  status: string;
+  error: string | null;
+  createdAt: number;
+}
+
+// ---------- backups, archive, and system events ----------
+
+export type BackupPhase = "snapshot" | "compress" | "encrypt" | "upload" | "verify" | "retention";
+
+export type BackupTrigger = "scheduled" | "manual" | "catch-up" | "discovered";
+
+export type BackupEncryption = "none" | "age";
+
+export interface BackupStatus {
+  configured: boolean;
+  enabled: boolean;
+  running: boolean;
+  phase: BackupPhase | null;
+  lastSuccessAt: number | null;
+  lastFailureAt: number | null;
+  nextRunAt: number | null;
+  lastError: string | null;
+  databaseBytes: number | null;
+  /** Environment variable names only — never values. */
+  setupMissing: string[];
+  /** Optional server hints, tolerated when absent. */
+  storage?: string;
+  configState?: string;
+  restoreStagedId?: string | null;
+}
+
+export interface BackupSettings {
+  enabled: boolean;
+  scheduleCron: string;
+  scheduleTimezone: string;
+  retentionCount: number;
+  updatedAt: number;
+}
+
+export interface BackupSettingsInput {
+  enabled: boolean;
+  scheduleCron: string;
+  scheduleTimezone: string;
+  retentionCount: number;
+}
+
+export interface BackupSchedulePreview {
+  valid: boolean;
+  description?: string;
+  nextRuns?: number[];
+  error?: string;
+}
+
+export interface BackupCounts {
+  projects: number;
+  users: number;
+  events: number;
+  monitors: number;
+}
+
+export interface BackupSnapshot {
+  id: string;
+  runId: string | null;
+  trigger: BackupTrigger;
+  createdAt: number;
+  sizeBytes: number;
+  sha256: string;
+  encryption: BackupEncryption;
+  appVersion: string;
+  schemaVersion: number;
+  counts: BackupCounts;
+  state: string;
+  downloadedAt: number | null;
+  downloadedBy: string | null;
+  discovered: boolean;
+}
+
+export interface ArchiveStatus {
+  enabled: boolean;
+  running: boolean;
+  lastRunAt: number | null;
+  lastError: string | null;
+}
+
+export interface ArchiveSettings {
+  enabled: boolean;
+  scheduleCron: string;
+  scheduleTimezone: string;
+  deleteOnFailure: boolean;
+  updatedAt: number;
+}
+
+export interface SystemStatus {
+  backup: BackupStatus;
+  archive: ArchiveStatus;
+  at: number;
+}
+
+export interface BackupProgress {
+  runId: string;
+  phase: BackupPhase;
+  done: number | null;
+  total: number | null;
+  at: number;
+}
+
+export interface ArchiveProgress {
+  projectId: string;
+  phase: string;
+  done: number | null;
+  total: number | null;
+  at: number;
 }

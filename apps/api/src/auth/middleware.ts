@@ -4,9 +4,10 @@ import type { Storage } from "../storage/index.js";
 import * as schema from "../storage/schema.js";
 import { verifyApiKey } from "./apikeys.js";
 import type { KingletAuth } from "./auth.js";
-import type { KeyScope, Permission, Role } from "./roles.js";
+import type { AnyKeyScope, KeyType, Permission, Role } from "./roles.js";
 import { isRole, permissionsForRole } from "./roles.js";
 import { isUuid } from "./ids.js";
+import { allowMcpRequest } from "./mcp-limit.js";
 
 export type AuthInfo =
   | {
@@ -19,7 +20,8 @@ export type AuthInfo =
       keyId: string;
       name: string;
       projectId: string;
-      scopes: Set<KeyScope>;
+      keyType: KeyType;
+      scopes: Set<AnyKeyScope>;
     };
 
 export interface AuthUser {
@@ -69,6 +71,7 @@ async function resolveAuth(
       keyId: key.id,
       name: key.name,
       projectId: key.projectId,
+      keyType: key.keyType,
       scopes: key.scopes,
     };
   }
@@ -110,6 +113,13 @@ export function authMiddleware(storage: Storage, auth: KingletAuth): MiddlewareH
     const info = await resolveAuth(c, storage, auth, forceFreshSession);
 
     if (!info) return c.json({ error: "unauthorized" }, 401);
+
+    // MCP credentials are rate-limited server-side per key: 60 requests per
+    // minute with a burst of 10. API keys keep their existing route limits.
+    if (info.kind === "key" && info.keyType === "mcp" && !allowMcpRequest(info.keyId)) {
+      return c.json({ error: "rate limit exceeded (60/min)" }, 429);
+    }
+
     c.set("auth", info);
     await next();
   };

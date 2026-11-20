@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { AppUser, Project } from "./types";
+import type { AppUser, Project, UserRole } from "./types";
 
 export interface AppContextValue {
   user: AppUser;
@@ -23,4 +23,17 @@ export function useApp(): AppContextValue {
 
 export function hasPermission(permissions: string[], permission: string): boolean {
   return permissions.includes(permission);
+}
+
+/**
+ * Admin-only surfaces are gated by role as well as by the permission list.
+ * The server role mapping is authoritative, but a stale `/v1/me` payload (or
+ * a deployment mid-upgrade) must not hide Settings tabs from an admin.
+ */
+export function hasPermissionOrAdmin(
+  role: UserRole,
+  permissions: string[],
+  permission: string,
+): boolean {
+  return role === "admin" || hasPermission(permissions, permission);
 }

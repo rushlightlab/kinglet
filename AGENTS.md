@@ -27,8 +27,10 @@ not an open multi-tenant SaaS.
 - License: MIT
 
 Core features: HTTP ingest, live tail over SSE, filter grammar, FTS5 substring
-search, volume histogram, monitors/alerts (webhook, Discord, Slack), retention,
-multi-project auth, scoped `kl_` API keys, and the zero-dependency Node SDK.
+search, volume histogram, monitors/alerts, reusable notification channels,
+retention, multi-project auth, scoped `kl_` API keys and `km_` MCP keys, the
+zero-dependency Node SDK, optional S3 snapshots/restore and log archive, and the
+stdio MCP server.
 
 ## Repository map
 
@@ -38,6 +40,7 @@ multi-project auth, scoped `kl_` API keys, and the zero-dependency Node SDK.
 | `apps/web/`                        | React UI (TanStack Router, TanStack Virtual, Vite, Tailwind, shadcn/Radix)    |
 | `packages/config/`                 | Shared TypeScript config                                                      |
 | `packages/sdk-node/`               | `@kinglet/sdk-node`, the batching Node client                                 |
+| `packages/mcp/`                    | `@kinglet/mcp`, the stdio MCP server for AI clients                           |
 | `scripts/`                         | Local demos (`demo-logs.mjs`, `webhook-catcher.mjs`)                          |
 | `deploy/`                          | Caddy and Docker Compose TLS examples                                         |
 | `tools/oxlint/anti-slop/`          | Vendored Oxlint plugin and its provenance                                     |
@@ -146,6 +149,26 @@ Drizzle schema is in `apps/api/src/storage/schema.ts`; migrations live in
 `https://`, and `wss://` paths use remote libSQL/Turso. Retention, per-project
 event/byte caps, and the local database cap are enforced by the API/retention
 jobs. Do not bypass them in a route.
+
+### Backups and archive
+
+Optional S3 snapshots live in `apps/api/src/backups/`; they are enabled only when
+`KINGLET_BACKUP_S3_*` is complete and storage is local SQLite. The bucket is the
+source of truth; `backup_snapshots` is a cache. Snapshots are `VACUUM INTO` →
+zstd → optional age → multipart upload → HEAD verify → manifest last. Restores
+are staged under `data/restore/` and applied at boot before the database opens;
+the pre-restore copy is kept for rollback and sessions are cleared. Log archive
+(M4) exports expiring events to deterministic NDJSON parts before retention
+deletes them; retention must skip archive-enabled projects when the global
+archive is enabled.
+
+### MCP
+
+`packages/mcp/` is the stdio MCP server (`@kinglet/mcp`). It authenticates with
+`km_` MCP keys and calls the public HTTP API; it never opens the database. MCP
+scopes are `logs.read`, `monitors.read`, and `monitors.write`; API keys keep
+`ingest`/`query`. Neither key type inherits a human role. Monitor read responses
+to MCP clients must never include webhook URLs or raw engine errors.
 
 ### Web UI
 
@@ -275,11 +298,27 @@ Treat a change to any of these as security-sensitive and call it out explicitly.
   Discord, and Slack; never include secrets in payloads or logs.
 - The test-notification endpoint must not leak internal network details to
   non-admin callers.
+- Shared notification channel URLs are admin-only secrets: list responses mask
+  them, monitor editors get id/name/type/health only, and delivery errors are
+  sanitized.
+
+### Backups, restore, and MCP
+
+- S3 credentials and the age passphrase are env-only. Never store, log, or
+  return them; manifests and notification payloads contain no secrets.
+- Snapshots require local SQLite. Remote libSQL/Turso uses provider PITR.
+- Restore is staged, applied before the database opens, keeps a pre-restore
+  copy, refuses a newer schema, and clears sessions afterward. API keys remain.
+- MCP keys are project-bound (`km_`), use a disjoint scope vocabulary, never
+  act as a human role, and can only manage monitors. Never expose webhook URLs,
+  admin routes, backups, restore, archive, or arbitrary SQL/shell through MCP.
 
 ### Secrets
 
-- `BETTER_AUTH_SECRET`, bootstrap passwords, `KINGLET_DB_AUTH_TOKEN`, and API
-  keys are secrets. Never commit, print, or send them to logs.
+- `BETTER_AUTH_SECRET`, bootstrap passwords, `KINGLET_DB_AUTH_TOKEN`, API/MCP
+  keys, `KINGLET_BACKUP_S3_SECRET_ACCESS_KEY`, and
+  `KINGLET_BACKUP_PASSPHRASE` are secrets. Never commit, print, or send them to
+  logs.
 - Data directories contain the database, auth secret, and bootstrap password.
   Keep them out of Git and image layers.
 
@@ -390,5 +429,8 @@ explicit approval.
 - Ingest normalization: `apps/api/src/ingest.ts`.
 - Monitors and alerts: `apps/api/src/monitors.ts`.
 - Webhooks/SSRF/sanitization: `apps/api/src/notify.ts`.
+- Notification channels and delivery: `apps/api/src/notifications/`.
+- Snapshots, archive, and restore: `apps/api/src/backups/`, `archive/`, `restore/`.
+- MCP server and machine keys: `packages/mcp/`, `apps/api/src/auth/apikeys.ts`.
 - Storage/schema/migrations: `apps/api/src/storage/` and `apps/api/drizzle/`.
 - CI/release: `.github/workflows/`, `Dockerfile`, `docker-compose.yml`, `deploy/`.

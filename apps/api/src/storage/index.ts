@@ -18,6 +18,7 @@ export async function createStorage(settings: StorageSettings): Promise<Storage>
     kind,
     description,
     db,
+    client,
     insertEvents: (projectId, events, apiKeyId) =>
       eventsRepo.insertEvents(db, projectId, events, apiKeyId),
     queryEvents: (opts) => eventsRepo.queryEvents(db, opts),
@@ -25,7 +26,8 @@ export async function createStorage(settings: StorageSettings): Promise<Storage>
     histogramPoints: (projectId, from, to, bucketMs) =>
       eventsRepo.histogramPoints(db, projectId, from, to, bucketMs),
     listServices: (projectId) => eventsRepo.listServices(db, projectId),
-    deleteOlderThan: (ts) => eventsRepo.deleteOlderThan(db, ts),
+    deleteOlderThan: (ts, excludeProjectIds) =>
+      eventsRepo.deleteOlderThan(db, ts, excludeProjectIds),
     deleteAlertsOlderThan: (ts) => eventsRepo.deleteAlertsOlderThan(db, ts),
     deleteByProject: (projectId, range) => eventsRepo.deleteByProject(db, projectId, range),
     runMaintenance: async () => {

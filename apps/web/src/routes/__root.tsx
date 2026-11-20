@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { fetchMe, fetchProjects, logout, UnauthorizedError } from "../api";
 import { AppContext } from "../app-context";
 import type { AppContextValue } from "../app-context";
+import { SystemEventsProvider } from "../system-events";
 import ErrorAlert from "../components/ErrorAlert";
 import Login from "../components/Login";
 import { Button } from "@/components/ui/button";
@@ -174,9 +175,20 @@ function RootComponent() {
     },
   };
 
+  // The admin event feed is the only source of live backup/restore/archive
+  // progress. Gate it on the role: the server endpoint is admin-only, and a
+  // member's connection would just fail and reconnect.
+  const isAdmin = state.user.role === "admin";
+
   return (
     <AppContext.Provider value={value}>
-      <Outlet />
+      {isAdmin ? (
+        <SystemEventsProvider>
+          <Outlet />
+        </SystemEventsProvider>
+      ) : (
+        <Outlet />
+      )}
     </AppContext.Provider>
   );
 }

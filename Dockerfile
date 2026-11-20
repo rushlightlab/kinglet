@@ -11,6 +11,7 @@ COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/config/package.json packages/config/package.json
 COPY packages/sdk-node/package.json packages/sdk-node/package.json
+COPY packages/mcp/package.json packages/mcp/package.json
 RUN --mount=type=cache,id=kinglet-pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 

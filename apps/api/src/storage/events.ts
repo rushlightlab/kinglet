@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, isNotNull, lt, lte, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, isNotNull, lt, lte, notInArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { Normalized } from "../ingest.js";
 import { uuidv7 } from "../auth/ids.js";
@@ -187,13 +187,25 @@ export async function listServices(db: KingletDb, projectId: string): Promise<Se
   return rows.map((row) => ({ name: String(row.name), count: Number(row.n) }));
 }
 
-/** Chunked delete so a big backlog never blocks ingest for long. */
-export async function deleteOlderThan(db: KingletDb, ts: number): Promise<number> {
+/**
+ * Chunked delete so a big backlog never blocks ingest for long. Projects with
+ * archive enabled are excluded; their archive job owns deletion.
+ */
+export async function deleteOlderThan(
+  db: KingletDb,
+  ts: number,
+  excludeProjectIds: readonly string[] = [],
+): Promise<number> {
   let total = 0;
+
+  const exclusion =
+    excludeProjectIds.length > 0
+      ? notInArray(schema.events.projectId, [...excludeProjectIds])
+      : undefined;
 
   for (;;) {
     const result = await db.run(
-      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ts < ${ts} ORDER BY id LIMIT 10000)`,
+      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ts < ${ts}${exclusion ? sql` AND ${exclusion}` : sql``} ORDER BY id LIMIT 10000)`,
     );
 
     const changed = Number(result.rowsAffected ?? 0);

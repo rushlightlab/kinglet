@@ -28,9 +28,20 @@ import {
   userAuth,
 } from "./auth/middleware.js";
 import type { AppEnv, AuthInfo } from "./auth/middleware.js";
-import { isKeyScope, isRole, permissionsForRole } from "./auth/roles.js";
-import type { KeyScope, Role } from "./auth/roles.js";
+import {
+  isKeyType,
+  isRole,
+  permissionsForRole,
+  scopesForType,
+  validateKeyScopes,
+} from "./auth/roles.js";
+import type { AnyKeyScope, KeyType, Role } from "./auth/roles.js";
 import { isUuid, uuidv7 } from "./auth/ids.js";
+import { canCapability, keyCan } from "./auth/key-capabilities.js";
+import type { KeyCapability } from "./auth/key-capabilities.js";
+import type { BackupStatus } from "./backups/types.js";
+import { buildKeyContext } from "./mcp/context.js";
+import { APP_VERSION } from "./version.js";
 import {
   countAdmins,
   createManagedUser,
@@ -51,13 +62,14 @@ import { isBoolean, isJsonObject, isString } from "./json.js";
 import type { JsonObject, JsonValue } from "./json.js";
 import { validateQueryString } from "./query-validation.js";
 import { eventSizeBytes } from "./storage/events.js";
-import type { MonitorEngine } from "./monitors.js";
+import type { Monitor, MonitorEngine } from "./monitors.js";
 import {
   createMonitorFromRaw,
   deleteMonitor,
   getMonitor,
   listAlerts,
   listMonitors,
+  resolveMonitorNotifyTargets,
   updateMonitorFromRaw,
 } from "./monitors.js";
 import { sendNotice, validateWebhookUrl } from "./notify.js";
@@ -218,14 +230,45 @@ function canManageApiKey(info: AuthInfo, key: { createdBy: string | null }): boo
   return info.kind === "user" && (info.user.role === "admin" || key.createdBy === info.user.id);
 }
 
+function readScopeError(authInfo: AuthInfo): string {
+  if (authInfo.kind !== "key") return "forbidden";
+
+  return authInfo.keyType === "mcp"
+    ? "this MCP key is missing the logs.read scope"
+    : "this key cannot query (missing query scope)";
+}
+
+function monitorForAuth(authInfo: AuthInfo, monitor: Monitor): Monitor {
+  if (authInfo.kind === "user" && can(authInfo, "monitors.write")) return monitor;
+
+  return {
+    ...monitor,
+    channels: monitor.channels.map((channel) => ({ type: channel.type, url: "hidden" })),
+    resolvedChannels: monitor.resolvedChannels.map((channel) => ({
+      ...channel,
+      health: { ...channel.health, error: null },
+    })),
+    lastError: null,
+    lastErrorAt: null,
+  };
+}
+
 function monitorGuard(c: Context<AppEnv>, write: boolean): Response | null {
   const authInfo = getAuth(c);
+  const capability: KeyCapability = write ? "monitors.write" : "monitors.read";
 
-  if (authInfo.kind === "key") return c.json({ error: "keys cannot manage monitors" }, 403);
+  if (authInfo.kind === "key") {
+    // Invariant: application keys never manage monitors, whatever their scopes.
+    if (authInfo.keyType === "api") {
+      return c.json({ error: "keys cannot manage monitors" }, 403);
+    }
 
-  return can(authInfo, write ? "monitors.write" : "monitors.read")
-    ? null
-    : c.json({ error: "forbidden" }, 403);
+    return keyCan(authInfo, capability)
+      ? null
+      : c.json({ error: `this MCP key is missing the ${capability} scope` }, 403);
+  }
+
+  return can(authInfo, capability) ? null : c.json({ error: "forbidden" }, 403);
 }
 
 export function registerRoutes(
@@ -234,9 +277,8 @@ export function registerRoutes(
   engine: MonitorEngine,
   config: Config,
   auth: KingletAuth,
+  services?: { backupStatus?: () => Promise<BackupStatus> },
 ): void {
-  void config;
-
   // ================= current user =================
 
   app.get("/v1/me", async (c) => {
@@ -248,6 +290,15 @@ export function registerRoutes(
     if (!user) return c.json({ error: "user not found" }, 404);
 
     return c.json({ user, permissions: permissionsForRole(user.role) });
+  });
+
+  // Machine-credential context for MCP and SDK clients. Never reads ?project=.
+  app.get("/v1/context", async (c) => {
+    const context = await buildKeyContext(storage, getAuth(c), config.retentionDays);
+
+    if (!context) return c.json({ error: "API key required" }, 403);
+
+    return c.json(context);
   });
 
   // ================= projects =================
@@ -405,11 +456,18 @@ export function registerRoutes(
 
     await storage.db.transaction(async (tx) => {
       await tx.delete(schema.alerts).where(inArray(schema.alerts.monitorId, monitorIds));
+      await tx
+        .delete(schema.monitorChannels)
+        .where(inArray(schema.monitorChannels.monitorId, monitorIds));
       await tx.delete(schema.monitors).where(eq(schema.monitors.projectId, id));
       await tx.delete(schema.events).where(eq(schema.events.projectId, id));
       await tx.delete(schema.projectUsage).where(eq(schema.projectUsage.projectId, id));
       await tx.delete(schema.apiKeys).where(eq(schema.apiKeys.projectId, id));
       await tx.delete(schema.projectMembers).where(eq(schema.projectMembers.projectId, id));
+      await tx
+        .delete(schema.projectArchiveSettings)
+        .where(eq(schema.projectArchiveSettings.projectId, id));
+      await tx.delete(schema.archiveParts).where(eq(schema.archiveParts.projectId, id));
       await tx.delete(schema.projects).where(eq(schema.projects.id, id));
     });
     await engine.refresh();
@@ -673,30 +731,41 @@ export function registerRoutes(
     const name = isString(body.name) ? body.name.trim().slice(0, 80) : "";
 
     if (!name) return c.json({ error: "name is required" }, 400);
+
+    if (body.keyType !== undefined && !isKeyType(body.keyType)) {
+      return c.json({ error: "keyType must be api or mcp" }, 400);
+    }
+
+    const keyType: KeyType = isKeyType(body.keyType) ? body.keyType : "api";
     const rawScopes = body.scopes;
-    let scopes: KeyScope[];
+    let scopes: AnyKeyScope[];
 
     if (rawScopes === undefined) {
-      // Least privilege: a key created without explicit scopes can only ship.
-      scopes = ["ingest"];
+      // Least privilege: app keys ship; MCP keys get read-only diagnostics.
+      scopes = keyType === "mcp" ? ["logs.read", "monitors.read"] : ["ingest"];
     } else if (!Array.isArray(rawScopes) || rawScopes.length === 0) {
-      return c.json({ error: "scopes must be a non-empty array of: ingest, query" }, 400);
+      return c.json(
+        { error: `scopes must be a non-empty array of: ${scopesForType(keyType).join(", ")}` },
+        400,
+      );
     } else {
-      const unknownScopes = rawScopes.filter((s) => !isKeyScope(s));
+      const validated = validateKeyScopes(keyType, rawScopes);
 
-      if (unknownScopes.length > 0) {
+      if (!validated) {
         return c.json(
-          { error: `unknown scope(s): ${unknownScopes.join(", ")} — use ingest and/or query` },
+          {
+            error: `invalid scope(s) for a ${keyType} key — use ${scopesForType(keyType).join(", ")}`,
+          },
           400,
         );
       }
 
-      scopes = [...new Set(rawScopes.filter(isKeyScope))];
+      scopes = validated;
     }
 
     const me = getAuth(c);
     const createdBy = me.kind === "user" ? me.user.id : null;
-    const created = await createApiKey(storage, { projectId, name, scopes, createdBy });
+    const created = await createApiKey(storage, { projectId, name, keyType, scopes, createdBy });
 
     return c.json(created, 201);
   });
@@ -762,19 +831,23 @@ export function registerRoutes(
     const rawScopes = parsedBody.body.scopes;
 
     if (!Array.isArray(rawScopes) || rawScopes.length === 0) {
-      return c.json({ error: "scopes must be a non-empty array of: ingest, query" }, 400);
-    }
-
-    const unknownScopes = rawScopes.filter((scope) => !isKeyScope(scope));
-
-    if (unknownScopes.length > 0) {
       return c.json(
-        { error: `unknown scope(s): ${unknownScopes.join(", ")} — use ingest and/or query` },
+        { error: `scopes must be a non-empty array of: ${scopesForType(key.keyType).join(", ")}` },
         400,
       );
     }
 
-    const scopes = [...new Set(rawScopes.filter(isKeyScope))];
+    const scopes = validateKeyScopes(key.keyType, rawScopes);
+
+    if (!scopes) {
+      return c.json(
+        {
+          error: `invalid scope(s) for a ${key.keyType} key — use ${scopesForType(key.keyType).join(", ")}`,
+        },
+        400,
+      );
+    }
+
     const updated = await updateApiKeyScopes(storage, id, projectId, scopes);
 
     if (!updated) return c.json({ error: "key not found" }, 404);
@@ -969,12 +1042,20 @@ export function registerRoutes(
   app.post("/v1/events", bodyLimit({ maxSize: 8 * 1024 * 1024 }), async (c) => {
     const authInfo = getAuth(c);
 
-    if (authInfo.kind === "key" && !authInfo.scopes.has("ingest")) {
-      return c.json({ error: "this key cannot ingest (missing ingest scope)" }, 403);
+    if (authInfo.kind === "key" && authInfo.keyType === "mcp") {
+      return c.json({ error: "MCP keys cannot ingest events" }, 403);
     }
 
-    if (authInfo.kind === "user" && !can(authInfo, "logs.write"))
-      return c.json({ error: "forbidden" }, 403);
+    if (!canCapability(authInfo, "logs.write")) {
+      return c.json(
+        {
+          error:
+            authInfo.kind === "key" ? "this key cannot ingest (missing ingest scope)" : "forbidden",
+        },
+        403,
+      );
+    }
+
     const projectId = await resolveProjectId(c, storage);
 
     if (projectId instanceof Response) return projectId;
@@ -1186,12 +1267,10 @@ export function registerRoutes(
   app.get("/v1/events", async (c) => {
     const authInfo = getAuth(c);
 
-    if (authInfo.kind === "key" && !authInfo.scopes.has("query")) {
-      return c.json({ error: "this key cannot query (missing query scope)" }, 403);
+    if (!canCapability(authInfo, "logs.read")) {
+      return c.json({ error: readScopeError(authInfo) }, 403);
     }
 
-    if (authInfo.kind === "user" && !can(authInfo, "logs.read"))
-      return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
 
     if (projectId instanceof Response) return projectId;
@@ -1219,12 +1298,8 @@ export function registerRoutes(
   app.get("/v1/events/:uid", async (c) => {
     const authInfo = getAuth(c);
 
-    if (authInfo.kind === "key" && !authInfo.scopes.has("query")) {
-      return c.json({ error: "this key cannot query (missing query scope)" }, 403);
-    }
-
-    if (authInfo.kind === "user" && !can(authInfo, "logs.read")) {
-      return c.json({ error: "forbidden" }, 403);
+    if (!canCapability(authInfo, "logs.read")) {
+      return c.json({ error: readScopeError(authInfo) }, 403);
     }
 
     const projectId = await resolveProjectId(c, storage);
@@ -1243,11 +1318,10 @@ export function registerRoutes(
   app.get("/v1/histogram", async (c) => {
     const authInfo = getAuth(c);
 
-    if (authInfo.kind === "key" && !authInfo.scopes.has("query"))
-      return c.json({ error: "forbidden" }, 403);
+    if (!canCapability(authInfo, "logs.read")) {
+      return c.json({ error: readScopeError(authInfo) }, 403);
+    }
 
-    if (authInfo.kind === "user" && !can(authInfo, "logs.read"))
-      return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
 
     if (projectId instanceof Response) return projectId;
@@ -1269,11 +1343,10 @@ export function registerRoutes(
   app.get("/v1/services", async (c) => {
     const authInfo = getAuth(c);
 
-    if (authInfo.kind === "key" && !authInfo.scopes.has("query"))
-      return c.json({ error: "forbidden" }, 403);
+    if (!canCapability(authInfo, "logs.read")) {
+      return c.json({ error: readScopeError(authInfo) }, 403);
+    }
 
-    if (authInfo.kind === "user" && !can(authInfo, "logs.read"))
-      return c.json({ error: "forbidden" }, 403);
     const projectId = await resolveProjectId(c, storage);
 
     if (projectId instanceof Response) return projectId;
@@ -1284,11 +1357,16 @@ export function registerRoutes(
   app.get("/v1/stream", async (c) => {
     const authInfo = getAuth(c);
 
-    if (authInfo.kind === "key" && !authInfo.scopes.has("query"))
-      return c.json({ error: "forbidden" }, 403);
+    // The live tail keeps ?key= compatibility for app keys only. MCP clients
+    // use request-scoped tools and must not put credentials in a URL.
+    if (authInfo.kind === "key" && authInfo.keyType === "mcp") {
+      return c.json({ error: "MCP keys cannot open the live stream" }, 403);
+    }
 
-    if (authInfo.kind === "user" && !can(authInfo, "logs.read"))
-      return c.json({ error: "forbidden" }, 403);
+    if (!canCapability(authInfo, "logs.read")) {
+      return c.json({ error: readScopeError(authInfo) }, 403);
+    }
+
     const projectId = await resolveProjectId(c, storage);
 
     if (projectId instanceof Response) return projectId;
@@ -1394,6 +1472,7 @@ export function registerRoutes(
           return Boolean(
             verified &&
             verified.id === authInfo.keyId &&
+            verified.keyType === "api" &&
             verified.projectId === projectId &&
             verified.scopes.has("query"),
           );
@@ -1475,6 +1554,10 @@ export function registerRoutes(
   // ================= monitors =================
 
   app.post("/v1/monitors/test-channel", async (c) => {
+    // Outbound test sends are user-only: an AI credential must not turn the
+    // server into a URL fetcher, even with SSRF checks.
+    if (getAuth(c).kind !== "user") return c.json({ error: "user session required" }, 403);
+
     const denied = monitorGuard(c, true);
 
     if (denied) return denied;
@@ -1523,7 +1606,7 @@ export function registerRoutes(
       console.warn(`[kinglet] test channel failed (${type}):`, message);
       // Internal reachability details stay admin-only, matching monitor tests.
       const authInfo = getAuth(c);
-      const detailed = authInfo.kind !== "user" || authInfo.user.role === "admin";
+      const detailed = authInfo.kind === "user" && authInfo.user.role === "admin";
 
       return c.json({ error: detailed ? message : "channel test failed" }, 502);
     }
@@ -1539,8 +1622,8 @@ export function registerRoutes(
     const monitors = await listMonitors(storage, projectId);
     const authInfo = getAuth(c);
     // Webhook URLs are bearer secrets and engine errors may name internal
-    // hosts: non-writers get the channel type only.
-    const canSeeChannels = authInfo.kind !== "user" || can(authInfo, "monitors.write");
+    // hosts: only human monitor writers see them. MCP keys never do.
+    const canSeeChannels = authInfo.kind === "user" && can(authInfo, "monitors.write");
 
     return c.json({
       monitors: canSeeChannels
@@ -1548,6 +1631,10 @@ export function registerRoutes(
         : monitors.map((m) => ({
             ...m,
             channels: m.channels.map((ch) => ({ type: ch.type, url: "hidden" })),
+            resolvedChannels: m.resolvedChannels.map((channel) => ({
+              ...channel,
+              health: { ...channel.health, error: null },
+            })),
             lastError: null,
             lastErrorAt: null,
           })),
@@ -1576,6 +1663,10 @@ export function registerRoutes(
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
 
+    if (getAuth(c).kind === "key" && body.channels !== undefined) {
+      return c.json({ error: "MCP monitor writes must use channelIds, not webhook URLs" }, 400);
+    }
+
     const result = await createMonitorFromRaw(storage, projectId, body, {
       allowPrivateWebhooks: config.allowPrivateWebhooks,
     });
@@ -1583,7 +1674,7 @@ export function registerRoutes(
     if (!result.ok) return c.json({ error: result.error }, 400);
     await engine.refresh();
 
-    return c.json({ monitor: result.monitor }, 201);
+    return c.json({ monitor: monitorForAuth(getAuth(c), result.monitor) }, 201);
   });
 
   app.patch("/v1/monitors/:id", async (c) => {
@@ -1601,6 +1692,10 @@ export function registerRoutes(
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
 
+    if (getAuth(c).kind === "key" && body.channels !== undefined) {
+      return c.json({ error: "MCP monitor writes must use channelIds, not webhook URLs" }, 400);
+    }
+
     const result = await updateMonitorFromRaw(storage, id, projectId, body, {
       allowPrivateWebhooks: config.allowPrivateWebhooks,
     });
@@ -1613,7 +1708,7 @@ export function registerRoutes(
 
     await engine.refresh();
 
-    return c.json({ monitor: result.monitor });
+    return c.json({ monitor: monitorForAuth(getAuth(c), result.monitor) });
   });
 
   app.delete("/v1/monitors/:id", async (c) => {
@@ -1635,6 +1730,8 @@ export function registerRoutes(
   });
 
   app.post("/v1/monitors/:id/test", async (c) => {
+    if (getAuth(c).kind !== "user") return c.json({ error: "user session required" }, 403);
+
     const denied = monitorGuard(c, true);
 
     if (denied) return denied;
@@ -1665,10 +1762,11 @@ export function registerRoutes(
     };
 
     const authInfo = getAuth(c);
-    const detailed = authInfo.kind !== "user" || authInfo.user.role === "admin";
+    const detailed = authInfo.kind === "user" && authInfo.user.role === "admin";
+    const targets = await resolveMonitorNotifyTargets(storage, monitor);
 
     const results = await Promise.all(
-      monitor.channels.map(async (channel) => {
+      targets.map(async (channel) => {
         try {
           await sendNotice(channel, notice, { allowPrivate: config.allowPrivateWebhooks });
 
@@ -1698,7 +1796,7 @@ export function registerRoutes(
     const limit = clampInt(c.req.query("limit"), 100, 1, 500);
     const alerts = await listAlerts(storage, limit, projectId);
     const authInfo = getAuth(c);
-    const canSeeErrors = authInfo.kind !== "user" || can(authInfo, "monitors.write");
+    const canSeeErrors = authInfo.kind === "user" && can(authInfo, "monitors.write");
 
     return c.json({
       alerts: canSeeErrors ? alerts : alerts.map((a) => ({ ...a, notifyError: null })),
@@ -1722,10 +1820,12 @@ export function registerRoutes(
       storage.db.select({ n: count() }).from(schema.apiKeys),
     ]);
 
+    const backup = services?.backupStatus ? await services.backupStatus() : null;
+
     return c.json({
       ok: true,
       name: "kinglet",
-      version: "0.3.0",
+      version: APP_VERSION,
       uptimeMs: Date.now() - systemStatus.startedAt,
       counts: {
         projects: Number(projects[0]?.n ?? 0),
@@ -1734,6 +1834,7 @@ export function registerRoutes(
         alerts: Number(alerts[0]?.n ?? 0),
         apiKeys: Number(keys[0]?.n ?? 0),
       },
+      backup,
       retention: {
         lastRunAt: systemStatus.retentionLastRunAt,
         lastError: systemStatus.retentionLastError,

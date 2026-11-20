@@ -12,12 +12,20 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "node dist/index.js",
+    "restore": "node dist/restore/cli.js",
+    "archive:import": "node dist/archive/cli.js",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1172.0",
+    "@aws-sdk/lib-storage": "^3.1172.0",
+    "@aws-sdk/s3-request-presigner": "^3.1172.0",
     "@hono/node-server": "^2.1.9",
     "@libsql/client": "^0.14.0",
+    "age-encryption": "^0.3.1",
     "better-auth": "^1.7.26",
+    "croner": "^11.0.1",
+    "cronstrue": "^3.43.0",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.19"
   },

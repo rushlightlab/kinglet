@@ -1,4 +1,14 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
+
+/** Bump when a migration changes the on-disk contract (restore uses this). */
+export const SCHEMA_VERSION = 8;
 
 /**
  * Kinglet's schema in Drizzle.
@@ -31,6 +41,8 @@ export const apiKeys = sqliteTable(
     name: text("name").notNull(),
     prefix: text("prefix").notNull(),
     keyHash: text("key_hash").notNull().unique(),
+    /** "api" (kl_) or "mcp" (km_). Scope vocabularies are disjoint. */
+    keyType: text("key_type").notNull().default("api"),
     scopes: text("scopes").notNull().default("[]"),
     createdBy: text("created_by"),
     createdAt: integer("created_at").notNull(),
@@ -77,6 +89,154 @@ export const projectUsage = sqliteTable("project_usage", {
   bytes: integer("bytes").notNull().default(0),
   events: integer("events").notNull().default(0),
 });
+
+/**
+ * Small key/value metadata table. `schema_version` is written after migrations
+ * so a restored snapshot can be refused when it is newer than this build.
+ */
+export const appMeta = sqliteTable("app_meta", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
+
+export const backupSettings = sqliteTable("backup_settings", {
+  id: integer("id").primaryKey(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+  scheduleCron: text("schedule_cron").notNull().default("0 3 * * *"),
+  scheduleTimezone: text("schedule_timezone").notNull().default("UTC"),
+  retentionCount: integer("retention_count").notNull().default(7),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+export const backupRuns = sqliteTable(
+  "backup_runs",
+  {
+    id: text("id").primaryKey(),
+    trigger: text("trigger").notNull(),
+    status: text("status").notNull(),
+    phase: text("phase"),
+    startedAt: integer("started_at").notNull(),
+    finishedAt: integer("finished_at"),
+    sizeBytes: integer("size_bytes"),
+    error: text("error"),
+  },
+  (table) => [index("idx_backup_runs_started").on(table.startedAt)],
+);
+
+export const backupSnapshots = sqliteTable(
+  "backup_snapshots",
+  {
+    id: text("id").primaryKey(),
+    /** Run that produced this snapshot; null for rows discovered from the bucket. */
+    runId: text("run_id"),
+    trigger: text("trigger").notNull().default("scheduled"),
+    manifestKey: text("manifest_key").notNull(),
+    objectKey: text("object_key").notNull(),
+    createdAt: integer("created_at").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    sha256: text("sha256").notNull(),
+    encryption: text("encryption").notNull().default("none"),
+    appVersion: text("app_version").notNull(),
+    schemaVersion: integer("schema_version").notNull(),
+    countsJson: text("counts_json").notNull().default("{}"),
+    state: text("state").notNull().default("ready"),
+    downloadedAt: integer("downloaded_at"),
+    downloadedBy: text("downloaded_by"),
+    discovered: integer("discovered", { mode: "boolean" }).notNull().default(false),
+  },
+  (table) => [index("idx_backup_snapshots_created").on(table.createdAt)],
+);
+
+export const notificationChannels = sqliteTable(
+  "notification_channels",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    type: text("type").notNull(),
+    url: text("url").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    decoration: integer("decoration", { mode: "boolean" }).notNull().default(false),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+    lastTestAt: integer("last_test_at"),
+    lastTestStatus: text("last_test_status"),
+    lastTestError: text("last_test_error"),
+  },
+  (table) => [
+    uniqueIndex("uq_notification_channels_type_url").on(table.type, table.url),
+    index("idx_notification_channels_created").on(table.createdAt),
+  ],
+);
+
+export const notificationChannelActions = sqliteTable(
+  "notification_channel_actions",
+  {
+    channelId: text("channel_id").notNull(),
+    action: text("action").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.channelId, table.action] })],
+);
+
+export const monitorChannels = sqliteTable(
+  "monitor_channels",
+  {
+    monitorId: text("monitor_id").notNull(),
+    channelId: text("channel_id").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.monitorId, table.channelId] }),
+    index("idx_monitor_channels_channel").on(table.channelId),
+  ],
+);
+
+export const notificationDeliveries = sqliteTable(
+  "notification_deliveries",
+  {
+    id: text("id").primaryKey(),
+    channelId: text("channel_id").notNull(),
+    scope: text("scope").notNull(),
+    event: text("event").notNull(),
+    subject: text("subject").notNull(),
+    status: text("status").notNull(),
+    error: text("error"),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    index("idx_notification_deliveries_created").on(table.createdAt),
+    index("idx_notification_deliveries_channel").on(table.channelId, table.createdAt),
+  ],
+);
+
+export const archiveSettings = sqliteTable("archive_settings", {
+  id: integer("id").primaryKey(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+  scheduleCron: text("schedule_cron").notNull().default("0 3 * * *"),
+  scheduleTimezone: text("schedule_timezone").notNull().default("UTC"),
+  deleteOnFailure: integer("delete_on_failure", { mode: "boolean" }).notNull().default(false),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+export const projectArchiveSettings = sqliteTable("project_archive_settings", {
+  projectId: text("project_id").primaryKey(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+});
+
+export const archiveParts = sqliteTable(
+  "archive_parts",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    date: text("date").notNull(),
+    firstId: integer("first_id").notNull(),
+    lastId: integer("last_id").notNull(),
+    eventCount: integer("event_count").notNull(),
+    objectKey: text("object_key").notNull(),
+    sha256: text("sha256").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [index("idx_archive_parts_project_date").on(table.projectId, table.date)],
+);
 
 export const monitors = sqliteTable(
   "monitors",
@@ -134,6 +294,16 @@ export type ProjectRow = typeof projects.$inferSelect;
 export type ApiKeyRow = typeof apiKeys.$inferSelect;
 
 export type ProjectUsageRow = typeof projectUsage.$inferSelect;
+
+export type BackupRunRow = typeof backupRuns.$inferSelect;
+
+export type BackupSnapshotRow = typeof backupSnapshots.$inferSelect;
+
+export type NotificationChannelRow = typeof notificationChannels.$inferSelect;
+
+export type NotificationDeliveryRow = typeof notificationDeliveries.$inferSelect;
+
+export type ArchivePartRow = typeof archiveParts.$inferSelect;
 
 // ---------------------------------------------------------------------------
 // Better Auth tables (drizzle adapter). Table exports must be named exactly

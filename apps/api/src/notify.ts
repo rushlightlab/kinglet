@@ -5,8 +5,9 @@ import type { RequestOptions as HttpsRequestOptions } from "node:https";
 import { isIP } from "node:net";
 
 /**
- * Notification channels for monitor alerts. All of them are plain HTTP
- * POSTs — zero dependencies, and each unlocks a different audience:
+ * Outbound notification channels for monitor alerts and system events. All of
+ * them are plain HTTP POSTs — zero dependencies, and each unlocks a different
+ * audience:
  *
  *   webhook → n8n, Zapier, scripts, anything that accepts JSON
  *   discord → a Discord channel via its webhook URL
@@ -27,9 +28,21 @@ import { isIP } from "node:net";
 
 export type ChannelType = "webhook" | "discord" | "slack";
 
+export const CHANNEL_TYPES = ["webhook", "discord", "slack"] as const;
+
+export function isChannelType(value: unknown): value is ChannelType {
+  return value === "webhook" || value === "discord" || value === "slack";
+}
+
 export interface NotifyChannel {
   type: ChannelType;
+  /** Bearer secret: never log, list, or return this to non-admin callers. */
   url: string;
+  /** Set for first-class notification channels (delivery logging, health). */
+  id?: string;
+  name?: string;
+  /** Adds an emoji prefix to generic notifications. */
+  decoration?: boolean;
 }
 
 export interface AlertNotice {
@@ -313,15 +326,24 @@ async function postJson(url: URL, body: string, allowPrivate: boolean): Promise<
   });
 }
 
+/**
+ * Shared send path for every channel type. Validation happens here so a URL
+ * that was accepted at creation time is still checked at send time.
+ */
+async function deliver(channel: NotifyChannel, body: string, allowPrivate: boolean): Promise<void> {
+  const invalid = validateWebhookUrl(channel.url, allowPrivate);
+
+  if (invalid) throw new Error(invalid);
+
+  await postJson(new URL(channel.url), body, allowPrivate);
+}
+
 export async function sendNotice(
   channel: NotifyChannel,
   notice: AlertNotice,
   opts: { allowPrivate?: boolean } = {},
 ): Promise<void> {
   const allowPrivate = opts.allowPrivate ?? false;
-  const invalid = validateWebhookUrl(channel.url, allowPrivate);
-
-  if (invalid) throw new Error(invalid);
 
   const body =
     channel.type === "webhook"
@@ -330,7 +352,164 @@ export async function sendNotice(
         ? JSON.stringify(discordPayload(notice))
         : JSON.stringify(slackPayload(notice));
 
-  await postJson(new URL(channel.url), body, allowPrivate);
+  await deliver(channel, body, allowPrivate);
+}
+
+/**
+ * Generic notification used by backup/archive/system events. The webhook
+ * payload is a stable JSON contract; Discord and Slack get the same content
+ * shaped as an embed/attachment.
+ */
+export interface GenericNoticeField {
+  name: string;
+  value: string;
+}
+
+export interface GenericNotice {
+  action: string;
+  subject: string;
+  summary: string;
+  fields?: GenericNoticeField[];
+  /** Epoch milliseconds. */
+  at: number;
+}
+
+interface GenericActionMeta {
+  emoji: string;
+  label: string;
+  color: number;
+  hex: string;
+}
+
+function genericActionMeta(action: string): GenericActionMeta {
+  switch (action) {
+    case "backup.succeeded":
+      return { emoji: "✅", label: "Backup succeeded", color: 0x7dd3a1, hex: "#7dd3a1" };
+    case "backup.failed":
+      return { emoji: "⚠️", label: "Backup failed", color: 0xff5c33, hex: "#ff5c33" };
+    case "backup.restore_staged":
+      return { emoji: "♻️", label: "Restore staged", color: 0xfbbf24, hex: "#fbbf24" };
+    case "archive.succeeded":
+      return { emoji: "✅", label: "Archive succeeded", color: 0x7dd3a1, hex: "#7dd3a1" };
+    case "archive.failed":
+      return { emoji: "⚠️", label: "Archive failed", color: 0xff5c33, hex: "#ff5c33" };
+    case "system.warning":
+      return { emoji: "⚠️", label: "Kinglet warning", color: 0xfbbf24, hex: "#fbbf24" };
+    default:
+      return { emoji: "🔔", label: "Kinglet notification", color: 0xfbbf24, hex: "#fbbf24" };
+  }
+}
+
+function sanitizedGenericFields(
+  fields: readonly GenericNoticeField[] | undefined,
+): GenericNoticeField[] {
+  const safe: GenericNoticeField[] = [];
+
+  for (const field of fields ?? []) {
+    const name = sanitizeNotificationText(field.name, 80);
+
+    if (!name) continue;
+    safe.push({ name, value: sanitizeNotificationText(field.value, 1000) });
+  }
+
+  return safe;
+}
+
+interface GenericWebhookPayload {
+  source: "kinglet";
+  action: string;
+  subject: string;
+  summary: string;
+  fields?: GenericNoticeField[];
+  at: number;
+}
+
+function genericWebhookBody(notice: GenericNotice): string {
+  const payload: GenericWebhookPayload = {
+    source: "kinglet",
+    action: notice.action.slice(0, 120),
+    subject: sanitizeNotificationText(notice.subject, 200),
+    summary: sanitizeNotificationText(notice.summary, 1000),
+    at: notice.at,
+  };
+
+  const fields = sanitizedGenericFields(notice.fields);
+
+  if (fields.length > 0) payload.fields = fields;
+
+  return JSON.stringify(payload);
+}
+
+function genericDiscordFields(notice: GenericNotice): NoticeField[] {
+  const fields: NoticeField[] = [
+    { name: "Action", value: notificationCode(notice.action), inline: true },
+  ];
+
+  for (const field of sanitizedGenericFields(notice.fields)) {
+    fields.push({ name: field.name, value: field.value, inline: true });
+  }
+
+  // Discord caps field values at 1024 characters.
+  return fields.map((field) => ({ ...field, value: truncate(field.value, 1000) }));
+}
+
+function genericDiscordPayload(notice: GenericNotice, decoration: boolean): DiscordPayload {
+  const meta = genericActionMeta(notice.action);
+
+  const embed: DiscordEmbed = {
+    title: `${decoration ? `${meta.emoji} ` : ""}${meta.label}`,
+    color: meta.color,
+    fields: genericDiscordFields(notice),
+    timestamp: new Date(notice.at).toISOString(),
+    footer: { text: "Kinglet" },
+  };
+
+  if (notice.summary) embed.description = sanitizeNotificationText(notice.summary, 1000);
+
+  return { username: "Kinglet", embeds: [embed] };
+}
+
+function genericSlackPayload(notice: GenericNotice, decoration: boolean): SlackPayload {
+  const meta = genericActionMeta(notice.action);
+  const textParts: string[] = [];
+
+  if (notice.summary) textParts.push(sanitizeNotificationText(notice.summary, 1000));
+
+  return {
+    text: `${decoration ? `${meta.emoji} ` : ""}Kinglet · ${meta.label.toLowerCase()}`,
+    attachments: [
+      {
+        color: meta.hex,
+        title: `${decoration ? `${meta.emoji} ` : ""}${meta.label}`,
+        text: textParts.join("\n"),
+        fields: genericDiscordFields(notice).map((field) => ({
+          title: field.name,
+          value: field.value,
+          short: field.inline,
+        })),
+        footer: "Kinglet",
+        ts: Math.floor(notice.at / 1000),
+      },
+    ],
+  };
+}
+
+export async function sendGeneric(
+  channel: NotifyChannel,
+  notice: GenericNotice,
+  opts: { allowPrivate?: boolean } = {},
+): Promise<void> {
+  const allowPrivate = opts.allowPrivate ?? false;
+  const decoration = channel.decoration === true;
+
+  const body =
+    channel.type === "webhook"
+      ? genericWebhookBody(notice)
+      : channel.type === "discord"
+        ? JSON.stringify(genericDiscordPayload(notice, decoration))
+        : JSON.stringify(genericSlackPayload(notice, decoration));
+
+  await deliver(channel, body, allowPrivate);
 }
 
 interface NoticeField {
@@ -402,7 +581,7 @@ function codeBlock(text: string): string {
  * Event text is untrusted. Flatten line breaks and neutralize chat markup and
  * mention syntax before it reaches Discord, Slack, or a line-oriented webhook.
  */
-function notificationText(value: string, max: number): string {
+export function sanitizeNotificationText(value: string, max: number): string {
   const flattened = value
     .replace(/[\r\n]+/g, " ")
     // Control characters are stripped from untrusted event text.
@@ -421,26 +600,36 @@ function notificationText(value: string, max: number): string {
   return truncate(flattened, max);
 }
 
+function notificationCode(value: string): string {
+  return `\`${sanitizeNotificationText(value, 120)}\``;
+}
+
 function noticeFields(n: AlertNotice, formatLink: (url: string) => string): NoticeField[] {
   const fields: NoticeField[] = [];
 
   if (n.projectName)
-    fields.push({ name: "Project", value: notificationText(n.projectName, 200), inline: true });
+    fields.push({
+      name: "Project",
+      value: sanitizeNotificationText(n.projectName, 200),
+      inline: true,
+    });
 
   if (n.service)
-    fields.push({ name: "Service", value: notificationText(n.service, 200), inline: true });
+    fields.push({ name: "Service", value: sanitizeNotificationText(n.service, 200), inline: true });
 
-  if (n.env) fields.push({ name: "Env", value: notificationText(n.env, 200), inline: true });
+  if (n.env)
+    fields.push({ name: "Env", value: sanitizeNotificationText(n.env, 200), inline: true });
   fields.push({
     name: "Monitor",
-    value: notificationText(n.monitorName || "—", 200),
+    value: sanitizeNotificationText(n.monitorName || "—", 200),
     inline: true,
   });
 
-  if (n.level) fields.push({ name: "Level", value: notificationText(n.level, 40), inline: true });
+  if (n.level)
+    fields.push({ name: "Level", value: sanitizeNotificationText(n.level, 40), inline: true });
   fields.push({
     name: "Query",
-    value: n.query ? `\`${notificationText(n.query, 400)}\`` : "all events",
+    value: n.query ? `\`${sanitizeNotificationText(n.query, 400)}\`` : "all events",
     inline: true,
   });
 
@@ -491,7 +680,7 @@ export function discordPayload(n: AlertNotice): DiscordPayload {
     footer: { text: "Kinglet" },
   };
 
-  if (n.summary) embed.description = notificationText(n.summary, 1000);
+  if (n.summary) embed.description = sanitizeNotificationText(n.summary, 1000);
 
   return { username: "Kinglet", embeds: [embed] };
 }
@@ -500,7 +689,7 @@ export function slackPayload(n: AlertNotice): SlackPayload {
   const meta = STATE_META[n.state];
   const textParts: string[] = [];
 
-  if (n.summary) textParts.push(notificationText(n.summary, 1000));
+  if (n.summary) textParts.push(sanitizeNotificationText(n.summary, 1000));
 
   if (n.sampleMessage) textParts.push(codeBlock(n.sampleMessage));
 
@@ -527,17 +716,17 @@ function formatText(n: AlertNotice): string {
   const meta = STATE_META[n.state];
   const lines: string[] = [`${meta.emoji} Kinglet · ${meta.title.toLowerCase()}`];
 
-  if (n.projectName) lines.push(`Project: ${notificationText(n.projectName, 200)}`);
-  lines.push(`Monitor: ${notificationText(n.monitorName || "—", 200)}`);
+  if (n.projectName) lines.push(`Project: ${sanitizeNotificationText(n.projectName, 200)}`);
+  lines.push(`Monitor: ${sanitizeNotificationText(n.monitorName || "—", 200)}`);
 
-  if (n.service) lines.push(`Service: ${notificationText(n.service, 200)}`);
+  if (n.service) lines.push(`Service: ${sanitizeNotificationText(n.service, 200)}`);
 
-  if (n.env) lines.push(`Env: ${notificationText(n.env, 200)}`);
+  if (n.env) lines.push(`Env: ${sanitizeNotificationText(n.env, 200)}`);
 
-  if (n.level) lines.push(`Level: ${notificationText(n.level, 40)}`);
-  lines.push(n.query ? `Query: ${notificationText(n.query, 400)}` : "Query: all events");
+  if (n.level) lines.push(`Level: ${sanitizeNotificationText(n.level, 40)}`);
+  lines.push(n.query ? `Query: ${sanitizeNotificationText(n.query, 400)}` : "Query: all events");
 
-  if (n.summary) lines.push(notificationText(n.summary, 1000));
+  if (n.summary) lines.push(sanitizeNotificationText(n.summary, 1000));
 
   if (n.count !== undefined && n.count !== null) lines.push(`Count: ${n.count}`);
 
@@ -549,7 +738,7 @@ function formatText(n: AlertNotice): string {
     lines.push(`Window: ${durationLabel(n.windowMs)}`);
   }
 
-  if (n.sampleMessage) lines.push(`Sample: ${notificationText(n.sampleMessage, 300)}`);
+  if (n.sampleMessage) lines.push(`Sample: ${sanitizeNotificationText(n.sampleMessage, 300)}`);
 
   if (n.link) lines.push(n.link);
 

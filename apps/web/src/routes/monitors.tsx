@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { PencilIcon, PlusIcon, RefreshCwIcon, SendIcon, Trash2Icon } from "lucide-react";
@@ -8,12 +8,19 @@ import {
   deleteMonitor,
   fetchAlerts,
   fetchMonitors,
-  testChannel,
+  fetchNotificationChannelSummary,
   testMonitor,
   updateMonitor,
 } from "../api";
-import { hasPermission, useApp } from "../app-context";
-import type { AlertRecord, Monitor, MonitorKind, NotifyChannel } from "../types";
+import { hasPermission, hasPermissionOrAdmin, useApp } from "../app-context";
+import { formatRelativeTime, redactWebhookUrls } from "../format";
+import type {
+  AlertRecord,
+  Monitor,
+  MonitorKind,
+  NotificationChannelHealth,
+  NotificationChannelSummary,
+} from "../types";
 import ErrorAlert from "../components/ErrorAlert";
 import PageShell from "../components/PageShell";
 import {
@@ -37,6 +44,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -78,12 +86,6 @@ const KIND_LABELS: Record<MonitorKind, string> = {
   count_below: "silence",
 };
 
-const CHANNEL_PLACEHOLDERS: Record<NotifyChannel["type"], string> = {
-  webhook: "https://example.com/webhooks/kinglet",
-  discord: "https://discord.com/api/webhooks/…",
-  slack: "https://hooks.slack.com/services/…",
-};
-
 function fmtDur(ms: number): string {
   if (ms % 3_600_000 === 0) return `${ms / 3_600_000}h`;
 
@@ -113,11 +115,42 @@ function describe(m: Monitor): string {
   return `Fires when fewer than ${m.threshold} matching events land within ${fmtDur(m.windowMs)} — silence means something broke.`;
 }
 
+function channelCount(m: Monitor): number {
+  if (m.channelIds !== undefined) return m.channelIds.length;
+
+  return m.channels?.length ?? 0;
+}
+
+function channelHealthText(channel: NotificationChannelSummary): string {
+  const health: NotificationChannelHealth = channel.health;
+  const status = health.status.toLowerCase();
+
+  if (status === "failed" || status === "error") {
+    return health.lastDeliveryAt
+      ? `last delivery failed ${formatRelativeTime(health.lastDeliveryAt)}`
+      : "last delivery failed";
+  }
+
+  if (status === "ok" || status === "healthy" || status === "success" || status === "sent") {
+    return health.lastDeliveryAt
+      ? `last delivery ${formatRelativeTime(health.lastDeliveryAt)}`
+      : "ready";
+  }
+
+  if (status === "never" || status === "none" || health.lastDeliveryAt === null) {
+    return "no deliveries yet";
+  }
+
+  return `${status} ${formatRelativeTime(health.lastDeliveryAt)}`;
+}
+
 function MonitorsPage() {
-  const { currentProjectId, permissions } = useApp();
+  const { currentProjectId, permissions, user } = useApp();
   const canWrite = hasPermission(permissions, "monitors.write");
+  const canManageChannels = hasPermissionOrAdmin(user.role, permissions, "notifications.read");
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
+  const [channelSummary, setChannelSummary] = useState<NotificationChannelSummary[]>([]);
   const [editing, setEditing] = useState<string | "new" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -134,6 +167,15 @@ function MonitorsPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
+
+    try {
+      const summary = await fetchNotificationChannelSummary();
+
+      setChannelSummary(summary.channels);
+    } catch {
+      // The channel summary is additive. Keep the previous list when the
+      // endpoint is unavailable so monitors still render.
+    }
   }, [currentProjectId]);
 
   useEffect(() => {
@@ -143,7 +185,9 @@ function MonitorsPage() {
 
   const toggleEnabled = async (m: Monitor): Promise<void> => {
     try {
-      await updateMonitor(currentProjectId, m.id, { ...m, enabled: !m.enabled });
+      // Send only the changed field: echoing the whole monitor would replace
+      // channelIds (and legacy channels) with whatever the read returned.
+      await updateMonitor(currentProjectId, m.id, { enabled: !m.enabled });
       await load();
       toast.success(m.enabled ? "Monitor paused" : "Monitor enabled");
     } catch (err) {
@@ -176,10 +220,12 @@ function MonitorsPage() {
       if (failed.length === 0) {
         toast.success(`Sent to ${r.results.length} channel${r.results.length === 1 ? "" : "s"}`);
       } else {
-        toast.error(failed.map((x) => `${x.type}: ${x.error ?? "failed"}`).join(" · "));
+        toast.error(
+          redactWebhookUrls(failed.map((x) => `${x.type}: ${x.error ?? "failed"}`).join(" · ")),
+        );
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "test failed");
+      toast.error(redactWebhookUrls(err instanceof Error ? err.message : "test failed"));
     }
   };
 
@@ -255,10 +301,19 @@ function MonitorsPage() {
                 <p className="font-mono text-[10px] text-mist-faint">
                   checked every {fmtDur(m.kind === "match" ? 0 : m.intervalMs)}
                   {m.kind !== "match" && ` · cooldown ${fmtDur(m.cooldownMs)}`} ·{" "}
-                  {m.channels.length === 0
+                  {channelCount(m) === 0
                     ? "no channels (history only)"
-                    : `${m.channels.length} channel${m.channels.length === 1 ? "" : "s"}`}
+                    : `${channelCount(m)} channel${channelCount(m) === 1 ? "" : "s"}`}
                 </p>
+                {m.resolvedChannels !== undefined && m.resolvedChannels.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {m.resolvedChannels.map((channel) => (
+                      <Badge key={channel.id} variant="outline">
+                        {channel.name}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
               </CardContent>
               <CardFooter className="gap-2">
                 <WriteGuard allowed={canWrite}>
@@ -437,6 +492,8 @@ function MonitorsPage() {
               key={editing === "new" ? "new" : `edit-${editing}`}
               initial={editingMonitor}
               projectId={currentProjectId}
+              channels={channelSummary}
+              canManageChannels={canManageChannels}
               onDone={async () => {
                 setEditing(null);
                 await load();
@@ -460,7 +517,7 @@ interface FormState {
   windowMin: number;
   intervalSec: number;
   cooldownMin: number;
-  channels: NotifyChannel[];
+  channelIds: string[];
 }
 
 function WriteGuard({ allowed, children }: { allowed: boolean; children: ReactNode }) {
@@ -484,14 +541,26 @@ function WriteGuard({ allowed, children }: { allowed: boolean; children: ReactNo
 function MonitorForm({
   initial,
   projectId,
+  channels,
+  canManageChannels,
   onDone,
   onCancel,
 }: {
   initial: Monitor | null;
   projectId: string;
+  channels: NotificationChannelSummary[];
+  canManageChannels: boolean;
   onDone: () => Promise<void>;
   onCancel: () => void;
 }) {
+  // A monitor that predates the channel table only has inline `channels`.
+  // Keep that editor until the admin moves it to reusable channels.
+  const [legacyMode, setLegacyMode] = useState(
+    initial !== null && initial.channelIds === undefined,
+  );
+
+  const switchedFromLegacy = initial !== null && initial.channelIds === undefined && !legacyMode;
+
   const [form, setForm] = useState<FormState>(() => ({
     name: initial?.name ?? "",
     query: initial?.query ?? "",
@@ -500,35 +569,26 @@ function MonitorForm({
     windowMin: initial ? Math.max(1, Math.round(initial.windowMs / 60_000)) : 5,
     intervalSec: initial ? Math.max(10, Math.round(initial.intervalMs / 1000)) : 60,
     cooldownMin: initial ? Math.max(0, Math.round(initial.cooldownMs / 60_000)) : 10,
-    channels: initial?.channels ?? [],
+    channelIds: initial?.channelIds ?? [],
   }));
 
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [testingChannel, setTestingChannel] = useState<number | null>(null);
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]): void => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
-  const setChannel = (index: number, patch: Partial<NotifyChannel>): void => {
-    setForm((prev) => ({
-      ...prev,
-      channels: prev.channels.map((c, i) => (i === index ? { ...c, ...patch } : c)),
-    }));
-  };
+  const toggleChannelId = (id: string, checked: boolean): void => {
+    setForm((prev) => {
+      if (checked) {
+        if (prev.channelIds.includes(id)) return prev;
 
-  const testRow = async (channel: NotifyChannel, index: number): Promise<void> => {
-    setTestingChannel(index);
+        return { ...prev, channelIds: [...prev.channelIds, id] };
+      }
 
-    try {
-      await testChannel(projectId, channel);
-      toast.success(`Test sent to ${channel.type}`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "test failed");
-    } finally {
-      setTestingChannel(null);
-    }
+      return { ...prev, channelIds: prev.channelIds.filter((item) => item !== id) };
+    });
   };
 
   const save = async (): Promise<void> => {
@@ -538,19 +598,11 @@ function MonitorForm({
       return;
     }
 
-    const channels = form.channels.filter((c) => c.url.trim());
-
-    if (channels.some((c) => !/^https?:\/\//i.test(c.url.trim()))) {
-      setFormError("Channel URLs must start with http:// or https://");
-
-      return;
-    }
-
     setSaving(true);
     setFormError(null);
 
     try {
-      const payload = {
+      const base = {
         name: form.name.trim(),
         query: form.query.trim(),
         kind: form.kind,
@@ -558,9 +610,14 @@ function MonitorForm({
         windowMs: Math.round(form.windowMin * 60_000),
         intervalMs: Math.round(form.intervalSec * 1000),
         cooldownMs: Math.round(form.cooldownMin * 60_000),
-        enabled: true,
-        channels,
+        // Preserve the current pause state; editing must not re-enable a
+        // paused monitor as a side effect.
+        enabled: initial?.enabled ?? true,
       };
+
+      // Legacy monitors keep their inline destinations when only other fields
+      // change. Selecting the channel list replaces them explicitly.
+      const payload = legacyMode ? base : { ...base, channelIds: form.channelIds };
 
       if (initial) await updateMonitor(projectId, initial.id, payload);
       else await createMonitor(projectId, payload);
@@ -586,7 +643,8 @@ function MonitorForm({
         <DialogTitle>{initial ? `Edit ${initial.name}` : "New monitor"}</DialogTitle>
         <DialogDescription>
           Use the same query grammar as the log view. Channels are optional; without one, the
-          monitor still records alert history.
+          monitor still records alert history. Pick channels from Settings → Notifications — raw
+          webhook URLs never appear here.
         </DialogDescription>
       </DialogHeader>
 
@@ -695,80 +753,87 @@ function MonitorForm({
         </Field>
 
         <div className="sm:col-span-2">
-          <FieldLabel>channels</FieldLabel>
-          <div className="mt-2 flex flex-col gap-2">
-            {form.channels.map((c, i) => (
-              <div key={i} className="flex flex-wrap gap-2">
-                <Select
-                  value={c.type}
-                  onValueChange={(value) => {
-                    if (value === "webhook" || value === "discord" || value === "slack") {
-                      setChannel(i, { type: value });
-                    }
-                  }}
-                >
-                  <SelectTrigger className="w-28">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectLabel>Channel type</SelectLabel>
-                      <SelectItem value="webhook">webhook</SelectItem>
-                      <SelectItem value="discord">discord</SelectItem>
-                      <SelectItem value="slack">slack</SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                <Input
-                  value={c.url}
-                  onChange={(e) => setChannel(i, { url: e.target.value })}
-                  placeholder={CHANNEL_PLACEHOLDERS[c.type]}
-                  spellCheck={false}
-                  className="min-w-0 flex-1"
-                />
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="chip"
-                      size="sm"
-                      className="h-9"
-                      disabled={testingChannel !== null || !c.url.trim()}
-                      onClick={() => void testRow(c, i)}
-                    >
-                      {testingChannel === i ? <Spinner /> : <SendIcon data-icon="inline-start" />}
-                      {testingChannel === i ? "sending" : "test"}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Send a test notification to this channel</TooltipContent>
-                </Tooltip>
-                <Button
-                  type="button"
-                  variant="chip"
-                  size="icon"
-                  aria-label="Remove channel"
-                  onClick={() =>
-                    set(
-                      "channels",
-                      form.channels.filter((_, j) => j !== i),
-                    )
-                  }
-                >
-                  ✕
-                </Button>
-              </div>
-            ))}
-            <Button
-              type="button"
-              variant="chip"
-              size="xs"
-              className="self-start"
-              onClick={() => set("channels", [...form.channels, { type: "webhook", url: "" }])}
-            >
-              <PlusIcon data-icon="inline-start" />
-              channel
-            </Button>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <FieldLabel>channels</FieldLabel>
+            {canManageChannels && (
+              <Button variant="link" size="xs" className="h-auto p-0 text-[10px]" asChild>
+                <Link to="/settings" search={{ tab: "notifications" }}>
+                  manage channels
+                </Link>
+              </Button>
+            )}
           </div>
+
+          {legacyMode ? (
+            <div className="mt-2 flex flex-col gap-2 rounded-[4px] border border-white/[0.05] p-3">
+              <p className="font-mono text-[10px] leading-relaxed text-mist-dim">
+                This monitor predates reusable channels. Its inline destinations stay untouched when
+                you save other changes, and their URLs stay hidden because they are bearer secrets.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                className="self-start"
+                onClick={() => setLegacyMode(false)}
+              >
+                choose reusable channels
+              </Button>
+            </div>
+          ) : channels.length === 0 ? (
+            <p className="mt-2 font-mono text-[10px] leading-relaxed text-mist-faint">
+              No reusable channels exist yet. Monitor history still records alerts without one.
+              {canManageChannels && " Create one in Settings → Notifications."}
+            </p>
+          ) : (
+            <>
+              {switchedFromLegacy && (
+                <p className="mt-1 font-mono text-[10px] leading-relaxed text-coral">
+                  Saving replaces this monitor&apos;s legacy inline destinations with the selected
+                  channels.
+                </p>
+              )}
+              <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                {channels.map((channel) => {
+                  const failed =
+                    channel.health.status === "failed" || channel.health.status === "error";
+
+                  return (
+                    <label
+                      key={channel.id}
+                      htmlFor={`monitor-channel-${channel.id}`}
+                      className="flex items-start gap-2 rounded-[4px] border border-white/[0.05] px-2.5 py-2"
+                    >
+                      <Checkbox
+                        id={`monitor-channel-${channel.id}`}
+                        checked={form.channelIds.includes(channel.id)}
+                        onCheckedChange={(checked) => toggleChannelId(channel.id, checked === true)}
+                        className="mt-0.5"
+                      />
+                      <span className="flex min-w-0 flex-col gap-0.5">
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <span className="truncate font-mono text-[11px] text-mist">
+                            {channel.name}
+                          </span>
+                          <Badge variant="outline">{channel.type}</Badge>
+                          {!channel.enabled && <Badge variant="destructive">disabled</Badge>}
+                        </span>
+                        <span
+                          className={
+                            failed
+                              ? "font-mono text-[10px] text-coral"
+                              : "font-mono text-[10px] text-mist-faint"
+                          }
+                        >
+                          {channelHealthText(channel)}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
 
         {formError && (

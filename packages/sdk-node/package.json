@@ -2,9 +2,11 @@
   "name": "@kinglet/sdk-node",
   "version": "0.3.0",
   "description": "Batching log client for Kinglet — small, light, king.",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "sideEffects": false,
   "files": [
     "dist"
   ],
@@ -16,11 +18,31 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepublishOnly": "pnpm build"
   },
   "engines": {
     "node": ">=26"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rushlightlab/kinglet.git",
+    "directory": "packages/sdk-node"
+  },
+  "homepage": "https://kinglet.rushlightlab.com/node-sdk/",
+  "bugs": {
+    "url": "https://github.com/rushlightlab/kinglet/issues"
+  },
+  "keywords": [
+    "kinglet",
+    "logging",
+    "logs",
+    "logger",
+    "observability"
+  ],
   "devDependencies": {
     "@kinglet/config": "workspace:*",
     "@types/node": "^26.6.6",

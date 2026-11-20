@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { subscribeEvents } from "./bus.js";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
@@ -6,9 +6,13 @@ import type { ParsedFilters } from "./filters.js";
 import { isJsonObject, isString } from "./json.js";
 import type { JsonValue } from "./json.js";
 import { validateQueryString } from "./query-validation.js";
-import { sendNotice, validateWebhookUrl } from "./notify.js";
+import { isChannelType, sendNotice, validateWebhookUrl } from "./notify.js";
 import type { AlertNotice, NotifyChannel } from "./notify.js";
-import { uuidv7 } from "./auth/ids.js";
+import { uuidv7, isUuid } from "./auth/ids.js";
+import { resolveMonitorChannelData, recordDelivery } from "./notifications/store.js";
+import type { MonitorChannelData } from "./notifications/store.js";
+import { safeErrorMessage } from "./notifications/types.js";
+import type { MonitorChannelSummary } from "./notifications/types.js";
 import { systemStatus } from "./status.js";
 import { localDbBytes } from "./storage/db-size.js";
 import * as schema from "./storage/schema.js";
@@ -44,7 +48,12 @@ export interface Monitor {
   intervalMs: number;
   cooldownMs: number;
   enabled: boolean;
+  /** Legacy inline channels; kept for one release during migration. */
   channels: NotifyChannel[];
+  /** First-class notification channel ids linked to this monitor. */
+  channelIds: string[];
+  /** Safe summaries (id/name/type/enabled/health) — never URLs. */
+  resolvedChannels: MonitorChannelSummary[];
   createdAt: number;
   updatedAt: number;
   /** Runtime observability, written by the alert engine. */
@@ -84,17 +93,15 @@ interface MonitorInput {
   cooldownMs: number;
   enabled: boolean;
   channels: NotifyChannel[];
+  channelIds: string[];
+  /** PATCH replaces links only when the client sent `channelIds`. */
+  channelIdsPresent: boolean;
 }
 
 const MONITOR_KIND_SET = new Set<string>(MONITOR_KINDS);
-const CHANNEL_TYPE_SET = new Set<string>(["webhook", "discord", "slack"]);
 
 function isMonitorKind(value: unknown): value is MonitorKind {
   return isString(value) && MONITOR_KIND_SET.has(value);
-}
-
-function isChannelType(value: unknown): value is NotifyChannel["type"] {
-  return isString(value) && CHANNEL_TYPE_SET.has(value);
 }
 
 function clampInt(raw: JsonValue | undefined, fallback: number, min: number, max: number): number {
@@ -128,6 +135,36 @@ export function parseMonitorInput(
   if (queryProblem) return { ok: false, error: queryProblem };
 
   const kind = isMonitorKind(o.kind) ? o.kind : "count_above";
+
+  let channelIds: string[] = [];
+  let channelIdsPresent = false;
+
+  if (o.channelIds !== undefined) {
+    channelIdsPresent = true;
+
+    if (!Array.isArray(o.channelIds)) {
+      return { ok: false, error: "channelIds must be an array" };
+    }
+
+    if (o.channelIds.length > 8) {
+      return { ok: false, error: "a monitor can use at most 8 channels" };
+    }
+
+    const seen = new Set<string>();
+
+    for (const [index, value] of o.channelIds.entries()) {
+      if (!isString(value) || !isUuid(value)) {
+        return { ok: false, error: `channelIds[${index}] is not a valid channel id` };
+      }
+
+      const channelId = value.toLowerCase();
+
+      if (!seen.has(channelId)) {
+        seen.add(channelId);
+        channelIds.push(channelId);
+      }
+    }
+  }
 
   const channels: NotifyChannel[] = [];
   const rawChannels = Array.isArray(o.channels) ? o.channels.slice(0, 8) : [];
@@ -165,6 +202,8 @@ export function parseMonitorInput(
       cooldownMs: clampInt(o.cooldownMs, 600_000, 0, 7 * 24 * 3_600_000),
       enabled: o.enabled === undefined ? true : Boolean(o.enabled),
       channels,
+      channelIds,
+      channelIdsPresent,
     },
   };
 }
@@ -188,7 +227,18 @@ function parseChannels(raw: string): NotifyChannel[] {
   }
 }
 
-function rowToMonitor(row: typeof schema.monitors.$inferSelect): Monitor {
+const EMPTY_CHANNEL_DATA: MonitorChannelData = {
+  channelIds: [],
+  summaries: [],
+  delivery: [],
+};
+
+function rowToMonitor(
+  row: typeof schema.monitors.$inferSelect,
+  channelData?: MonitorChannelData,
+): Monitor {
+  const linked = channelData ?? EMPTY_CHANNEL_DATA;
+
   return {
     id: row.id,
     projectId: row.projectId,
@@ -201,6 +251,8 @@ function rowToMonitor(row: typeof schema.monitors.$inferSelect): Monitor {
     cooldownMs: Number(row.cooldownMs),
     enabled: Number(row.enabled) === 1,
     channels: parseChannels(row.channels),
+    channelIds: linked.channelIds,
+    resolvedChannels: linked.summaries,
     createdAt: Number(row.createdAt),
     updatedAt: Number(row.updatedAt),
     lastEvalAt: row.lastEvalAt === null ? null : Number(row.lastEvalAt),
@@ -217,7 +269,12 @@ export async function listMonitors(storage: Storage, projectId?: string): Promis
     .where(projectId === undefined ? undefined : eq(schema.monitors.projectId, projectId))
     .orderBy(asc(schema.monitors.id));
 
-  return rows.map(rowToMonitor);
+  const channelData = await resolveMonitorChannelData(
+    storage,
+    rows.map((row) => row.id),
+  );
+
+  return rows.map((row) => rowToMonitor(row, channelData.get(row.id)));
 }
 
 export async function getMonitor(
@@ -233,10 +290,31 @@ export async function getMonitor(
   const rows = await storage.db.select().from(schema.monitors).where(condition).limit(1);
   const row = rows[0];
 
-  return row ? rowToMonitor(row) : null;
+  if (!row) return null;
+
+  const channelData = await resolveMonitorChannelData(storage, [row.id]);
+
+  return rowToMonitor(row, channelData.get(row.id));
 }
 
 export type MonitorResult = { ok: true; monitor: Monitor } | { ok: false; error: string };
+
+async function validateChannelIds(storage: Storage, channelIds: string[]): Promise<string | null> {
+  if (channelIds.length === 0) return null;
+
+  const rows = await storage.db
+    .select({ id: schema.notificationChannels.id })
+    .from(schema.notificationChannels)
+    .where(inArray(schema.notificationChannels.id, channelIds));
+
+  const found = new Set(rows.map((row) => row.id));
+
+  for (const id of channelIds) {
+    if (!found.has(id)) return "one or more channels were not found";
+  }
+
+  return null;
+}
 
 export async function createMonitorFromRaw(
   storage: Storage,
@@ -248,30 +326,50 @@ export async function createMonitorFromRaw(
 
   if (!input.ok) return input;
   const v = input.value;
+  const channelProblem = await validateChannelIds(storage, v.channelIds);
+
+  if (channelProblem) return { ok: false, error: channelProblem };
   const now = Date.now();
 
-  const rows = await storage.db
-    .insert(schema.monitors)
-    .values({
-      id: uuidv7(),
-      projectId,
-      name: v.name,
-      query: v.query,
-      kind: v.kind,
-      threshold: v.threshold,
-      windowMs: v.windowMs,
-      intervalMs: v.intervalMs,
-      cooldownMs: v.cooldownMs,
-      enabled: v.enabled ? 1 : 0,
-      channels: JSON.stringify(v.channels),
-      createdAt: now,
-      updatedAt: now,
-    })
-    .returning();
+  const createdId = await storage.db.transaction(async (tx) => {
+    const rows = await tx
+      .insert(schema.monitors)
+      .values({
+        id: uuidv7(),
+        projectId,
+        name: v.name,
+        query: v.query,
+        kind: v.kind,
+        threshold: v.threshold,
+        windowMs: v.windowMs,
+        intervalMs: v.intervalMs,
+        cooldownMs: v.cooldownMs,
+        enabled: v.enabled ? 1 : 0,
+        channels: JSON.stringify(v.channels),
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning({ id: schema.monitors.id });
 
-  const row = rows[0];
+    const id = rows[0]?.id;
 
-  return row ? { ok: true, monitor: rowToMonitor(row) } : { ok: false, error: "insert failed" };
+    if (!id) return null;
+
+    if (v.channelIds.length > 0) {
+      await tx
+        .insert(schema.monitorChannels)
+        .values(v.channelIds.map((channelId) => ({ monitorId: id, channelId })))
+        .onConflictDoNothing();
+    }
+
+    return id;
+  });
+
+  if (!createdId) return { ok: false, error: "insert failed" };
+
+  const monitor = await getMonitor(storage, createdId, projectId);
+
+  return monitor ? { ok: true, monitor } : { ok: false, error: "insert failed" };
 }
 
 export async function updateMonitorFromRaw(
@@ -285,28 +383,54 @@ export async function updateMonitorFromRaw(
 
   if (!input.ok) return input;
   const v = input.value;
+  const channelProblem = await validateChannelIds(storage, v.channelIds);
 
-  const rows = await storage.db
-    .update(schema.monitors)
-    .set({
-      name: v.name,
-      query: v.query,
-      kind: v.kind,
-      threshold: v.threshold,
-      windowMs: v.windowMs,
-      intervalMs: v.intervalMs,
-      cooldownMs: v.cooldownMs,
-      enabled: v.enabled ? 1 : 0,
-      channels: JSON.stringify(v.channels),
-      updatedAt: Date.now(),
-    })
-    .where(and(eq(schema.monitors.id, id), eq(schema.monitors.projectId, projectId)))
-    .returning();
+  if (channelProblem) return { ok: false, error: channelProblem };
 
-  const row = rows[0];
+  const updatedId = await storage.db.transaction(async (tx) => {
+    const rows = await tx
+      .update(schema.monitors)
+      .set({
+        name: v.name,
+        query: v.query,
+        kind: v.kind,
+        threshold: v.threshold,
+        windowMs: v.windowMs,
+        intervalMs: v.intervalMs,
+        cooldownMs: v.cooldownMs,
+        enabled: v.enabled ? 1 : 0,
+        channels: JSON.stringify(v.channels),
+        updatedAt: Date.now(),
+      })
+      .where(and(eq(schema.monitors.id, id), eq(schema.monitors.projectId, projectId)))
+      .returning({ id: schema.monitors.id });
 
-  return row
-    ? { ok: true, monitor: rowToMonitor(row) }
+    const updated = rows[0]?.id;
+
+    if (!updated) return null;
+
+    // PATCH without channelIds must not wipe existing links; the old UI does
+    // not know about them yet.
+    if (v.channelIdsPresent) {
+      await tx.delete(schema.monitorChannels).where(eq(schema.monitorChannels.monitorId, updated));
+
+      if (v.channelIds.length > 0) {
+        await tx
+          .insert(schema.monitorChannels)
+          .values(v.channelIds.map((channelId) => ({ monitorId: updated, channelId })))
+          .onConflictDoNothing();
+      }
+    }
+
+    return updated;
+  });
+
+  if (!updatedId) return { ok: false, error: "monitor not found", notFound: true };
+
+  const monitor = await getMonitor(storage, updatedId, projectId);
+
+  return monitor
+    ? { ok: true, monitor }
     : { ok: false, error: "monitor not found", notFound: true };
 }
 
@@ -322,6 +446,7 @@ export async function deleteMonitor(
 
     if (Number(result.rowsAffected ?? 0) === 0) return false;
     await tx.delete(schema.alerts).where(eq(schema.alerts.monitorId, id));
+    await tx.delete(schema.monitorChannels).where(eq(schema.monitorChannels.monitorId, id));
 
     return true;
   });
@@ -365,6 +490,21 @@ export async function listAlerts(
     notifyStatus: isNotifyStatus(row.notifyStatus) ? row.notifyStatus : null,
     notifyError: row.notifyError ?? null,
   }));
+}
+
+/**
+ * Delivery targets for one monitor: linked channels when present, otherwise
+ * legacy inline channels. Route handlers can use this for monitor test sends.
+ */
+export async function resolveMonitorNotifyTargets(
+  storage: Storage,
+  monitor: Monitor,
+): Promise<NotifyChannel[]> {
+  if (monitor.channelIds.length === 0) return monitor.channels;
+
+  const data = await resolveMonitorChannelData(storage, [monitor.id]);
+
+  return data.get(monitor.id)?.delivery ?? [];
 }
 
 export interface MonitorEngine {
@@ -491,30 +631,69 @@ export function startMonitorEngine(
     return `${opts.baseUrl.replace(/\/+$/, "")}/?${params.toString()}`;
   }
 
+  async function recordMonitorDelivery(
+    m: Monitor,
+    channel: NotifyChannel,
+    notice: AlertNotice,
+    status: "sent" | "failed",
+    error: string | null,
+  ): Promise<void> {
+    if (!channel.id) return;
+
+    try {
+      await recordDelivery(storage, {
+        channelId: channel.id,
+        scope: "monitor",
+        event: `monitor.${notice.state}`,
+        subject: m.name.slice(0, 200),
+        status,
+        error,
+      });
+    } catch (err) {
+      console.warn(
+        "[kinglet] could not record monitor delivery:",
+        safeErrorMessage(err instanceof Error ? err : String(err), 200),
+      );
+    }
+  }
+
   async function notifyAll(
     m: Monitor,
     notice: AlertNotice,
-  ): Promise<{ sent: number; failed: number; errors: string[] }> {
-    const results = await Promise.allSettled(
-      m.channels.map((ch) => sendNotice(ch, notice, { allowPrivate })),
+    targets: NotifyChannel[],
+  ): Promise<{ sent: number; failed: number; errors: string[]; total: number }> {
+    const outcomes = await Promise.all(
+      targets.map(async (ch) => {
+        try {
+          await sendNotice(ch, notice, { allowPrivate });
+        } catch (err) {
+          const message = safeErrorMessage(err instanceof Error ? err : String(err), 500);
+
+          await recordMonitorDelivery(m, ch, notice, "failed", message);
+          console.warn("[kinglet] notification failed:", message);
+
+          return message;
+        }
+
+        await recordMonitorDelivery(m, ch, notice, "sent", null);
+
+        return null;
+      }),
     );
 
     let failed = 0;
     const errors: string[] = [];
 
-    for (const r of results) {
-      if (r.status === "rejected") {
-        failed++;
-        const message = r.reason instanceof Error ? r.reason.message : String(r.reason);
-        errors.push(message);
-        console.warn("[kinglet] notification failed:", message);
-      }
+    for (const message of outcomes) {
+      if (message === null) continue;
+      failed++;
+      errors.push(message);
     }
 
     if (failed > 0)
-      console.warn(`[kinglet] ${failed}/${m.channels.length} channels failed for "${m.name}"`);
+      console.warn(`[kinglet] ${failed}/${targets.length} channels failed for "${m.name}"`);
 
-    return { sent: m.channels.length - failed, failed, errors };
+    return { sent: targets.length - failed, failed, errors, total: targets.length };
   }
 
   async function fire(
@@ -585,27 +764,33 @@ export function startMonitorEngine(
       s.active = true;
       s.lastFiredAt = now;
 
-      const delivery = await notifyAll(m, {
-        monitorId: m.id,
-        monitorName: m.name,
-        projectName: projectNames.get(m.projectId),
-        service: detail.sampleService ?? null,
-        env: detail.sampleEnv ?? null,
-        level: detail.sampleLevel ?? null,
-        query: m.query,
-        state: "fired",
-        summary,
-        count: detail.count ?? null,
-        threshold: m.threshold,
-        windowMs: m.windowMs,
-        sampleMessage: detail.sampleMessage ?? null,
-        firedAt: now,
-        link: linkFor(m, now),
-      });
+      const targets = await resolveMonitorNotifyTargets(storage, m);
+
+      const delivery = await notifyAll(
+        m,
+        {
+          monitorId: m.id,
+          monitorName: m.name,
+          projectName: projectNames.get(m.projectId),
+          service: detail.sampleService ?? null,
+          env: detail.sampleEnv ?? null,
+          level: detail.sampleLevel ?? null,
+          query: m.query,
+          state: "fired",
+          summary,
+          count: detail.count ?? null,
+          threshold: m.threshold,
+          windowMs: m.windowMs,
+          sampleMessage: detail.sampleMessage ?? null,
+          firedAt: now,
+          link: linkFor(m, now),
+        },
+        targets,
+      );
 
       if (alertId !== null) {
         const notifyStatus =
-          m.channels.length === 0
+          delivery.total === 0
             ? "none"
             : delivery.failed === 0
               ? "sent"
@@ -648,16 +833,20 @@ export function startMonitorEngine(
 
     s.active = false;
     s.openAlertId = null;
-    await notifyAll(m, {
-      monitorId: m.id,
-      monitorName: m.name,
-      projectName: projectNames.get(m.projectId),
-      query: m.query,
-      state: "resolved",
-      summary: "condition cleared",
-      firedAt: now,
-      link: linkFor(m, now),
-    });
+    await notifyAll(
+      m,
+      {
+        monitorId: m.id,
+        monitorName: m.name,
+        projectName: projectNames.get(m.projectId),
+        query: m.query,
+        state: "resolved",
+        summary: "condition cleared",
+        firedAt: now,
+        link: linkFor(m, now),
+      },
+      await resolveMonitorNotifyTargets(storage, m),
+    );
   }
 
   function summaryFor(m: Monitor, detail: { count?: number; sampleMessage?: string }): string {

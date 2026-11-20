@@ -20,7 +20,7 @@ export interface BootstrapInfo {
   generatedPassword: string | null;
 }
 
-export async function ensureSchemaExtras(storage: Storage): Promise<void> {
+export async function ensureSchemaExtras(storage: Storage, timezone: string): Promise<void> {
   const rows = await storage.db.select({ n: count() }).from(schema.projects);
 
   if (Number(rows[0]?.n ?? 0) === 0) {
@@ -31,6 +31,39 @@ export async function ensureSchemaExtras(storage: Storage): Promise<void> {
       .values({ id: uuidv7(), name: "default", slug: "default", createdAt: Date.now() })
       .onConflictDoNothing();
   }
+
+  const now = Date.now();
+
+  await storage.db
+    .insert(schema.backupSettings)
+    .values({ id: 1, scheduleTimezone: timezone, updatedAt: now })
+    .onConflictDoNothing();
+  await storage.db
+    .insert(schema.archiveSettings)
+    .values({ id: 1, scheduleTimezone: timezone, updatedAt: now })
+    .onConflictDoNothing();
+
+  const meta = await storage.db
+    .select({ value: schema.appMeta.value })
+    .from(schema.appMeta)
+    .where(eq(schema.appMeta.key, "schema_version"))
+    .limit(1);
+
+  const stored = Number(meta[0]?.value ?? 0);
+
+  if (Number.isFinite(stored) && stored > schema.SCHEMA_VERSION) {
+    throw new Error(
+      `database schema v${stored} is newer than this build (v${schema.SCHEMA_VERSION}); upgrade Kinglet before opening it`,
+    );
+  }
+
+  await storage.db
+    .insert(schema.appMeta)
+    .values({ key: "schema_version", value: String(schema.SCHEMA_VERSION) })
+    .onConflictDoUpdate({
+      target: schema.appMeta.key,
+      set: { value: String(schema.SCHEMA_VERSION) },
+    });
 }
 
 function isRemoteDbPath(dbPath: string): boolean {

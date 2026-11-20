@@ -1,3 +1,4 @@
+import type { Client } from "@libsql/client";
 import type { SQL } from "drizzle-orm";
 import type { Normalized } from "../ingest.js";
 import type { StoredEvent } from "../types.js";
@@ -36,6 +37,8 @@ export interface Storage {
   readonly description: string;
   /** Typed Drizzle database for meta tables and ad-hoc queries. */
   readonly db: KingletDb;
+  /** Raw libSQL client, needed for `VACUUM INTO` and pragmas. */
+  readonly client: Client;
   insertEvents(
     projectId: string,
     events: Normalized[],
@@ -50,8 +53,8 @@ export interface Storage {
     bucketMs: number,
   ): Promise<HistogramPointRow[]>;
   listServices(projectId: string): Promise<ServiceRow[]>;
-  /** Chunked delete; returns how many events were dropped. */
-  deleteOlderThan(ts: number): Promise<number>;
+  /** Chunked delete; archive-enabled projects can be excluded. */
+  deleteOlderThan(ts: number, excludeProjectIds?: readonly string[]): Promise<number>;
   /** Chunked alert retention; returns how many alert rows were dropped. */
   deleteAlertsOlderThan(ts: number): Promise<number>;
   /** Chunked delete of every event in one project; returns the count. */

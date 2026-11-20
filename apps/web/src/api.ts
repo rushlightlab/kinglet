@@ -3,10 +3,21 @@ import type {
   AlertRecord,
   ApiKeyInfo,
   AppUser,
+  ArchiveSettings,
+  BackupSchedulePreview,
+  BackupSettings,
+  BackupSettingsInput,
+  BackupSnapshot,
+  BackupStatus,
   ChannelTestResult,
   EventPage,
   Histogram,
+  KeyType,
   Monitor,
+  NotificationChannel,
+  NotificationChannelInput,
+  NotificationChannelSummary,
+  NotificationDelivery,
   NotifyChannel,
   Project,
   ProjectMember,
@@ -26,7 +37,7 @@ function withProject(path: string, projectId: string): string {
   return `${path}${separator}project=${projectId}`;
 }
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
+async function api<T>(path: string, init?: RequestInit, timeoutMs = 15_000): Promise<T> {
   let res: Response;
   // The marker header is required by the server's CSRF guard for
   // cookie-authenticated mutations; cross-site forms cannot set it.
@@ -39,7 +50,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     res = await fetch(path, {
       ...init,
       credentials: "same-origin",
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(timeoutMs),
       headers,
     });
   } catch (err) {
@@ -214,7 +225,7 @@ export function fetchKeys(projectId: string): Promise<{ keys: ApiKeyInfo[] }> {
 
 export function createKey(
   projectId: string,
-  input: { name: string; scopes: string[] },
+  input: { name: string; scopes: string[]; keyType?: KeyType },
 ): Promise<{ key: ApiKeyInfo; plaintext: string }> {
   return api<{ key: ApiKeyInfo; plaintext: string }>(`/v1/projects/${projectId}/keys`, {
     method: "POST",
@@ -362,4 +373,158 @@ export function testChannel(projectId: string, channel: NotifyChannel): Promise<
 
 export function fetchAlerts(projectId: string, limit = 100): Promise<{ alerts: AlertRecord[] }> {
   return api<{ alerts: AlertRecord[] }>(withProject(`/v1/alerts?limit=${limit}`, projectId));
+}
+
+// ---------- system events (SSE) ----------
+
+/**
+ * Admin SSE feed for backup, restore, and archive work. Cookie auth, so no
+ * token in the URL. Listeners must use addEventListener(eventName), the
+ * server sends named events rather than the default `message`.
+ */
+export function openSystemEvents(): EventSource {
+  return new EventSource("/v1/system/events");
+}
+
+// ---------- backups ----------
+
+export function fetchBackupStatus(): Promise<{ status: BackupStatus }> {
+  return api<{ status: BackupStatus }>("/v1/backups/status");
+}
+
+export function fetchBackups(refresh = false): Promise<{
+  snapshots: BackupSnapshot[];
+  warning?: string;
+}> {
+  return api<{ snapshots: BackupSnapshot[]; warning?: string }>(
+    refresh ? "/v1/backups?refresh=1" : "/v1/backups",
+  );
+}
+
+export function fetchBackupSettings(): Promise<{ settings: BackupSettings }> {
+  return api<{ settings: BackupSettings }>("/v1/backups/settings");
+}
+
+export function updateBackupSettings(
+  input: BackupSettingsInput,
+): Promise<{ settings: BackupSettings; nextRuns: number[] }> {
+  return api<{ settings: BackupSettings; nextRuns: number[] }>("/v1/backups/settings", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function previewBackupSchedule(
+  cron: string,
+  timezone: string,
+): Promise<BackupSchedulePreview> {
+  const params = new URLSearchParams({ cron, timezone });
+
+  return api<BackupSchedulePreview>(`/v1/backups/schedule/preview?${params.toString()}`);
+}
+
+export function runBackup(): Promise<{ runId: string }> {
+  return api<{ runId: string }>("/v1/backups/run", { method: "POST" });
+}
+
+/** A bucket round trip can outlive the default request timeout. */
+export function testBackupConnection(): Promise<{ ok: true }> {
+  return api<{ ok: true }>("/v1/backups/test-connection", { method: "POST" }, 30_000);
+}
+
+export function downloadBackup(
+  id: string,
+): Promise<{ url: string; filename: string; expiresAt: number }> {
+  return api<{ url: string; filename: string; expiresAt: number }>(`/v1/backups/${id}/download`);
+}
+
+/** Stages a restore; the server applies it at the next boot. */
+export function restoreBackup(
+  id: string,
+): Promise<{ ok: true; id?: string; restartRequired?: boolean }> {
+  return api<{ ok: true; id?: string; restartRequired?: boolean }>(
+    `/v1/backups/${id}/restore`,
+    { method: "POST" },
+    60_000,
+  );
+}
+
+export function deleteBackup(id: string): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/v1/backups/${id}`, { method: "DELETE" });
+}
+
+// ---------- archive ----------
+
+export function fetchArchiveSettings(): Promise<{ settings: ArchiveSettings }> {
+  return api<{ settings: ArchiveSettings }>("/v1/archive/settings");
+}
+
+export function updateArchiveSettings(
+  input: Partial<ArchiveSettings>,
+): Promise<{ settings: ArchiveSettings }> {
+  return api<{ settings: ArchiveSettings }>("/v1/archive/settings", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function setProjectArchive(
+  projectId: string,
+  enabled: boolean,
+): Promise<{ ok: true; enabled: boolean }> {
+  return api<{ ok: true; enabled: boolean }>(`/v1/projects/${projectId}/archive`, {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+// ---------- notification channels ----------
+
+export function fetchNotificationChannels(): Promise<{ channels: NotificationChannel[] }> {
+  return api<{ channels: NotificationChannel[] }>("/v1/notifications/channels");
+}
+
+/** Admin-only read that returns the unmasked URL for the edit dialog. */
+export function fetchNotificationChannel(id: string): Promise<{ channel: NotificationChannel }> {
+  return api<{ channel: NotificationChannel }>(`/v1/notifications/channels/${id}`);
+}
+
+export function createNotificationChannel(
+  input: NotificationChannelInput,
+): Promise<{ channel: NotificationChannel }> {
+  return api<{ channel: NotificationChannel }>("/v1/notifications/channels", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateNotificationChannel(
+  id: string,
+  patch: Partial<NotificationChannelInput>,
+): Promise<{ channel: NotificationChannel }> {
+  return api<{ channel: NotificationChannel }>(`/v1/notifications/channels/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteNotificationChannel(id: string): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/v1/notifications/channels/${id}`, { method: "DELETE" });
+}
+
+export function testNotificationChannel(id: string): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/v1/notifications/channels/${id}/test`, { method: "POST" }, 30_000);
+}
+
+/** Monitor editors use this: id, name, type, enabled, and health only. */
+export function fetchNotificationChannelSummary(): Promise<{
+  channels: NotificationChannelSummary[];
+}> {
+  return api<{ channels: NotificationChannelSummary[] }>("/v1/notifications/channels/summary");
+}
+
+export function fetchNotificationDeliveries(
+  limit = 100,
+): Promise<{ deliveries: NotificationDelivery[] }> {
+  return api<{ deliveries: NotificationDelivery[] }>(`/v1/notifications/deliveries?limit=${limit}`);
 }

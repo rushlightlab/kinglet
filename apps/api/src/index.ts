@@ -13,10 +13,22 @@ import { passwordProblem } from "./auth/password.js";
 import { ensureBootstrapAdmin, ensureSchemaExtras } from "./auth/setup.js";
 import { loadConfig } from "./env.js";
 import type { Config } from "./env.js";
+import { startArchiveEngine } from "./archive/engine.js";
+import { registerArchiveRoutes } from "./archive/routes.js";
+import { listArchiveEnabledProjectIds } from "./archive/settings.js";
+import { startBackupEngine } from "./backups/engine.js";
+import { registerBackupRoutes } from "./backups/routes.js";
 import { startMonitorEngine } from "./monitors.js";
 import type { MonitorEngine } from "./monitors.js";
+import { notifyAction, startNotificationEngine } from "./notifications/engine.js";
+import { registerNotificationRoutes } from "./notifications/routes.js";
+import { finalizePendingRestore, preparePendingRestore } from "./restore/boot.js";
+import { registerRestoreRoutes } from "./restore/routes.js";
+import { maintenanceState } from "./restore/state.js";
 import { startRetentionJob } from "./retention.js";
+import { registerSystemEventsRoute } from "./system-routes.js";
 import { registerRoutes } from "./routes.js";
+import { APP_VERSION } from "./version.js";
 import { isJsonObject, isString } from "./json.js";
 import type { JsonValue } from "./json.js";
 import * as schema from "./storage/schema.js";
@@ -36,6 +48,15 @@ process.on("unhandledRejection", (reason) => {
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  // Must run before the live database is opened: applies a staged restore.
+  const restoreBoot = await preparePendingRestore(config);
+
+  if (restoreBoot.applied) {
+    console.log(
+      `[kinglet] applied staged restore ${restoreBoot.snapshotId ?? "unknown"}` +
+        (restoreBoot.preRestorePath ? `; pre-restore copy: ${restoreBoot.preRestorePath}` : ""),
+    );
+  }
 
   const storage = await createStorage({
     kind: config.storageKind,
@@ -43,7 +64,12 @@ async function main(): Promise<void> {
     authToken: config.dbAuthToken,
   });
 
-  await ensureSchemaExtras(storage);
+  await ensureSchemaExtras(storage, config.timezone);
+  await finalizePendingRestore(storage, config);
+
+  if (config.backupProblem) {
+    console.warn(`[kinglet] backup S3 is not configured: ${config.backupProblem}`);
+  }
 
   const auth = createAuth(storage.db, {
     baseUrl: config.baseUrl,
@@ -54,6 +80,20 @@ async function main(): Promise<void> {
   });
 
   const bootstrap = await ensureBootstrapAdmin(storage, config, auth);
+
+  // Start notifications before the monitor engine so legacy monitor channels
+  // are linked before the first refresh. A migration failure must not take
+  // logging down; monitors fall back to inline channels.
+  const notificationEngine = startNotificationEngine({ storage, config });
+
+  try {
+    await notificationEngine.ready;
+  } catch (err) {
+    console.warn(
+      "[kinglet] notification migration failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
 
   const app = new Hono<AppEnv>();
 
@@ -168,7 +208,7 @@ async function main(): Promise<void> {
     }
 
     // Public endpoint: minimal surface. Diagnostics live behind /v1/system/status.
-    return c.json({ ok: databaseOk, version: "0.3.0" }, databaseOk ? 200 : 503);
+    return c.json({ ok: databaseOk, version: APP_VERSION }, databaseOk ? 200 : 503);
   });
 
   // Better Auth owns /api/auth/* (sign-in, sign-out, session, password).
@@ -201,6 +241,18 @@ async function main(): Promise<void> {
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
   app.use("/v1/*", authMiddleware(storage, auth));
+  app.use("/v1/*", async (c, next) => {
+    const maintenance = maintenanceState();
+    const method = c.req.method;
+
+    if (maintenance.active && method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+      c.header("retry-after", "30");
+
+      return c.json({ error: "restore staged — restart Kinglet to apply" }, 503);
+    }
+
+    await next();
+  });
 
   const engine: MonitorEngine = startMonitorEngine(storage, {
     baseUrl: config.baseUrl,
@@ -209,7 +261,55 @@ async function main(): Promise<void> {
     maxDbBytes: config.maxDbBytes,
   });
 
-  registerRoutes(app, storage, engine, config, auth);
+  const backupEngine = startBackupEngine({ storage, config });
+  const archiveEngine = startArchiveEngine({ storage, config });
+
+  registerRoutes(app, storage, engine, config, auth, {
+    backupStatus: () => backupEngine.status(),
+  });
+  registerNotificationRoutes(app, {
+    storage,
+    config,
+    engine: notificationEngine,
+    refreshMonitors: () => engine.refresh(),
+  });
+  registerBackupRoutes(app, { storage, config, engine: backupEngine });
+  registerArchiveRoutes(app, { storage, config, engine: archiveEngine });
+  registerRestoreRoutes(app, {
+    storage,
+    config,
+    onStaged: () => {
+      // Let the 202 flush, then exit so a supervisor restarts into the swap.
+      setTimeout(() => process.kill(process.pid, "SIGTERM"), 500).unref();
+    },
+  });
+  registerSystemEventsRoute(app, {
+    auth,
+    getStatus: async () => {
+      const [status, archive] = await Promise.all([backupEngine.status(), archiveEngine.status()]);
+
+      return {
+        backup: {
+          configured: status.configured,
+          enabled: status.enabled,
+          running: status.running,
+          phase: status.phase,
+          lastSuccessAt: status.lastSuccessAt,
+          lastFailureAt: status.lastFailureAt,
+          nextRunAt: status.nextRunAt,
+          lastError: status.lastError,
+          databaseBytes: status.databaseBytes,
+          setupMissing: status.setupMissing,
+        },
+        archive: {
+          enabled: archive.enabled,
+          running: archive.running,
+          lastRunAt: archive.lastRunAt,
+          lastError: archive.lastError,
+        },
+      };
+    },
+  });
   registerStaticUi(app);
 
   const server = serve({ fetch: app.fetch, port: config.port }, () =>
@@ -225,10 +325,25 @@ async function main(): Promise<void> {
     // oxlint-disable-next-line promise/no-promise-in-callback
     void storage.close().finally(() => process.exit(1));
   });
-  startRetentionJob(storage, config.retentionDays, config.alertRetentionDays);
+  startRetentionJob(storage, config.retentionDays, config.alertRetentionDays, {
+    excludedProjectIds: () => listArchiveEnabledProjectIds(storage),
+    onWarning: (message) => {
+      void notifyAction(storage, config, {
+        action: "system.warning",
+        subject: "Retention warning",
+        summary: message,
+      }).catch(() => {
+        console.warn("[kinglet] system warning notification failed");
+      });
+    },
+  });
 
   const shutdown = (): void => {
     console.log("[kinglet] shutting down…");
+    engine.stop();
+    notificationEngine.stop();
+    backupEngine.stop();
+    archiveEngine.stop();
     server.close();
     void storage.close().finally(() => process.exit(0));
   };
