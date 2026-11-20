@@ -59,6 +59,8 @@ stdio MCP server.
 - Node TypeScript packages (`apps/api`, `packages/mcp`, `packages/sdk-node`)
   use `.ts` relative import specifiers; `tsc` rewrites them to `.js` in `dist`.
   The web app and Playwright E2E keep bundler-style extensionless imports.
+- Emitted `.d.ts` files may retain `.ts` specifiers until a postbuild rewrite;
+  add one before exposing a `types` or `exports` entrypoint.
 
 ## Local development
 
