@@ -50,6 +50,24 @@ or container, never a production instance. For deeper HTTP load, `autocannon`,
 `k6`, or `oha` work well; use `docker stats` for memory and
 `docker exec kinglet du -sb /data` for storage growth.
 
+### Autocannon
+
+`autocannon` is useful for HTTP-level RPS and latency. Generate an NDJSON file
+with one event per line, then send it to a disposable instance with an ingest
+key:
+
+```bash
+pnpm dlx autocannon -c 10 -d 10 -m POST \
+  -i events-1000.ndjson \
+  -H "authorization=Bearer $KINGLET_TOKEN" \
+  -H "content-type=application/x-ndjson" \
+  http://localhost:8080/v1/events
+```
+
+Successful POSTs × batch size approximates events per second.
+`--renderStatusCodes` exposes 200/413/429 behavior. Query load works the same
+way with `GET /v1/events?q=...` and a `query` key.
+
 ## Layout
 
 - `apps/api/test/unit/` - pure unit tests for ingest, filters, auth helpers,
