@@ -372,7 +372,7 @@ describe("MCP stdio contract", () => {
     const test = current();
     const client = test.countClient;
     const now = Date.now();
-    const from = now - 60_000;
+    const from = now - 3_600_000;
     const to = now;
 
     const ungrouped = await client.callTool("count_events", { from, to });
