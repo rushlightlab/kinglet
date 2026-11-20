@@ -38,7 +38,8 @@ pnpm test:e2e
 - `apps/api/test/integration/` - the app seam from `apps/api/src/app.ts` with
   real Better Auth, real routes, and a temporary SQLite database.
 - `apps/api/test/helpers/` - temp database, test config, app harness, request
-  helpers, deterministic seed data, loopback servers, and the MCP stdio client.
+  helpers, deterministic seed data, loopback servers, the SSE reader, and the
+  MCP stdio client.
 - `packages/mcp/test/unit/` - MCP config, client error-bound, and result-size
   unit tests.
 - `packages/sdk-node/test/unit/` and `packages/sdk-node/test/integration/` -
@@ -217,6 +218,19 @@ These are intentional gaps, not claims of coverage:
   integration database does run the full migrator, so a broken migration still
   fails the suite; upgrading a populated database with duplicate archive rows is
   not replayed end-to-end.
+- The archive spool-cap test asserts the typed `ArchiveError` with status 413
+  from `importArchive`. It does not push the HTTP route into the 413 mapping
+  path; the route maps `ArchiveError.status` to the response.
+- The live-tail slow-consumer drop (`MAX_PENDING_WRITES` / `MAX_PENDING_BYTES`)
+  is not exercised. `app.request` streams in memory and the suite does not
+  create deterministic backpressure on the internal `TransformStream`, so a
+  test could pass or fail on scheduler timing. Credential revalidation,
+  per-identity limits and cancellation release, project isolation, `q`
+  filtering, and the 30-minute lifetime are covered.
+- Offboarding tests assert an old session on a mutation, which bypasses Better
+  Auth's signed cookie cache. A cached read may keep returning the old identity
+  for up to the 60-second cache window; the suite does not assert immediate
+  rejection on a cached read.
 - Test coverage is not measured or enforced. There are no coverage thresholds.
 
 Do not describe the accepted behavior or boundaries above as covered.

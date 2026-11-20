@@ -42,7 +42,9 @@ async function addToProject(userId: string, projectId: string): Promise<void> {
   });
 
   if (added.status !== 201) {
-    throw new Error(`keys suite: could not add ${userId} to project ${projectId}`);
+    throw new Error(
+      `keys suite: could not add ${userId} to project ${projectId} (status ${added.status})`,
+    );
   }
 }
 

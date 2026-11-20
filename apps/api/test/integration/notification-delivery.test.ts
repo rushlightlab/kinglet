@@ -3,20 +3,23 @@ import type { JsonObject } from "../../src/json.js";
 import { arrayAt, errorOf, jsonBody, numberAt, objectAt, stringAt } from "../helpers/body.js";
 import { createTestHarness } from "../helpers/harness.js";
 import type { TestHarness } from "../helpers/harness.js";
+import { reserveClosedLoopbackPort } from "../helpers/loopback.js";
 import { request, signIn } from "../helpers/request.js";
 import type { CookieJar } from "../helpers/request.js";
 import { seedProject } from "../helpers/seed.js";
 import type { SeededProject } from "../helpers/seed.js";
 
 /**
- * Loopback-only delivery checks. `http://127.0.0.1:9` refuses the connection
- * immediately, so no request leaves the machine and no real webhook is used.
+ * Loopback-only delivery checks. The target port was reserved and released, so
+ * the connection is refused immediately: no request leaves the machine and no
+ * real webhook is used.
  */
 
 interface DeliveryContext {
   harness: TestHarness;
   adminJar: CookieJar;
   project: SeededProject;
+  closedPort: number;
 }
 
 let context: DeliveryContext | null = null;
@@ -34,6 +37,7 @@ beforeAll(async () => {
 
   try {
     const project = await seedProject(harness.storage, { name: "Loopback", slug: "loopback" });
+    const closedPort = await reserveClosedLoopbackPort();
     const admin = await signIn(harness.app, harness.admin.email, harness.admin.password);
 
     if (!admin.response.ok) {
@@ -42,7 +46,7 @@ beforeAll(async () => {
       );
     }
 
-    context = { harness, adminJar: admin.jar, project };
+    context = { harness, adminJar: admin.jar, project, closedPort };
   } catch (err) {
     await harness.close();
     throw err;
@@ -78,8 +82,8 @@ function expectRecentTestFailure(body: JsonObject): void {
 
 describe("notification test cooldowns", () => {
   it("records the first channel test failure and rejects an immediate retry", async () => {
-    const { harness, adminJar } = ctx();
-    const channelId = await createChannel("http://127.0.0.1:9/channel-hook");
+    const { harness, adminJar, closedPort } = ctx();
+    const channelId = await createChannel(`http://127.0.0.1:${closedPort}/channel-hook`);
 
     try {
       const first = await request(
@@ -125,7 +129,7 @@ describe("notification test cooldowns", () => {
   });
 
   it("records the first monitor test failure and rejects an immediate retry", async () => {
-    const { harness, project, adminJar } = ctx();
+    const { harness, project, adminJar, closedPort } = ctx();
 
     const created = await request(harness.app, "/v1/monitors?project=" + project.id, {
       method: "POST",
@@ -133,7 +137,7 @@ describe("notification test cooldowns", () => {
         name: "loopback-monitor",
         query: "level>=error",
         kind: "match",
-        channels: [{ type: "webhook", url: "http://127.0.0.1:9/monitor-hook" }],
+        channels: [{ type: "webhook", url: `http://127.0.0.1:${closedPort}/monitor-hook` }],
       },
       cookies: adminJar,
     });

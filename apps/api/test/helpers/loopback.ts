@@ -88,6 +88,36 @@ export async function startLoopbackApp(app: Hono<AppEnv>): Promise<LoopbackAppSe
   };
 }
 
+/**
+ * Reserves an ephemeral loopback port, then closes the listener. A connection
+ * to the returned port is refused immediately without depending on a fixed
+ * port that another process might own.
+ */
+export async function reserveClosedLoopbackPort(): Promise<number> {
+  const server = createServer();
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+
+  if (address === null || isString(address)) {
+    await closeServer(server);
+    throw new Error("loopback port reservation did not expose a TCP port");
+  }
+
+  const port = address.port;
+
+  await closeServer(server);
+
+  return port;
+}
+
 const HOP_BY_HOP = new Set([
   "connection",
   "content-length",

@@ -15,12 +15,8 @@ import { errorOf, jsonBody, objectAt } from "../helpers/body.js";
 import { createTestSession } from "../helpers/session.js";
 import type { TestSession } from "../helpers/session.js";
 import { request } from "../helpers/request.js";
-
-interface SseFrame {
-  event: string | null;
-  data: string | null;
-  comment: string | null;
-}
+import { SseReader } from "../helpers/sse.js";
+import type { SseFrame } from "../helpers/sse.js";
 
 let session: TestSession | null = null;
 
@@ -37,107 +33,6 @@ function current(): TestSession {
   if (session === null) throw new Error("system events suite: fixture missing");
 
   return session;
-}
-
-class SseReader {
-  private readonly reader: ReadableStreamDefaultReader<Uint8Array>;
-  private readonly decoder = new TextDecoder();
-  private buffer = "";
-  private closed = false;
-
-  constructor(response: Response) {
-    if (response.body === null) throw new Error("system events suite: SSE response has no body");
-
-    this.reader = response.body.getReader();
-  }
-
-  /** Next complete frame, or null once the server closes the stream. */
-  async next(timeoutMs = 5_000): Promise<SseFrame | null> {
-    const deadline = Date.now() + timeoutMs;
-
-    for (;;) {
-      const boundary = this.buffer.indexOf("\n\n");
-
-      if (boundary >= 0) {
-        const raw = this.buffer.slice(0, boundary);
-
-        this.buffer = this.buffer.slice(boundary + 2);
-
-        return parseFrame(raw);
-      }
-
-      if (this.closed) return null;
-
-      const remaining = deadline - Date.now();
-
-      if (remaining <= 0)
-        throw new Error("system events suite: timed out waiting for an SSE frame");
-
-      const chunk = await readChunk(this.reader, remaining);
-
-      if (chunk === null) {
-        this.closed = true;
-        continue;
-      }
-
-      this.buffer += this.decoder.decode(chunk, { stream: true });
-    }
-  }
-
-  async close(): Promise<void> {
-    try {
-      await this.reader.cancel();
-    } catch {
-      // The server may have closed the stream first.
-    }
-
-    // Let the stream callback's finally block unsubscribe from the bus.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-}
-
-async function readChunk(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  timeoutMs: number,
-): Promise<Uint8Array | null> {
-  let timer: NodeJS.Timeout | undefined;
-
-  try {
-    return await Promise.race([
-      reader.read().then((result) => (result.done ? null : result.value)),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("system events suite: SSE read timed out")),
-          timeoutMs,
-        );
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
-}
-
-function parseFrame(raw: string): SseFrame {
-  const comments: string[] = [];
-  const data: string[] = [];
-  let event: string | null = null;
-
-  for (const line of raw.split("\n")) {
-    if (line.startsWith(":")) {
-      comments.push(line.slice(1).trim());
-    } else if (line.startsWith("event:")) {
-      event = line.slice("event:".length).trim();
-    } else if (line.startsWith("data:")) {
-      data.push(line.slice("data:".length).replace(/^ /, ""));
-    }
-  }
-
-  return {
-    event,
-    data: data.length > 0 ? data.join("\n") : null,
-    comment: comments.length > 0 ? comments.join("\n") : null,
-  };
 }
 
 async function openEvents(jar: { header(): string }): Promise<SseReader> {
