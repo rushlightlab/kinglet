@@ -188,24 +188,30 @@ rows/groups at 50 by default and 200 maximum; they do not cap
 Truncated responses set `truncated: true` and `search_events` returns a
 `nextCursor` for paging.
 
-| Tool             | Scope             | Kind        | Returns                                                                   |
-| ---------------- | ----------------- | ----------- | ------------------------------------------------------------------------- |
-| `get_context`    | any valid MCP key | read        | Project id/name/slug, key metadata, capabilities, version/retention       |
-| `search_events`  | `logs.read`       | read        | Events for a filter and time range, newest first, cursor                  |
-| `get_event`      | `logs.read`       | read        | One event by `uid`                                                        |
-| `get_histogram`  | `logs.read`       | read        | Bucket counts for a filter and time range                                 |
-| `list_services`  | `logs.read`       | read        | Services with event counts                                                |
-| `count_events`   | `logs.read`       | read        | Effective `from`/`to`, total, and optional `service`/`level`/`env` groups |
-| `list_monitors`  | `monitors.read`   | read        | Monitors, state, last evaluation, channel summaries                       |
-| `get_monitor`    | `monitors.read`   | read        | One monitor                                                               |
-| `list_alerts`    | `monitors.read`   | read        | Recent alerts; optional monitor/state/time filters                        |
-| `get_alert`      | `monitors.read`   | read        | One alert by id, with the same masking rules                              |
-| `list_channels`  | `monitors.read`   | read        | Channel id/name/type/enabled/health only                                  |
-| `create_monitor` | `monitors.write`  | write       | Creates a monitor; channels are `channelIds`, never URLs                  |
-| `update_monitor` | `monitors.write`  | write       | Partial update by id                                                      |
-| `delete_monitor` | `monitors.write`  | destructive | Deletes a monitor and its alert history                                   |
+| Tool                | Scope             | Kind        | Returns                                                                   |
+| ------------------- | ----------------- | ----------- | ------------------------------------------------------------------------- |
+| `get_context`       | any valid MCP key | read        | Project id/name/slug, key metadata, capabilities, version/retention       |
+| `search_events`     | `logs.read`       | read        | Events for a filter and time range, newest first, cursor; optional fields |
+| `get_event`         | `logs.read`       | read        | One event by `uid`                                                        |
+| `get_event_context` | `logs.read`       | read        | One event plus `before`/`after` neighbours in `(ts, id)` order            |
+| `get_histogram`     | `logs.read`       | read        | Bucket counts for a filter and time range                                 |
+| `list_services`     | `logs.read`       | read        | Services with event counts                                                |
+| `count_events`      | `logs.read`       | read        | Effective `from`/`to`, total, and optional `service`/`level`/`env` groups |
+| `list_monitors`     | `monitors.read`   | read        | Monitors, state, last evaluation, channel summaries                       |
+| `get_monitor`       | `monitors.read`   | read        | One monitor                                                               |
+| `list_alerts`       | `monitors.read`   | read        | Recent alerts; optional monitor/state/time filters                        |
+| `get_alert`         | `monitors.read`   | read        | One alert by id, with the same masking rules                              |
+| `list_channels`     | `monitors.read`   | read        | Channel id/name/type/enabled/health only                                  |
+| `create_monitor`    | `monitors.write`  | write       | Creates a monitor; channels are `channelIds`, never URLs                  |
+| `update_monitor`    | `monitors.write`  | write       | Partial update by id                                                      |
+| `delete_monitor`    | `monitors.write`  | destructive | Deletes a monitor and its alert history                                   |
 
 `monitors.write` implies `monitors.read`. MCP keys never have `logs.write`.
+`search_events` accepts an optional `fields` list (`id`, `uid`, `ts`, `level`,
+`service`, `env`, `message`, `fields`; max 8, unique) to return only those keys.
+Projection never changes `nextCursor` or the underlying query.
+`get_event_context` takes `before`/`after` (0–20, default 5) and keeps each
+neighbour list chronological.
 `list_alerts` time filters are optional: with `from`/`to` omitted, alert history
 remains all-time and is capped by `limit`. Capabilities are per-key, so a
 `monitors.read`-only key gets the same hidden summary/sample projection as the

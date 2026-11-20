@@ -179,6 +179,8 @@ never ingest, manage keys/users/projects, or change backups and settings.
 | `DELETE /v1/projects/:id/members/:userId`     | Remove a project member (admin)                                                 |
 | `POST /v1/events`                             | Ingest a batch (NDJSON or JSON, ≤ 10k events, ≤ 8MB)                            |
 | `GET /v1/events`                              | Query. Params: `q` (filter grammar), `from`, `to` (epoch ms), `limit`, `cursor` |
+| `GET /v1/events/:uid`                         | One event by its UUID v7 uid                                                    |
+| `GET /v1/events/:uid/context`                 | Neighbours. Params: `before`, `after` (0–20, default 5)                         |
 | `GET /v1/histogram`                           | Counts per level per bucket. Params: `from`, `to`, `buckets`                    |
 | `GET /v1/services`                            | Your known services and their event counts                                      |
 | `GET /v1/aggregate`                           | Totals for a filter; optional `groupBy=service\|level\|env`, `limit` ≤ 200      |
@@ -215,8 +217,9 @@ never ingest, manage keys/users/projects, or change backups and settings.
 Ingest is rate-limited to 600 batches/minute per identity. Filters are capped at
 500 characters / 32 terms, `limit` at 1000, `buckets` at 240, alerts at 500, and
 monitors at 100 per project. Aggregate groups default to 50 and cap at 200.
-`from`/`to` are clamped to the last 31 days and 5 minutes of future skew.
-Per-project event and database caps are configurable (see below).
+Event context `before`/`after` default to 5 and cap at 20. `from`/`to` are
+clamped to the last 31 days and 5 minutes of future skew. Per-project event and
+database caps are configurable (see below).
 
 Alert filters and detail return `notifyError` only to administrators and hide
 event-derived text from callers without `logs.read`. When `from`/`to` are

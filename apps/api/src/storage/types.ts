@@ -36,6 +36,12 @@ export interface HistogramPointRow {
   counts: number[];
 }
 
+export interface EventContext {
+  event: StoredEvent;
+  before: StoredEvent[];
+  after: StoredEvent[];
+}
+
 /**
  * The high-level storage seam. Today there is a single implementation (the
  * libSQL client: local file or hosted Turso) and it also exposes the typed
@@ -59,6 +65,16 @@ export interface Storage {
   ): Promise<StoredEvent[]>;
   queryEvents(opts: QueryOptions): Promise<StoredEvent[]>;
   getEventByUid(projectId: string, uid: string): Promise<StoredEvent | null>;
+  /**
+   * One event plus its neighbours in deterministic `(ts, id)` order. Both
+   * arrays are chronological and project-scoped.
+   */
+  getEventContext(
+    projectId: string,
+    uid: string,
+    before: number,
+    after: number,
+  ): Promise<EventContext | null>;
   /** Total rows matching a project-scoped condition from buildWhere(). */
   countEvents(filter: SQL): Promise<number>;
   /**

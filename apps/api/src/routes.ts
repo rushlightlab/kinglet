@@ -1407,6 +1407,32 @@ export function registerRoutes(
     return c.json({ event: toClientEvent(row) });
   });
 
+  app.get("/v1/events/:uid/context", async (c) => {
+    const authInfo = getAuth(c);
+
+    if (!canCapability(authInfo, "logs.read")) {
+      return c.json({ error: readScopeError(authInfo) }, 403);
+    }
+
+    const projectId = await resolveProjectId(c, storage);
+
+    if (projectId instanceof Response) return projectId;
+    const uid = c.req.param("uid");
+
+    if (!isUuid(uid)) return c.json({ error: "invalid event id" }, 400);
+    const before = clampInt(c.req.query("before"), 5, 0, 20);
+    const after = clampInt(c.req.query("after"), 5, 0, 20);
+    const context = await storage.getEventContext(projectId, uid.toLowerCase(), before, after);
+
+    if (!context) return c.json({ error: "event not found" }, 404);
+
+    return c.json({
+      event: toClientEvent(context.event),
+      before: context.before.map(toClientEvent),
+      after: context.after.map(toClientEvent),
+    });
+  });
+
   app.get("/v1/histogram", async (c) => {
     const authInfo = getAuth(c);
 

@@ -1,4 +1,18 @@
-import { and, asc, count, desc, eq, gte, isNotNull, lt, lte, notInArray, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  gte,
+  isNotNull,
+  lt,
+  lte,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { Normalized } from "../ingest.ts";
 import { uuidv7 } from "../auth/ids.ts";
@@ -8,6 +22,7 @@ import * as schema from "./schema.ts";
 import type {
   AggregateGroupBy,
   AggregateGroups,
+  EventContext,
   HistogramPointRow,
   QueryOptions,
   ServiceRow,
@@ -189,6 +204,76 @@ export async function getEventByUid(
   const row = rows[0];
 
   return row ? mapEventRow(row) : null;
+}
+
+/**
+ * Surrounding events in deterministic `(ts, id)` order. Querying each side by
+ * that tuple keeps equal timestamps stable; the before side is fetched
+ * newest-first for the LIMIT and reversed for chronological output.
+ */
+export async function getEventContext(
+  db: KingletDb,
+  projectId: string,
+  uid: string,
+  before: number,
+  after: number,
+): Promise<EventContext | null> {
+  const event = await getEventByUid(db, projectId, uid);
+
+  if (!event) return null;
+
+  const beforeCount = Math.min(20, Math.max(0, Math.trunc(before)));
+  const afterCount = Math.min(20, Math.max(0, Math.trunc(after)));
+
+  const beforeRows =
+    beforeCount === 0
+      ? []
+      : await db
+          .select()
+          .from(schema.events)
+          .where(
+            and(
+              eq(schema.events.projectId, projectId),
+              or(
+                lt(schema.events.ts, event.ts),
+                and(eq(schema.events.ts, event.ts), lt(schema.events.id, event.id)),
+              ),
+            ),
+          )
+          .orderBy(desc(schema.events.ts), desc(schema.events.id))
+          .limit(beforeCount);
+
+  const afterRows =
+    afterCount === 0
+      ? []
+      : await db
+          .select()
+          .from(schema.events)
+          .where(
+            and(
+              eq(schema.events.projectId, projectId),
+              or(
+                gt(schema.events.ts, event.ts),
+                and(eq(schema.events.ts, event.ts), gt(schema.events.id, event.id)),
+              ),
+            ),
+          )
+          .orderBy(asc(schema.events.ts), asc(schema.events.id))
+          .limit(afterCount);
+
+  const beforeEvents: StoredEvent[] = [];
+
+  for (let i = beforeRows.length - 1; i >= 0; i--) {
+    const row = beforeRows[i];
+
+    if (row) beforeEvents.push(mapEventRow(row));
+  }
+
+  return {
+    event,
+    before: beforeEvents,
+    after: afterRows.map(mapEventRow),
+  };
 }
 
 export async function histogramPoints(

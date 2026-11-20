@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { uuidv7 } from "../../src/auth/ids.ts";
 import { isJsonObject, isString } from "../../src/json.ts";
-import type { JsonObject } from "../../src/json.ts";
+import type { JsonObject, JsonValue } from "../../src/json.ts";
 import * as schema from "../../src/storage/schema.ts";
 import { startLoopbackApp } from "../helpers/loopback.ts";
 import type { LoopbackAppServer } from "../helpers/loopback.ts";
@@ -29,15 +29,21 @@ interface McpFixture {
   client: McpStdioClient;
   countClient: McpStdioClient;
   alertClient: McpStdioClient;
+  eventClient: McpStdioClient;
   cwd: string;
   writeKey: string;
   countKey: string;
   alertKey: string;
+  eventKey: string;
   alertId: string;
   resolvedAlertId: string;
   betaAlertId: string;
   betaMonitorId: string;
   otherMonitorId: string;
+  newestEventUid: string;
+  middleEventUid: string;
+  oldestEventUid: string;
+  betaEventUid: string;
 }
 
 let fixture: McpFixture | null = null;
@@ -54,6 +60,7 @@ beforeAll(async () => {
   let client: McpStdioClient | null = null;
   let countClient: McpStdioClient | null = null;
   let alertClient: McpStdioClient | null = null;
+  let eventClient: McpStdioClient | null = null;
   let cwd: string | null = null;
 
   try {
@@ -84,7 +91,14 @@ beforeAll(async () => {
       scopes: ["logs.read", "monitors.read"],
     });
 
-    await storage.insertEvents(
+    const eventKey = await seedApiKey(storage, {
+      projectId: alpha.id,
+      name: "mcp-contract-events",
+      keyType: "mcp",
+      scopes: ["logs.read"],
+    });
+
+    const alphaEvents = await storage.insertEvents(
       alpha.id,
       [
         {
@@ -122,7 +136,8 @@ beforeAll(async () => {
       ],
       null,
     );
-    await storage.insertEvents(
+
+    const betaEvents = await storage.insertEvents(
       beta.id,
       [
         {
@@ -251,24 +266,50 @@ beforeAll(async () => {
     });
     await alertClient.initialize();
 
+    // Event-context and projection calls get their own read-only key so each
+    // contract area stays on a least-privilege bucket.
+    eventClient = await McpStdioClient.start({
+      url: server.url,
+      key: eventKey.plaintext,
+      cwd,
+      cliPath: CLI_PATH,
+    });
+    await eventClient.initialize();
+
+    const newestEvent = alphaEvents[0];
+    const middleEvent = alphaEvents[1];
+    const oldestEvent = alphaEvents[3];
+    const betaEvent = betaEvents[0];
+
+    if (!newestEvent?.uid || !middleEvent?.uid || !oldestEvent?.uid || !betaEvent?.uid) {
+      throw new Error("MCP stdio suite: event fixture uids missing");
+    }
+
     fixture = {
       session,
       server,
       client,
       countClient,
       alertClient,
+      eventClient,
       cwd,
       writeKey: writeKey.plaintext,
       countKey: countKey.plaintext,
       alertKey: alertKey.plaintext,
+      eventKey: eventKey.plaintext,
       alertId,
       resolvedAlertId,
       betaAlertId,
       betaMonitorId: betaMonitor.id,
       otherMonitorId: otherMonitor.id,
+      newestEventUid: newestEvent.uid,
+      middleEventUid: middleEvent.uid,
+      oldestEventUid: oldestEvent.uid,
+      betaEventUid: betaEvent.uid,
     };
   } catch (err) {
     const cleanupSteps = [
+      async () => eventClient?.close(),
       async () => alertClient?.close(),
       async () => countClient?.close(),
       async () => client?.close(),
@@ -309,6 +350,8 @@ afterAll(async () => {
     expect(closing.countClient.terminated).toBe(true);
     await closing.alertClient.close();
     expect(closing.alertClient.terminated).toBe(true);
+    await closing.eventClient.close();
+    expect(closing.eventClient.terminated).toBe(true);
   } finally {
     try {
       await closing.server.close();
@@ -374,12 +417,22 @@ async function waitForAuditLine(
   throw new Error(`timed out waiting for a ${tool} audit line`);
 }
 
+function eventMessages(value: JsonValue | undefined): string[] {
+  if (!Array.isArray(value)) throw new Error("event context neighbour list is not an array");
+
+  return value.map((entry) => {
+    if (!isJsonObject(entry)) throw new Error("event context neighbour is not an object");
+
+    return String(entry.message);
+  });
+}
+
 describe("MCP stdio contract", () => {
   it("exposes the complete tool list over a real stdio session", async () => {
     const tools = await current().client.listTools();
     const names = tools.map((tool) => tool.name);
 
-    expect(names).toHaveLength(14);
+    expect(names).toHaveLength(15);
 
     for (const name of [
       "count_events",
@@ -388,6 +441,7 @@ describe("MCP stdio contract", () => {
       "get_alert",
       "get_context",
       "get_event",
+      "get_event_context",
       "get_histogram",
       "get_monitor",
       "list_alerts",
@@ -411,6 +465,11 @@ describe("MCP stdio contract", () => {
 
     expect(alert?.annotations?.readOnlyHint).toBe(true);
     expect(alert?.annotations?.destructiveHint).toBe(false);
+
+    const eventContext = tools.find((tool) => tool.name === "get_event_context");
+
+    expect(eventContext?.annotations?.readOnlyHint).toBe(true);
+    expect(eventContext?.annotations?.destructiveHint).toBe(false);
   });
 
   it("returns the key's project context without exposing another project", async () => {
@@ -447,6 +506,157 @@ describe("MCP stdio contract", () => {
     expect(text).toContain("alpha-only-marker");
     expect(text).not.toContain("beta-only-marker");
     expect(text).not.toContain(current().session.data.projects.beta.id);
+  });
+
+  it("returns event context in deterministic chronological order", async () => {
+    const test = current();
+    const client = test.eventClient;
+
+    const middle = await client.callTool("get_event_context", {
+      uid: test.middleEventUid,
+      before: 1,
+      after: 1,
+    });
+
+    const middleBody = parseToolJson(toolText(middle));
+
+    expect(toolFailed(middle)).toBe(false);
+
+    if (middleBody === null) throw new Error("get_event_context did not return an object");
+
+    const event = middleBody.event;
+
+    if (!isJsonObject(event)) throw new Error("get_event_context did not return an event");
+
+    expect(event.uid).toBe(test.middleEventUid);
+    expect(eventMessages(middleBody.before)).toEqual(["alpha web info"]);
+    expect(eventMessages(middleBody.after)).toEqual(["alpha-only-marker"]);
+
+    const oldest = await client.callTool("get_event_context", {
+      uid: test.oldestEventUid,
+      before: 0,
+      after: 2,
+    });
+
+    const oldestBody = parseToolJson(toolText(oldest));
+
+    if (oldestBody === null) throw new Error("get_event_context did not return an object");
+
+    expect(eventMessages(oldestBody.before)).toEqual([]);
+    expect(eventMessages(oldestBody.after)).toEqual(["alpha web info", "alpha warning"]);
+
+    const newest = await client.callTool("get_event_context", {
+      uid: test.newestEventUid,
+      before: 2,
+      after: 0,
+    });
+
+    const newestBody = parseToolJson(toolText(newest));
+
+    if (newestBody === null) throw new Error("get_event_context did not return an object");
+
+    expect(eventMessages(newestBody.before)).toEqual(["alpha web info", "alpha warning"]);
+    expect(eventMessages(newestBody.after)).toEqual([]);
+
+    const crossProject = await client.callTool("get_event_context", {
+      uid: test.betaEventUid,
+    });
+
+    const crossText = toolText(crossProject);
+
+    expect(toolFailed(crossProject)).toBe(true);
+    expect(crossText).toBe("event not found");
+    expect(crossText).not.toContain("beta-only-marker");
+    expect(crossText).not.toContain(test.betaEventUid);
+
+    const missing = await client.callTool("get_event_context", { uid: uuidv7() });
+
+    expect(toolFailed(missing)).toBe(true);
+    expect(toolText(missing)).toBe("event not found");
+
+    const tooMany = await client.callTool("get_event_context", {
+      uid: test.middleEventUid,
+      before: 21,
+    });
+
+    expect(toolFailed(tooMany)).toBe(true);
+    expect(toolText(tooMany)).toContain("Input validation error");
+  });
+
+  it("projects search fields without changing the cursor", async () => {
+    const test = current();
+    const client = test.eventClient;
+
+    const full = parseToolJson(
+      toolText(await client.callTool("search_events", { q: "alpha", limit: 1 })),
+    );
+
+    const projected = parseToolJson(
+      toolText(
+        await client.callTool("search_events", {
+          q: "alpha",
+          limit: 1,
+          fields: ["id", "message"],
+        }),
+      ),
+    );
+
+    if (full === null || projected === null) {
+      throw new Error("search_events did not return an object");
+    }
+
+    expect(projected.nextCursor).toBe(full.nextCursor);
+    expect(projected.nextCursor).not.toBe(null);
+
+    const fullEvents = full.events;
+    const projectedEvents = projected.events;
+
+    if (!Array.isArray(fullEvents) || !Array.isArray(projectedEvents)) {
+      throw new Error("search_events did not return events");
+    }
+
+    const fullEvent = fullEvents[0];
+    const projectedEvent = projectedEvents[0];
+
+    if (!isJsonObject(fullEvent) || !isJsonObject(projectedEvent)) {
+      throw new Error("search_events did not return an event object");
+    }
+
+    expect(fullEvent).toHaveProperty("levelName");
+    expect(fullEvent).toHaveProperty("uid");
+    expect(fullEvent).toHaveProperty("fields");
+    expect(Object.keys(projectedEvent)).toHaveLength(2);
+    expect(projectedEvent).toHaveProperty("id");
+    expect(projectedEvent).toHaveProperty("message");
+    expect(projectedEvent).not.toHaveProperty("levelName");
+    expect(projectedEvent).not.toHaveProperty("service");
+
+    const messages = await client.callTool("search_events", {
+      q: "alpha",
+      fields: ["message"],
+    });
+
+    const messageText = toolText(messages);
+    const messageBody = parseToolJson(messageText);
+
+    if (messageBody === null || !Array.isArray(messageBody.events)) {
+      throw new Error("search_events did not return events");
+    }
+
+    for (const entry of messageBody.events) {
+      if (!isJsonObject(entry)) throw new Error("search_events event is not an object");
+
+      expect(Object.keys(entry)).toEqual(["message"]);
+    }
+
+    expect(messageText).not.toContain("beta-only-marker");
+
+    for (const fields of [["bogus"], ["id", "id"]]) {
+      const invalid = await client.callTool("search_events", { q: "alpha", fields });
+
+      expect(toolFailed(invalid)).toBe(true);
+      expect(toolText(invalid)).toContain("Input validation error");
+    }
   });
 
   it("counts and groups only the MCP key's project", async () => {
@@ -742,13 +952,36 @@ describe("MCP stdio contract", () => {
       await test.countClient.callTool("count_events", { groupBy: "service" }),
     );
 
-    const combined = [monitors, channels, alerts, alertDetail, counts].join("\n");
+    const eventContext = toolText(
+      await test.eventClient.callTool("get_event_context", {
+        uid: test.middleEventUid,
+        before: 1,
+        after: 1,
+      }),
+    );
+
+    const projectedSearch = toolText(
+      await test.eventClient.callTool("search_events", { q: "alpha", fields: ["message"] }),
+    );
+
+    const combined = [
+      monitors,
+      channels,
+      alerts,
+      alertDetail,
+      counts,
+      eventContext,
+      projectedSearch,
+    ].join("\n");
 
     expect(monitors).toContain("leak-monitor");
     expect(channels).toContain("secret-channel");
     expect(alerts).toContain(test.alertId);
     expect(alertDetail).toContain(test.alertId);
     expect(counts).toContain("api");
+    expect(eventContext).toContain("alpha warning");
+    expect(projectedSearch).toContain("alpha-only-marker");
+    expect(combined).not.toContain("beta-only-marker");
 
     for (const secret of [
       SECRET_CHANNEL_URL,
@@ -760,6 +993,7 @@ describe("MCP stdio contract", () => {
       test.writeKey,
       test.countKey,
       test.alertKey,
+      test.eventKey,
       test.betaAlertId,
       test.betaMonitorId,
       "beta alert must stay private",
@@ -771,6 +1005,7 @@ describe("MCP stdio contract", () => {
     expect(test.countClient.stderrLines.join("\n")).not.toContain(test.writeKey);
     expect(test.countClient.stderrLines.join("\n")).not.toContain(test.countKey);
     expect(test.alertClient.stderrLines.join("\n")).not.toContain(test.alertKey);
+    expect(test.eventClient.stderrLines.join("\n")).not.toContain(test.eventKey);
 
     const alertList = parseToolJson(alerts);
     const alertsArray = alertList?.alerts;
@@ -817,11 +1052,14 @@ describe("MCP stdio contract", () => {
     expect(test.client.stderrLines.join("\n")).not.toContain(test.writeKey);
     expect(test.client.stderrLines.join("\n")).not.toContain(test.countKey);
     expect(test.client.stderrLines.join("\n")).not.toContain(test.alertKey);
+    expect(test.client.stderrLines.join("\n")).not.toContain(test.eventKey);
     expect(test.countClient.stderrLines.join("\n")).not.toContain(test.writeKey);
     expect(test.countClient.stderrLines.join("\n")).not.toContain(test.countKey);
     expect(test.countClient.stderrLines.join("\n")).not.toContain(test.alertKey);
     expect(test.alertClient.stderrLines.join("\n")).not.toContain(test.alertKey);
     expect(test.alertClient.stderrLines.join("\n")).not.toContain(test.writeKey);
+    expect(test.eventClient.stderrLines.join("\n")).not.toContain(test.eventKey);
+    expect(test.eventClient.stderrLines.join("\n")).not.toContain(test.writeKey);
     expect(fs.readdirSync(test.cwd)).toEqual([]);
   });
 });

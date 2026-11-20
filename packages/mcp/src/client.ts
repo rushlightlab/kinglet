@@ -85,6 +85,12 @@ export interface SearchEventsParams {
   cursor?: number;
 }
 
+export interface EventContextResult {
+  event: ClientEvent;
+  before: ClientEvent[];
+  after: ClientEvent[];
+}
+
 export interface HistogramPoint {
   ts: number;
   counts: number[];
@@ -507,6 +513,12 @@ const EventsResponseSchema = z.object({
 
 const EventResponseSchema = z.object({ event: z.unknown() });
 
+const EventContextResponseSchema = z.object({
+  event: z.unknown(),
+  before: z.array(z.unknown()),
+  after: z.array(z.unknown()),
+});
+
 const HistogramResponseSchema = z.object({
   from: z.number(),
   to: z.number(),
@@ -654,6 +666,41 @@ export class KingletClient {
     if (!parsed.success) throw protocolError();
 
     return toClientEvent(parsed.data);
+  }
+
+  async getEventContext(uid: string, before = 5, after = 5): Promise<EventContextResult | null> {
+    const boundedBefore = Math.min(20, Math.max(0, Math.trunc(before)));
+    const boundedAfter = Math.min(20, Math.max(0, Math.trunc(after)));
+    let response: z.infer<typeof EventContextResponseSchema>;
+
+    try {
+      response = await this.request(
+        `/v1/events/${encodeURIComponent(uid)}/context?before=${boundedBefore}&after=${boundedAfter}`,
+        EventContextResponseSchema,
+      );
+    } catch (err) {
+      if (err instanceof KingletApiError && err.status === 404) return null;
+
+      throw err;
+    }
+
+    const parsed = EventSchema.safeParse(response.event);
+
+    if (!parsed.success) throw protocolError();
+
+    return {
+      event: toClientEvent(parsed.data),
+      before: response.before.flatMap((row): ClientEvent[] => {
+        const neighbour = EventSchema.safeParse(row);
+
+        return neighbour.success ? [toClientEvent(neighbour.data)] : [];
+      }),
+      after: response.after.flatMap((row): ClientEvent[] => {
+        const neighbour = EventSchema.safeParse(row);
+
+        return neighbour.success ? [toClientEvent(neighbour.data)] : [];
+      }),
+    };
   }
 
   async getHistogram(
