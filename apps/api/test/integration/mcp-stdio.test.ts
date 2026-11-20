@@ -30,6 +30,7 @@ interface McpFixture {
   countClient: McpStdioClient;
   cwd: string;
   writeKey: string;
+  countKey: string;
   alertId: string;
 }
 
@@ -191,6 +192,7 @@ beforeAll(async () => {
       countClient,
       cwd,
       writeKey: writeKey.plaintext,
+      countKey: countKey.plaintext,
       alertId,
     };
   } catch (err) {
@@ -349,6 +351,7 @@ describe("MCP stdio contract", () => {
     expect(isJsonObject(project) ? project.name : null).toBe(test.session.data.projects.alpha.name);
     expect(serialized).not.toContain(test.session.data.projects.beta.id);
     expect(serialized).not.toContain(test.writeKey);
+    expect(serialized).not.toContain(test.countKey);
     expect(isJsonObject(key) ? key.keyType : null).toBe("mcp");
     expect(isJsonObject(capabilities) ? capabilities["logs.read"] : null).toBe(true);
     expect(isJsonObject(capabilities) ? capabilities["logs.write"] : null).toBe(false);
@@ -368,8 +371,11 @@ describe("MCP stdio contract", () => {
   it("counts and groups only the MCP key's project", async () => {
     const test = current();
     const client = test.countClient;
+    const now = Date.now();
+    const from = now - 60_000;
+    const to = now;
 
-    const ungrouped = await client.callTool("count_events", {});
+    const ungrouped = await client.callTool("count_events", { from, to });
 
     expect(toolFailed(ungrouped)).toBe(false);
 
@@ -377,6 +383,8 @@ describe("MCP stdio contract", () => {
 
     if (ungroupedBody === null) throw new Error("count_events did not return an object");
 
+    expect(ungroupedBody.from).toBe(from);
+    expect(ungroupedBody.to).toBe(to);
     expect(ungroupedBody.total).toBe(4);
     expect(ungroupedBody.groups).toBeUndefined();
     expect(ungroupedBody.truncated).toBeUndefined();
@@ -416,6 +424,7 @@ describe("MCP stdio contract", () => {
     expect(groupedText).not.toContain("beta-only-svc");
     expect(groupedText).not.toContain("beta-only-marker");
     expect(groupedText).not.toContain(test.writeKey);
+    expect(groupedText).not.toContain(test.countKey);
 
     const limited = await client.callTool("count_events", {
       groupBy: "service",
@@ -454,6 +463,8 @@ describe("MCP stdio contract", () => {
 
     expect(filteredBody.total).toBe(1);
     expect(client.stdoutGarbage).toEqual([]);
+    expect(client.stderrLines.join("\n")).not.toContain(test.writeKey);
+    expect(client.stderrLines.join("\n")).not.toContain(test.countKey);
   });
 
   it("rejects invalid count_events arguments at the schema boundary", async () => {
@@ -472,6 +483,7 @@ describe("MCP stdio contract", () => {
       expect(toolFailed(result)).toBe(true);
       expect(toolText(result)).toContain("Input validation error");
       expect(toolText(result)).not.toContain(current().writeKey);
+      expect(toolText(result)).not.toContain(current().countKey);
     }
   });
 
@@ -519,9 +531,13 @@ describe("MCP stdio contract", () => {
       "connection refused",
       "notifyError",
       test.writeKey,
+      test.countKey,
     ]) {
       expect(combined).not.toContain(secret);
     }
+
+    expect(test.countClient.stderrLines.join("\n")).not.toContain(test.writeKey);
+    expect(test.countClient.stderrLines.join("\n")).not.toContain(test.countKey);
 
     const alertList = parseToolJson(alerts);
     const alertsArray = alertList?.alerts;
@@ -566,6 +582,9 @@ describe("MCP stdio contract", () => {
     }
 
     expect(test.client.stderrLines.join("\n")).not.toContain(test.writeKey);
+    expect(test.client.stderrLines.join("\n")).not.toContain(test.countKey);
+    expect(test.countClient.stderrLines.join("\n")).not.toContain(test.writeKey);
+    expect(test.countClient.stderrLines.join("\n")).not.toContain(test.countKey);
     expect(fs.readdirSync(test.cwd)).toEqual([]);
   });
 });

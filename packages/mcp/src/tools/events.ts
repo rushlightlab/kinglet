@@ -37,6 +37,8 @@ interface HistogramPayload extends HistogramResult {
 }
 
 interface CountPayload extends CappedPayload {
+  from: number;
+  to: number;
   total: number;
   groups?: AggregateGroup[];
 }
@@ -175,9 +177,10 @@ export function registerEventTools(server: McpServer, client: KingletClient): vo
       description:
         "Count matching events in a time range without fetching raw rows, optionally grouped by " +
         "`service`, `level`, or `env`. `q` uses the Kinglet filter grammar; times are epoch " +
-        "milliseconds and the API clamps the window to 31 days. Grouped results default to 50 " +
-        "groups, max 200, ordered by count. `truncated` means more groups exist; null keys are " +
-        "events without a service or env.",
+        "milliseconds and the API clamps the window to 31 days. The response echoes the effective " +
+        "`from`/`to` window. Grouped results default to 50 groups, max 200, ordered by count; " +
+        "`total` is the full match count, not the number of groups. `truncated` means more groups " +
+        "exist; null keys are events without a service or env.",
       inputSchema: {
         q: z.string().max(500).optional().describe("Filter expression; omit for all events."),
         ...timeRangeQuery,
@@ -192,7 +195,12 @@ export function registerEventTools(server: McpServer, client: KingletClient): vo
     (args) =>
       runTool("count_events", async () => {
         const result = await client.aggregateEvents(args);
-        const payload: CountPayload = { total: result.total };
+
+        const payload: CountPayload = {
+          from: result.from,
+          to: result.to,
+          total: result.total,
+        };
 
         if (result.groupBy !== undefined) {
           payload.groups = result.groups ?? [];

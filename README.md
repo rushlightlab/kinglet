@@ -212,10 +212,10 @@ never ingest, manage keys/users/projects, or change backups and settings.
 | `GET /healthz`                                | Minimal health check (no auth)                                                  |
 
 Ingest is rate-limited to 600 batches/minute per identity. Filters are capped at
-500 characters / 32 terms, `limit` at 1000, `buckets` at 240, alerts at 500,
-aggregate groups at 200, and monitors at 100 per project. `from`/`to` are
-clamped to the last 31 days and 5 minutes of future skew. Per-project event and
-database caps are configurable (see below).
+500 characters / 32 terms, `limit` at 1000, `buckets` at 240, alerts at 500, and
+monitors at 100 per project. Aggregate groups default to 50 and cap at 200.
+`from`/`to` are clamped to the last 31 days and 5 minutes of future skew.
+Per-project event and database caps are configurable (see below).
 
 `GET /v1/aggregate` returns `{ from, to, total }`. With `groupBy` it adds
 `groups: [{ key, count }]` ordered by count and `truncated: true` when more

@@ -181,26 +181,28 @@ Then use `node` with the absolute path to `packages/mcp/dist/cli.js`:
 
 ## Tools
 
-All tools are scoped to the key's project. Row and group counts are capped at
-50 by default and 200 maximum; responses are capped at 256 KiB, messages at
-4 KiB, and each event's `fields` object at 8 KiB. Truncated responses set
-`truncated: true` and `search_events` returns a `nextCursor` for paging.
+All tools are scoped to the key's project. Row and group limits cap the returned
+rows/groups at 50 by default and 200 maximum; they do not cap
+`count_events.total`, which is the full match count. Responses are capped at
+256 KiB, messages at 4 KiB, and each event's `fields` object at 8 KiB.
+Truncated responses set `truncated: true` and `search_events` returns a
+`nextCursor` for paging.
 
-| Tool             | Scope             | Kind        | Returns                                                             |
-| ---------------- | ----------------- | ----------- | ------------------------------------------------------------------- |
-| `get_context`    | any valid MCP key | read        | Project id/name/slug, key metadata, capabilities, version/retention |
-| `search_events`  | `logs.read`       | read        | Events for a filter and time range, newest first, cursor            |
-| `get_event`      | `logs.read`       | read        | One event by `uid`                                                  |
-| `get_histogram`  | `logs.read`       | read        | Bucket counts for a filter and time range                           |
-| `list_services`  | `logs.read`       | read        | Services with event counts                                          |
-| `count_events`   | `logs.read`       | read        | Total and optional `service`/`level`/`env` groups for a filter      |
-| `list_monitors`  | `monitors.read`   | read        | Monitors, state, last evaluation, channel summaries                 |
-| `get_monitor`    | `monitors.read`   | read        | One monitor                                                         |
-| `list_alerts`    | `monitors.read`   | read        | Recent alerts, newest first                                         |
-| `list_channels`  | `monitors.read`   | read        | Channel id/name/type/enabled/health only                            |
-| `create_monitor` | `monitors.write`  | write       | Creates a monitor; channels are `channelIds`, never URLs            |
-| `update_monitor` | `monitors.write`  | write       | Partial update by id                                                |
-| `delete_monitor` | `monitors.write`  | destructive | Deletes a monitor and its alert history                             |
+| Tool             | Scope             | Kind        | Returns                                                                   |
+| ---------------- | ----------------- | ----------- | ------------------------------------------------------------------------- |
+| `get_context`    | any valid MCP key | read        | Project id/name/slug, key metadata, capabilities, version/retention       |
+| `search_events`  | `logs.read`       | read        | Events for a filter and time range, newest first, cursor                  |
+| `get_event`      | `logs.read`       | read        | One event by `uid`                                                        |
+| `get_histogram`  | `logs.read`       | read        | Bucket counts for a filter and time range                                 |
+| `list_services`  | `logs.read`       | read        | Services with event counts                                                |
+| `count_events`   | `logs.read`       | read        | Effective `from`/`to`, total, and optional `service`/`level`/`env` groups |
+| `list_monitors`  | `monitors.read`   | read        | Monitors, state, last evaluation, channel summaries                       |
+| `get_monitor`    | `monitors.read`   | read        | One monitor                                                               |
+| `list_alerts`    | `monitors.read`   | read        | Recent alerts, newest first                                               |
+| `list_channels`  | `monitors.read`   | read        | Channel id/name/type/enabled/health only                                  |
+| `create_monitor` | `monitors.write`  | write       | Creates a monitor; channels are `channelIds`, never URLs                  |
+| `update_monitor` | `monitors.write`  | write       | Partial update by id                                                      |
+| `delete_monitor` | `monitors.write`  | destructive | Deletes a monitor and its alert history                                   |
 
 `monitors.write` implies `monitors.read`. MCP keys never have `logs.write`.
 

@@ -1452,6 +1452,9 @@ export function registerRoutes(
     if (range instanceof Response) return range;
     const { from, to } = range;
     const filter = buildWhere(parseFilters(q), { from, to }, projectId);
+
+    // Total and grouped counts are intentionally separate reads. A concurrent
+    // ingest can make `total` differ from the sum of `groups` transiently.
     const total = await storage.countEvents(filter);
 
     if (groupBy === undefined) return c.json({ from, to, total });
