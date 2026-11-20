@@ -186,7 +186,8 @@ never ingest, manage keys/users/projects, or change backups and settings.
 | `GET/POST /v1/monitors`                       | List monitors / create one                                                      |
 | `PATCH/DELETE /v1/monitors/:id`               | Update / delete a monitor                                                       |
 | `POST /v1/monitors/:id/test`                  | Send a test notification through every channel                                  |
-| `GET /v1/alerts`                              | Alert history, latest first                                                     |
+| `GET /v1/alerts`                              | Alert history. Params: `limit`, `monitorId`, `state`, `from`, `to`              |
+| `GET /v1/alerts/:id`                          | One alert, project-scoped (same masking rules)                                  |
 | `GET /v1/context`                             | Project, key scopes, capabilities, and version for a `kl_`/`km_` key            |
 | `GET /v1/backups/status`                      | Backup setup, last run, next run, and live progress (admin)                     |
 | `GET /v1/backups`                             | Cached snapshots; `?refresh=1` reconciles the bucket (admin)                    |
@@ -216,6 +217,10 @@ Ingest is rate-limited to 600 batches/minute per identity. Filters are capped at
 monitors at 100 per project. Aggregate groups default to 50 and cap at 200.
 `from`/`to` are clamped to the last 31 days and 5 minutes of future skew.
 Per-project event and database caps are configurable (see below).
+
+Alert filters and detail return `notifyError` only to administrators and hide
+event-derived text from callers without `logs.read`. An alert `from`/`to` window
+is clamped to 31 days; `monitorId` must belong to the resolved project.
 
 `GET /v1/aggregate` returns `{ from, to, total }`. With `groupBy` it adds
 `groups: [{ key, count }]` ordered by count and `truncated: true` when more

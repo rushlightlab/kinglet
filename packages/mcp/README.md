@@ -198,7 +198,8 @@ Truncated responses set `truncated: true` and `search_events` returns a
 | `count_events`   | `logs.read`       | read        | Effective `from`/`to`, total, and optional `service`/`level`/`env` groups |
 | `list_monitors`  | `monitors.read`   | read        | Monitors, state, last evaluation, channel summaries                       |
 | `get_monitor`    | `monitors.read`   | read        | One monitor                                                               |
-| `list_alerts`    | `monitors.read`   | read        | Recent alerts, newest first                                               |
+| `list_alerts`    | `monitors.read`   | read        | Recent alerts; optional monitor/state/time filters                        |
+| `get_alert`      | `monitors.read`   | read        | One alert by id, with the same masking rules                              |
 | `list_channels`  | `monitors.read`   | read        | Channel id/name/type/enabled/health only                                  |
 | `create_monitor` | `monitors.write`  | write       | Creates a monitor; channels are `channelIds`, never URLs                  |
 | `update_monitor` | `monitors.write`  | write       | Partial update by id                                                      |

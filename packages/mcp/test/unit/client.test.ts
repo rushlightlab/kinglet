@@ -94,6 +94,80 @@ describe("KingletClient.aggregateEvents", () => {
   });
 });
 
+describe("KingletClient alerts", () => {
+  it("sends every alert filter and bounds the limit", async () => {
+    let requested = "";
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request): Promise<Response> => {
+        requested = String(input);
+
+        return new Response(
+          JSON.stringify({
+            alerts: [
+              {
+                id: "0190f5b2-7c3a-7def-8abc-0123456789ab",
+                monitorId: "0190f5b2-8d10-7f3b-9c4a-1e2d3f4a5b6c",
+                state: "resolved",
+                summary: "summary",
+                firedAt: 1_000,
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }),
+    );
+
+    try {
+      const alerts = await new KingletClient(TEST_CONFIG).listAlerts({
+        limit: 500,
+        monitorId: "0190f5b2-8d10-7f3b-9c4a-1e2d3f4a5b6c",
+        state: "resolved",
+        from: 1_000,
+        to: 2_000,
+      });
+
+      const url = new URL(requested);
+
+      expect(url.pathname).toBe("/v1/alerts");
+      expect(url.searchParams.get("limit")).toBe("200");
+      expect(url.searchParams.get("monitorId")).toBe("0190f5b2-8d10-7f3b-9c4a-1e2d3f4a5b6c");
+      expect(url.searchParams.get("state")).toBe("resolved");
+      expect(url.searchParams.get("from")).toBe("1000");
+      expect(url.searchParams.get("to")).toBe("2000");
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]?.state).toBe("resolved");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("maps a missing alert to null", async () => {
+    const fetchMock = vi.fn(
+      async (): Promise<Response> =>
+        new Response(JSON.stringify({ error: "alert not found" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const alert = await new KingletClient(TEST_CONFIG).getAlert(
+        "0190f5b2-7c3a-7def-8abc-0123456789ab",
+      );
+
+      expect(alert).toBe(null);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("KingletClient error text", () => {
   it("bounds a hostile API error body and strips line breaks", async () => {
     const hostile = `first line\nsecond line\r\n${"x".repeat(5_000)}`;

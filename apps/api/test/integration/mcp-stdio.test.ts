@@ -28,10 +28,16 @@ interface McpFixture {
   server: LoopbackAppServer;
   client: McpStdioClient;
   countClient: McpStdioClient;
+  alertClient: McpStdioClient;
   cwd: string;
   writeKey: string;
   countKey: string;
+  alertKey: string;
   alertId: string;
+  resolvedAlertId: string;
+  betaAlertId: string;
+  betaMonitorId: string;
+  otherMonitorId: string;
 }
 
 let fixture: McpFixture | null = null;
@@ -47,6 +53,7 @@ beforeAll(async () => {
   let server: LoopbackAppServer | null = null;
   let client: McpStdioClient | null = null;
   let countClient: McpStdioClient | null = null;
+  let alertClient: McpStdioClient | null = null;
   let cwd: string | null = null;
 
   try {
@@ -68,6 +75,13 @@ beforeAll(async () => {
       name: "mcp-contract-count",
       keyType: "mcp",
       scopes: ["logs.read"],
+    });
+
+    const alertKey = await seedApiKey(storage, {
+      projectId: alpha.id,
+      name: "mcp-contract-alerts",
+      keyType: "mcp",
+      scopes: ["logs.read", "monitors.read"],
     });
 
     await storage.insertEvents(
@@ -149,20 +163,61 @@ beforeAll(async () => {
       .set({ lastError: RAW_MONITOR_ERROR, lastErrorAt: Date.now() })
       .where(eq(schema.monitors.id, monitor.id));
 
-    const alertId = uuidv7();
-
-    await storage.db.insert(schema.alerts).values({
-      id: alertId,
-      monitorId: monitor.id,
-      state: "fired",
-      summary: "Leak monitor fired",
-      count: 3,
-      sampleMessage: "secret sample content",
-      firedAt: Date.now(),
-      resolvedAt: null,
-      notifyStatus: "failed",
-      notifyError: `webhook ${SECRET_CHANNEL_URL} failed`,
+    const otherMonitor = await seedMonitor(storage, alpha.id, {
+      name: "resolved-monitor",
+      query: "level>=warn",
+      kind: "count_below",
+      threshold: 1,
     });
+
+    const betaMonitor = await seedMonitor(storage, beta.id, {
+      name: "beta-alert-monitor",
+      query: "level>=error",
+      kind: "count_above",
+      threshold: 1,
+    });
+
+    const alertId = uuidv7();
+    const resolvedAlertId = uuidv7();
+    const betaAlertId = uuidv7();
+    const now = Date.now();
+
+    await storage.db.insert(schema.alerts).values([
+      {
+        id: alertId,
+        monitorId: monitor.id,
+        state: "fired",
+        summary: "Leak monitor fired",
+        count: 3,
+        sampleMessage: "secret sample content",
+        firedAt: now - 1_000,
+        resolvedAt: null,
+        notifyStatus: "failed",
+        notifyError: `webhook ${SECRET_CHANNEL_URL} failed`,
+      },
+      {
+        id: resolvedAlertId,
+        monitorId: otherMonitor.id,
+        state: "resolved",
+        summary: "Resolved alert summary",
+        count: 2,
+        sampleMessage: "resolved sample content",
+        firedAt: now - 2 * 3_600_000,
+        resolvedAt: now - 3_600_000,
+        notifyStatus: "sent",
+      },
+      {
+        id: betaAlertId,
+        monitorId: betaMonitor.id,
+        state: "fired",
+        summary: "beta alert must stay private",
+        count: 4,
+        sampleMessage: "beta sample must stay private",
+        firedAt: now - 1_000,
+        notifyStatus: "failed",
+        notifyError: "beta internal delivery error",
+      },
+    ]);
 
     server = await startLoopbackApp(session.harness.app);
     cwd = fs.mkdtempSync(path.join(os.tmpdir(), "kinglet-mcp-cwd-"));
@@ -185,18 +240,35 @@ beforeAll(async () => {
     });
     await countClient.initialize();
 
+    // Alert-filter calls also get their own key so neither bucket approaches
+    // the 60/min MCP limit during the contract suite.
+    alertClient = await McpStdioClient.start({
+      url: server.url,
+      key: alertKey.plaintext,
+      cwd,
+      cliPath: CLI_PATH,
+    });
+    await alertClient.initialize();
+
     fixture = {
       session,
       server,
       client,
       countClient,
+      alertClient,
       cwd,
       writeKey: writeKey.plaintext,
       countKey: countKey.plaintext,
+      alertKey: alertKey.plaintext,
       alertId,
+      resolvedAlertId,
+      betaAlertId,
+      betaMonitorId: betaMonitor.id,
+      otherMonitorId: otherMonitor.id,
     };
   } catch (err) {
     const cleanupSteps = [
+      async () => alertClient?.close(),
       async () => countClient?.close(),
       async () => client?.close(),
       async () => {
@@ -234,6 +306,8 @@ afterAll(async () => {
     expect(closing.client.terminated).toBe(true);
     await closing.countClient.close();
     expect(closing.countClient.terminated).toBe(true);
+    await closing.alertClient.close();
+    expect(closing.alertClient.terminated).toBe(true);
   } finally {
     try {
       await closing.server.close();
@@ -304,12 +378,13 @@ describe("MCP stdio contract", () => {
     const tools = await current().client.listTools();
     const names = tools.map((tool) => tool.name);
 
-    expect(names).toHaveLength(13);
+    expect(names).toHaveLength(14);
 
     for (const name of [
       "count_events",
       "create_monitor",
       "delete_monitor",
+      "get_alert",
       "get_context",
       "get_event",
       "get_histogram",
@@ -330,6 +405,11 @@ describe("MCP stdio contract", () => {
 
     expect(count?.annotations?.readOnlyHint).toBe(true);
     expect(count?.annotations?.destructiveHint).toBe(false);
+
+    const alert = tools.find((tool) => tool.name === "get_alert");
+
+    expect(alert?.annotations?.readOnlyHint).toBe(true);
+    expect(alert?.annotations?.destructiveHint).toBe(false);
   });
 
   it("returns the key's project context without exposing another project", async () => {
@@ -465,6 +545,7 @@ describe("MCP stdio contract", () => {
     expect(client.stdoutGarbage).toEqual([]);
     expect(client.stderrLines.join("\n")).not.toContain(test.writeKey);
     expect(client.stderrLines.join("\n")).not.toContain(test.countKey);
+    expect(client.stderrLines.join("\n")).not.toContain(test.alertKey);
   });
 
   it("rejects invalid count_events arguments at the schema boundary", async () => {
@@ -485,6 +566,88 @@ describe("MCP stdio contract", () => {
       expect(toolText(result)).not.toContain(current().writeKey);
       expect(toolText(result)).not.toContain(current().countKey);
     }
+  });
+
+  it("filters alerts and returns one alert inside the MCP key's project", async () => {
+    const test = current();
+    const client = test.alertClient;
+
+    const byMonitor = await client.callTool("list_alerts", { monitorId: test.otherMonitorId });
+    const byMonitorBody = parseToolJson(toolText(byMonitor));
+
+    expect(toolFailed(byMonitor)).toBe(false);
+
+    if (byMonitorBody === null) throw new Error("list_alerts did not return an object");
+
+    if (!Array.isArray(byMonitorBody.alerts)) throw new Error("list_alerts did not return alerts");
+
+    const monitorIds = byMonitorBody.alerts.flatMap((entry) =>
+      isJsonObject(entry) && isString(entry.id) ? [entry.id] : [],
+    );
+
+    expect(monitorIds).toEqual([test.resolvedAlertId]);
+
+    const resolved = await client.callTool("list_alerts", { state: "resolved" });
+    const resolvedText = toolText(resolved);
+
+    expect(toolFailed(resolved)).toBe(false);
+    expect(resolvedText).toContain(test.resolvedAlertId);
+    expect(resolvedText).not.toContain(test.alertId);
+
+    const now = Date.now();
+
+    const windowed = await client.callTool("list_alerts", {
+      from: now - 3_600_000,
+      to: now + 60_000,
+    });
+
+    const windowedText = toolText(windowed);
+
+    expect(toolFailed(windowed)).toBe(false);
+    expect(windowedText).toContain(test.alertId);
+    expect(windowedText).not.toContain(test.resolvedAlertId);
+    expect(windowedText).not.toContain(test.betaAlertId);
+
+    const detail = await client.callTool("get_alert", { id: test.alertId });
+    const detailText = toolText(detail);
+
+    expect(toolFailed(detail)).toBe(false);
+    expect(detailText).toContain(test.alertId);
+    expect(detailText).toContain("secret sample content");
+    expect(detailText).not.toContain(SECRET_CHANNEL_URL);
+    expect(detailText).not.toContain("internal.example.test");
+    expect(detailText).not.toContain("very-secret-token");
+    expect(detailText).not.toContain("notifyError");
+    expect(detailText).not.toContain(test.writeKey);
+    expect(detailText).not.toContain(test.alertKey);
+
+    const missing = await client.callTool("get_alert", { id: uuidv7() });
+
+    expect(toolFailed(missing)).toBe(true);
+    expect(toolText(missing)).toBe("alert not found");
+
+    const crossProject = await client.callTool("list_alerts", { monitorId: test.betaMonitorId });
+
+    expect(toolFailed(crossProject)).toBe(true);
+    expect(toolText(crossProject)).not.toContain("beta alert must stay private");
+    expect(toolText(crossProject)).not.toContain(test.betaAlertId);
+    expect(client.stdoutGarbage).toEqual([]);
+    expect(client.stderrLines.join("\n")).not.toContain(test.writeKey);
+    expect(client.stderrLines.join("\n")).not.toContain(test.alertKey);
+
+    const invalidAlertArguments: JsonObject[] = [{ monitorId: "not-a-uuid" }, { state: "open" }];
+
+    for (const args of invalidAlertArguments) {
+      const invalid = await client.callTool("list_alerts", args);
+
+      expect(toolFailed(invalid)).toBe(true);
+      expect(toolText(invalid)).toContain("Input validation error");
+    }
+
+    const invalidDetail = await client.callTool("get_alert", { id: "not-a-uuid" });
+
+    expect(toolFailed(invalidDetail)).toBe(true);
+    expect(toolText(invalidDetail)).toContain("Input validation error");
   });
 
   it("returns the monitor-write gate rejection without creating a monitor", async () => {
@@ -508,19 +671,25 @@ describe("MCP stdio contract", () => {
 
   it("never returns channel URLs, delivery errors, or raw monitor errors", async () => {
     const test = current();
+
     const monitors = toolText(await test.client.callTool("list_monitors"));
     const channels = toolText(await test.client.callTool("list_channels"));
     const alerts = toolText(await test.client.callTool("list_alerts", { limit: 50 }));
+
+    const alertDetail = toolText(
+      await test.alertClient.callTool("get_alert", { id: test.alertId }),
+    );
 
     const counts = toolText(
       await test.countClient.callTool("count_events", { groupBy: "service" }),
     );
 
-    const combined = [monitors, channels, alerts, counts].join("\n");
+    const combined = [monitors, channels, alerts, alertDetail, counts].join("\n");
 
     expect(monitors).toContain("leak-monitor");
     expect(channels).toContain("secret-channel");
     expect(alerts).toContain(test.alertId);
+    expect(alertDetail).toContain(test.alertId);
     expect(counts).toContain("api");
 
     for (const secret of [
@@ -532,12 +701,18 @@ describe("MCP stdio contract", () => {
       "notifyError",
       test.writeKey,
       test.countKey,
+      test.alertKey,
+      test.betaAlertId,
+      test.betaMonitorId,
+      "beta alert must stay private",
+      "beta sample must stay private",
     ]) {
       expect(combined).not.toContain(secret);
     }
 
     expect(test.countClient.stderrLines.join("\n")).not.toContain(test.writeKey);
     expect(test.countClient.stderrLines.join("\n")).not.toContain(test.countKey);
+    expect(test.alertClient.stderrLines.join("\n")).not.toContain(test.alertKey);
 
     const alertList = parseToolJson(alerts);
     const alertsArray = alertList?.alerts;
@@ -583,8 +758,12 @@ describe("MCP stdio contract", () => {
 
     expect(test.client.stderrLines.join("\n")).not.toContain(test.writeKey);
     expect(test.client.stderrLines.join("\n")).not.toContain(test.countKey);
+    expect(test.client.stderrLines.join("\n")).not.toContain(test.alertKey);
     expect(test.countClient.stderrLines.join("\n")).not.toContain(test.writeKey);
     expect(test.countClient.stderrLines.join("\n")).not.toContain(test.countKey);
+    expect(test.countClient.stderrLines.join("\n")).not.toContain(test.alertKey);
+    expect(test.alertClient.stderrLines.join("\n")).not.toContain(test.alertKey);
+    expect(test.alertClient.stderrLines.join("\n")).not.toContain(test.writeKey);
     expect(fs.readdirSync(test.cwd)).toEqual([]);
   });
 });

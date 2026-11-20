@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { subscribeEvents } from "./bus.ts";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.ts";
@@ -9,6 +9,7 @@ import { validateQueryString } from "./query-validation.ts";
 import { isChannelType, sendNotice, validateWebhookUrl } from "./notify.ts";
 import type { AlertNotice, NotifyChannel } from "./notify.ts";
 import { uuidv7, isUuid } from "./auth/ids.ts";
+import type { AlertState } from "./alerts.ts";
 import { resolveMonitorChannelData, recordDelivery } from "./notifications/store.ts";
 import type { MonitorChannelData } from "./notifications/store.ts";
 import { safeErrorMessage } from "./notifications/types.ts";
@@ -477,32 +478,43 @@ export async function deleteMonitor(
   });
 }
 
-export async function listAlerts(
-  storage: Storage,
-  limit: number,
-  projectId: string,
-): Promise<AlertRecord[]> {
-  const rows = await storage.db
-    .select({
-      id: schema.alerts.id,
-      monitorId: schema.alerts.monitorId,
-      state: schema.alerts.state,
-      summary: schema.alerts.summary,
-      count: schema.alerts.count,
-      sampleMessage: schema.alerts.sampleMessage,
-      firedAt: schema.alerts.firedAt,
-      resolvedAt: schema.alerts.resolvedAt,
-      notifyStatus: schema.alerts.notifyStatus,
-      notifyError: schema.alerts.notifyError,
-      monitorName: schema.monitors.name,
-    })
-    .from(schema.alerts)
-    .innerJoin(schema.monitors, eq(schema.monitors.id, schema.alerts.monitorId))
-    .where(eq(schema.monitors.projectId, projectId))
-    .orderBy(desc(schema.alerts.firedAt))
-    .limit(Math.min(500, Math.max(1, limit)));
+export interface AlertListFilters {
+  monitorId?: string;
+  state?: AlertState;
+  from?: number;
+  to?: number;
+}
 
-  return rows.map((row) => ({
+type AlertQueryRow = {
+  id: string;
+  monitorId: string;
+  state: string;
+  summary: string;
+  count: number | null;
+  sampleMessage: string | null;
+  firedAt: number;
+  resolvedAt: number | null;
+  notifyStatus: string | null;
+  notifyError: string | null;
+  monitorName: string | null;
+};
+
+const alertSelection = {
+  id: schema.alerts.id,
+  monitorId: schema.alerts.monitorId,
+  state: schema.alerts.state,
+  summary: schema.alerts.summary,
+  count: schema.alerts.count,
+  sampleMessage: schema.alerts.sampleMessage,
+  firedAt: schema.alerts.firedAt,
+  resolvedAt: schema.alerts.resolvedAt,
+  notifyStatus: schema.alerts.notifyStatus,
+  notifyError: schema.alerts.notifyError,
+  monitorName: schema.monitors.name,
+} as const;
+
+function mapAlertRow(row: AlertQueryRow): AlertRecord {
+  return {
     id: row.id,
     monitorId: row.monitorId,
     monitorName: row.monitorName ?? null,
@@ -514,7 +526,54 @@ export async function listAlerts(
     resolvedAt: row.resolvedAt === null ? null : Number(row.resolvedAt),
     notifyStatus: isNotifyStatus(row.notifyStatus) ? row.notifyStatus : null,
     notifyError: row.notifyError ?? null,
-  }));
+  };
+}
+
+export async function listAlerts(
+  storage: Storage,
+  limit: number,
+  projectId: string,
+  filters: AlertListFilters = {},
+): Promise<AlertRecord[]> {
+  const conditions: SQL[] = [eq(schema.monitors.projectId, projectId)];
+
+  if (filters.monitorId !== undefined) {
+    conditions.push(eq(schema.alerts.monitorId, filters.monitorId));
+  }
+
+  if (filters.state !== undefined) conditions.push(eq(schema.alerts.state, filters.state));
+
+  if (filters.from !== undefined) conditions.push(gte(schema.alerts.firedAt, filters.from));
+
+  if (filters.to !== undefined) conditions.push(lte(schema.alerts.firedAt, filters.to));
+
+  const rows = await storage.db
+    .select(alertSelection)
+    .from(schema.alerts)
+    .innerJoin(schema.monitors, eq(schema.monitors.id, schema.alerts.monitorId))
+    .where(and(...conditions))
+    .orderBy(desc(schema.alerts.firedAt))
+    .limit(Math.min(500, Math.max(1, limit)));
+
+  return rows.map(mapAlertRow);
+}
+
+/** One alert by id, scoped through its monitor's project. */
+export async function getAlert(
+  storage: Storage,
+  id: string,
+  projectId: string,
+): Promise<AlertRecord | null> {
+  const rows = await storage.db
+    .select(alertSelection)
+    .from(schema.alerts)
+    .innerJoin(schema.monitors, eq(schema.monitors.id, schema.alerts.monitorId))
+    .where(and(eq(schema.alerts.id, id), eq(schema.monitors.projectId, projectId)))
+    .limit(1);
+
+  const row = rows[0];
+
+  return row ? mapAlertRow(row) : null;
 }
 
 /**

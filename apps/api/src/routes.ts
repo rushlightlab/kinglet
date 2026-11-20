@@ -74,12 +74,15 @@ import type { Monitor, MonitorEngine } from "./monitors.ts";
 import {
   createMonitorFromRaw,
   deleteMonitor,
+  getAlert,
   getMonitor,
   listAlerts,
   listMonitors,
   resolveMonitorNotifyTargets,
   updateMonitorFromRaw,
 } from "./monitors.ts";
+import type { AlertListFilters, AlertRecord } from "./monitors.ts";
+import { parseAlertReadFilters } from "./alerts.ts";
 import { sendNotice, validateWebhookUrl } from "./notify.ts";
 import type { AlertNotice } from "./notify.ts";
 import { systemStatus } from "./status.ts";
@@ -262,6 +265,24 @@ function monitorForAuth(authInfo: AuthInfo, monitor: Monitor): Monitor {
     lastError: null,
     lastErrorAt: null,
   };
+}
+
+function alertForAuth(
+  alert: AlertRecord,
+  canSeeErrors: boolean,
+  canSeeSamples: boolean,
+): AlertRecord {
+  const projected = {
+    ...alert,
+    notifyError: canSeeErrors ? alert.notifyError : null,
+  };
+
+  if (!canSeeSamples) {
+    projected.summary = "log content hidden";
+    projected.sampleMessage = null;
+  }
+
+  return projected;
 }
 
 function monitorGuard(c: Context<AppEnv>, write: boolean): Response | null {
@@ -1994,8 +2015,36 @@ export function registerRoutes(
     const projectId = await resolveProjectId(c, storage);
 
     if (projectId instanceof Response) return projectId;
+
+    const parsed = parseAlertReadFilters({
+      monitorId: c.req.query("monitorId"),
+      state: c.req.query("state"),
+      from: c.req.query("from"),
+      to: c.req.query("to"),
+    });
+
+    if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+
+    if (parsed.filters.monitorId !== null) {
+      const monitor = await getMonitor(storage, parsed.filters.monitorId, projectId);
+
+      // No cross-project probing: a monitor outside this project is a 404,
+      // exactly like an unknown id.
+      if (!monitor) return c.json({ error: "monitor not found" }, 404);
+    }
+
     const limit = clampInt(c.req.query("limit"), 100, 1, 500);
-    const alerts = await listAlerts(storage, limit, projectId);
+    const alertFilters: AlertListFilters = {};
+
+    if (parsed.filters.monitorId !== null) alertFilters.monitorId = parsed.filters.monitorId;
+
+    if (parsed.filters.state !== null) alertFilters.state = parsed.filters.state;
+
+    if (parsed.filters.from !== null) alertFilters.from = parsed.filters.from;
+
+    if (parsed.filters.to !== null) alertFilters.to = parsed.filters.to;
+
+    const alerts = await listAlerts(storage, limit, projectId, alertFilters);
     const authInfo = getAuth(c);
     // Delivery errors can name internal endpoints; only administrators see even
     // the sanitized text. Monitor writers and machine keys get null.
@@ -2003,23 +2052,29 @@ export function registerRoutes(
     const canSeeSamples = canCapability(authInfo, "logs.read");
 
     return c.json({
-      alerts: alerts.map((alert) => {
-        const projected = {
-          ...alert,
-          notifyError: canSeeErrors ? alert.notifyError : null,
-        };
-
-        // Alert summaries and samples are derived from event content. A
-        // principal that can read monitor state but not logs must not receive
-        // log text through the alert list.
-        if (!canSeeSamples) {
-          projected.summary = "log content hidden";
-          projected.sampleMessage = null;
-        }
-
-        return projected;
-      }),
+      alerts: alerts.map((alert) => alertForAuth(alert, canSeeErrors, canSeeSamples)),
     });
+  });
+
+  app.get("/v1/alerts/:id", async (c) => {
+    const denied = monitorGuard(c, false);
+
+    if (denied) return denied;
+    const projectId = await resolveProjectId(c, storage);
+
+    if (projectId instanceof Response) return projectId;
+    const id = c.req.param("id");
+
+    if (!isUuid(id)) return c.json({ error: "invalid alert id" }, 400);
+
+    const alert = await getAlert(storage, id.toLowerCase(), projectId);
+
+    if (!alert) return c.json({ error: "alert not found" }, 404);
+    const authInfo = getAuth(c);
+    const canSeeErrors = authInfo.kind === "user" && can(authInfo, "users.write");
+    const canSeeSamples = canCapability(authInfo, "logs.read");
+
+    return c.json({ alert: alertForAuth(alert, canSeeErrors, canSeeSamples) });
   });
 
   // ================= diagnostics =================

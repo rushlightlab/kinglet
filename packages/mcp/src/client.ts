@@ -174,6 +174,16 @@ export interface AlertInfo {
   notifyStatus: string | null;
 }
 
+export type AlertState = "fired" | "resolved";
+
+export interface ListAlertsParams {
+  limit?: number;
+  monitorId?: string;
+  state?: AlertState;
+  from?: number;
+  to?: number;
+}
+
 export interface MonitorInput {
   name?: string;
   query?: string;
@@ -524,6 +534,8 @@ const MonitorsResponseSchema = z.object({ monitors: z.array(z.unknown()) });
 
 const AlertsResponseSchema = z.object({ alerts: z.array(z.unknown()) });
 
+const AlertResponseSchema = z.object({ alert: z.unknown() });
+
 const ChannelsResponseSchema = z.object({ channels: z.array(z.unknown()) });
 
 const MonitorResponseSchema = z.object({ monitor: z.unknown() });
@@ -742,15 +754,44 @@ export class KingletClient {
     return monitors.find((monitor) => monitor.id === id) ?? null;
   }
 
-  async listAlerts(limit = DEFAULT_ROWS): Promise<AlertInfo[]> {
-    const bounded = Math.min(MAX_ROWS, Math.max(1, Math.trunc(limit)));
-    const response = await this.request(`/v1/alerts?limit=${bounded}`, AlertsResponseSchema);
+  async listAlerts(params: ListAlertsParams = {}): Promise<AlertInfo[]> {
+    const bounded = Math.min(MAX_ROWS, Math.max(1, Math.trunc(params.limit ?? DEFAULT_ROWS)));
+    const query = new URLSearchParams({ limit: String(bounded) });
+
+    if (params.monitorId !== undefined) query.set("monitorId", params.monitorId);
+
+    if (params.state !== undefined) query.set("state", params.state);
+
+    if (params.from !== undefined) query.set("from", String(params.from));
+
+    if (params.to !== undefined) query.set("to", String(params.to));
+
+    const response = await this.request(`/v1/alerts?${query.toString()}`, AlertsResponseSchema);
 
     return response.alerts.flatMap((row): AlertInfo[] => {
       const parsed = AlertSchema.safeParse(row);
 
       return parsed.success ? [toAlertInfo(parsed.data)] : [];
     });
+  }
+
+  async getAlert(id: string): Promise<AlertInfo | null> {
+    let response: z.infer<typeof AlertResponseSchema>;
+
+    try {
+      response = await this.request(`/v1/alerts/${encodeURIComponent(id)}`, AlertResponseSchema);
+    } catch (err) {
+      // A missing or cross-project alert is a normal not-found, not an error.
+      if (err instanceof KingletApiError && err.status === 404) return null;
+
+      throw err;
+    }
+
+    const parsed = AlertSchema.safeParse(response.alert);
+
+    if (!parsed.success) throw protocolError();
+
+    return toAlertInfo(parsed.data);
   }
 
   async listChannels(): Promise<ChannelSummary[]> {
