@@ -25,6 +25,8 @@ const USAGE =
   "Usage: node dist/restore/cli.js (--latest | --id <snapshot-id> | --key snapshots/<id>.db.zst[.age])";
 
 async function run(): Promise<void> {
+  if (process.platform !== "win32") process.umask(0o077);
+
   const parsed = parseArguments();
 
   const { latest, id, key } = parsed.values;

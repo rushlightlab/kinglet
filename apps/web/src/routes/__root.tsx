@@ -10,6 +10,33 @@ import Login from "../components/Login";
 import { Button } from "@/components/ui/button";
 import type { AppUser, Project } from "../types";
 
+const PROJECT_STORAGE_KEY = "kinglet.project";
+const LOCAL_STATE_KEYS = ["kinglet.project", "kinglet.saved", "kinglet.restore.staged"];
+
+function readLocal(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLocal(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage can be blocked or full; the in-memory state remains usable.
+  }
+}
+
+function clearLocalState(): void {
+  try {
+    for (const key of LOCAL_STATE_KEYS) localStorage.removeItem(key);
+  } catch {
+    // Nothing to clear when storage is unavailable.
+  }
+}
+
 export const Route = createRootRoute({
   component: RootComponent,
 });
@@ -33,7 +60,7 @@ function RootComponent() {
     try {
       const me = await fetchMe();
       const { projects } = await fetchProjects();
-      const storedRaw = localStorage.getItem("kinglet.project");
+      const storedRaw = readLocal(PROJECT_STORAGE_KEY);
       const urlRaw = new URLSearchParams(window.location.search).get("project");
 
       const valid = (id: string | null): id is string =>
@@ -51,7 +78,7 @@ function RootComponent() {
         return;
       }
 
-      localStorage.setItem("kinglet.project", String(chosen));
+      writeLocal(PROJECT_STORAGE_KEY, String(chosen));
       setState({
         phase: "ready",
         user: me.user,
@@ -61,6 +88,7 @@ function RootComponent() {
       });
     } catch (err) {
       if (err instanceof UnauthorizedError) {
+        clearLocalState();
         setState({ phase: "login" });
 
         return;
@@ -80,6 +108,8 @@ function RootComponent() {
   // Session expiry detected mid-session by any /v1 call.
   useEffect(() => {
     const onUnauthorized = (): void => {
+      clearLocalState();
+      toast.dismiss();
       setState({ phase: "login", error: "Your session expired — sign in again." });
     };
 
@@ -152,7 +182,7 @@ function RootComponent() {
             : (projects[0]?.id ?? prev.currentProjectId);
 
           if (currentProjectId !== prev.currentProjectId) {
-            localStorage.setItem("kinglet.project", currentProjectId);
+            writeLocal(PROJECT_STORAGE_KEY, currentProjectId);
           }
 
           return { ...prev, projects, currentProjectId };
@@ -165,12 +195,20 @@ function RootComponent() {
       // Never pretend a failed sign-out succeeded: the HttpOnly session
       // cookie is only cleared by the server.
       void logout()
-        .then(() => setState({ phase: "login" }))
+        .then(() => {
+          clearLocalState();
+          toast.dismiss();
+          setState({ phase: "login" });
+
+          return undefined;
+        })
         .catch((err) => {
           const message = err instanceof Error ? err.message : "could not sign out";
           toast.error("Sign-out failed", {
             description: `${message}. Your session is still active — check that KINGLET_BASE_URL matches this origin.`,
           });
+
+          return undefined;
         });
     },
   };

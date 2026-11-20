@@ -6,12 +6,12 @@ local stdio connection.
 
 > **Not published to npm yet.** The package lives in `packages/mcp` in the
 > Kinglet repo. Build it with `pnpm --filter @kinglet/mcp build`, then point your
-> MCP client at `packages/mcp/dist/cli.js` (see below). Once published, the same
-> configuration works with `npx -y @kinglet/mcp`.
+> MCP client at `packages/mcp/dist/cli.js` (see below). Once published, pin the
+> version you reviewed, for example `npx -y @kinglet/mcp@0.3.0`.
 
 ## Requirements
 
-- Node.js 22 or newer (tested with the Kinglet repo's Node 26 toolchain).
+- Node.js 26 or newer, matching the Kinglet server and workspace toolchain.
 - A running Kinglet server reachable over HTTP(S).
 - An **MCP key** (`km_…`) created in that project's settings. A regular API key
   (`kl_…`) is rejected with a pointer to MCP keys.
@@ -75,14 +75,15 @@ On Windows, wrap the command:
 
 ### Claude Code
 
-Add it from a terminal (the key is stored in your Claude Code config, not in a
-shell history file):
+Add it from a terminal. The command line itself contains the key, so prefer a
+project-scoped `.mcp.json` with `${KINGLET_MCP_KEY}` where your client supports
+environment expansion, or clear the shell history entry afterward:
 
 ```bash
 claude mcp add kinglet \
   --env KINGLET_URL=https://logs.example.com \
   --env KINGLET_MCP_KEY=km_... \
-  -- npx -y @kinglet/mcp
+  -- npx -y @kinglet/mcp@0.3.0
 ```
 
 Or commit a project-scoped `.mcp.json` with the same `mcpServers` shape shown

@@ -178,8 +178,13 @@ export function isPrivateAddress(address: string): boolean {
   // 2002::/16 — 6to4
   if (g0 === 0x2002) return true;
 
-  // 64:ff9b::/96 — NAT64
+  // 64:ff9b::/96 — well-known NAT64 prefix
   if (g0 === 0x0064 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) return true;
+
+  // 64:ff9b:1::/48 — local-use NAT64 prefix (RFC 8215). The /48 can embed
+  // private IPv4 addresses in several RFC 6052 formats, so reject the whole
+  // prefix rather than trying to classify the embedded address.
+  if (g0 === 0x0064 && g1 === 0xff9b && g2 === 0x0001) return true;
 
   // 100::/64 — discard-only
   if (g0 === 0x0100 && g1 === 0 && g2 === 0 && g3 === 0) return true;
@@ -301,27 +306,47 @@ async function postJson(url: URL, body: string, allowPrivate: boolean): Promise<
   if (secure) requestOptions.servername = url.hostname;
 
   await new Promise<void>((resolve, reject) => {
+    let totalTimer: NodeJS.Timeout | undefined;
+
+    const finish = (): void => {
+      if (totalTimer) clearTimeout(totalTimer);
+    };
+
     const req = transport.request(requestOptions, (res) => {
+      res.on("error", (err) => {
+        finish();
+        reject(err);
+      });
       res.resume();
       const status = res.statusCode ?? 0;
 
       if (status >= 300 && status < 400) {
+        finish();
         reject(new Error("channel redirected — configure its final URL"));
 
         return;
       }
 
       if (status < 200 || status >= 300) {
+        finish();
         reject(new Error(`channel returned HTTP ${status}`));
 
         return;
       }
 
+      finish();
       resolve();
     });
 
     req.on("timeout", () => req.destroy(new Error("channel timed out")));
-    req.on("error", reject);
+    req.on("error", (err) => {
+      finish();
+      reject(err);
+    });
+    totalTimer = setTimeout(() => {
+      req.destroy(new Error("channel timed out"));
+    }, 10_000);
+    totalTimer.unref();
     req.end(body);
   });
 }
@@ -587,6 +612,10 @@ export function sanitizeNotificationText(value: string, max: number): string {
     // Control characters are stripped from untrusted event text.
     // oxlint-disable-next-line no-control-regex
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    // Escape existing backslashes before adding markdown escapes below.
+    // Otherwise an attacker-supplied "\[" becomes "\\[", where the doubled
+    // backslash is consumed as a literal and the bracket becomes active.
+    .replace(/\\/g, "\\\\")
     .replace(/@everyone/gi, "@\u200beveryone")
     .replace(/@here/gi, "@\u200bhere")
     .replace(/</g, "‹")

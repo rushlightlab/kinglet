@@ -14,6 +14,7 @@ import type { ChannelType } from "../notify.js";
 import * as schema from "../storage/schema.js";
 import type { Storage } from "../storage/index.js";
 import type { NotificationEngine } from "./engine.js";
+import { scrubLegacyChannelUrl } from "./migrate.js";
 import {
   getChannelRecord,
   healthFromDelivery,
@@ -370,13 +371,37 @@ export function registerNotificationRoutes(
       return c.json({ error: "a channel with this type and URL already exists" }, 409);
     }
 
+    const destinationChanged = existing.type !== type || existing.url !== url;
+
+    if (destinationChanged) {
+      // Retire the old legacy copy before the new destination is live. The
+      // one-time migration marker prevents recreation, and removing the copy
+      // stops the legacy fallback from delivering to the old URL.
+      await scrubLegacyChannelUrl(storage, existing.type, existing.url);
+    }
+
     const now = Date.now();
+
+    const changes: Partial<typeof schema.notificationChannels.$inferInsert> = {
+      name,
+      type,
+      url,
+      enabled,
+      decoration,
+      updatedAt: now,
+    };
+
+    if (destinationChanged) {
+      changes.lastTestAt = null;
+      changes.lastTestStatus = null;
+      changes.lastTestError = null;
+    }
 
     try {
       await storage.db.transaction(async (tx) => {
         await tx
           .update(schema.notificationChannels)
-          .set({ name, type, url, enabled, decoration, updatedAt: now })
+          .set(changes)
           .where(eq(schema.notificationChannels.id, channelId));
 
         if (parsed.value.actions !== undefined) {
@@ -425,9 +450,13 @@ export function registerNotificationRoutes(
     if (!isUuid(id)) return c.json({ error: "invalid channel id" }, 400);
     const channelId = id.toLowerCase();
 
-    if (!(await getChannelRecord(storage, channelId))) {
-      return c.json({ error: "channel not found" }, 404);
-    }
+    const channel = await getChannelRecord(storage, channelId);
+
+    if (!channel) return c.json({ error: "channel not found" }, 404);
+
+    // Remove the legacy inline copy first so the fallback cannot keep posting
+    // to a destination the admin just deleted.
+    await scrubLegacyChannelUrl(storage, channel.type, channel.url);
 
     // Delivery rows are kept for audit; they contain no URLs. Links and
     // action subscriptions have no other owner and are removed with the

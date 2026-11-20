@@ -4,7 +4,7 @@ import { subscribeEvents } from "./bus.js";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
 import type { ParsedFilters } from "./filters.js";
 import { isJsonObject, isString } from "./json.js";
-import type { JsonValue } from "./json.js";
+import type { JsonObject, JsonValue } from "./json.js";
 import { validateQueryString } from "./query-validation.js";
 import { isChannelType, sendNotice, validateWebhookUrl } from "./notify.js";
 import type { AlertNotice, NotifyChannel } from "./notify.js";
@@ -379,7 +379,32 @@ export async function updateMonitorFromRaw(
   raw: JsonValue,
   opts: { allowPrivateWebhooks: boolean },
 ): Promise<MonitorResult | { ok: false; error: string; notFound: true }> {
-  const input = parseMonitorInput(raw, opts);
+  if (!isJsonObject(raw)) return { ok: false, error: "monitor must be an object" };
+
+  const existing = await getMonitor(storage, id, projectId);
+
+  if (!existing) return { ok: false, error: "monitor not found", notFound: true };
+
+  // PATCH is a partial update: merge supplied fields over the stored monitor
+  // instead of running the create defaults over an incomplete body. Only pass
+  // channelIds when the caller actually supplied it, so an omitted field keeps
+  // the existing first-class links intact.
+  const merged: JsonObject = {
+    name: existing.name,
+    query: existing.query,
+    kind: existing.kind,
+    threshold: existing.threshold,
+    windowMs: existing.windowMs,
+    intervalMs: existing.intervalMs,
+    cooldownMs: existing.cooldownMs,
+    enabled: existing.enabled,
+    channels: existing.channels.map((channel) => ({ type: channel.type, url: channel.url })),
+    ...raw,
+  };
+
+  if (!Object.prototype.hasOwnProperty.call(raw, "channelIds")) delete merged.channelIds;
+
+  const input = parseMonitorInput(merged, opts);
 
   if (!input.ok) return input;
   const v = input.value;

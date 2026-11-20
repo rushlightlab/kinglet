@@ -72,7 +72,8 @@ export function parseManifest(raw: string): BackupManifest | null {
 
   if (!isPositiveInt(parsed.schemaVersion)) return null;
 
-  if (!isNonNegativeInt(parsed.sizeBytes)) return null;
+  // A zero size must not disable the decoded-size check and decompression cap.
+  if (!isPositiveInt(parsed.sizeBytes)) return null;
 
   if (!isPositiveInt(parsed.objectBytes)) return null;
 
@@ -90,7 +91,23 @@ export function parseManifest(raw: string): BackupManifest | null {
 
   if (!isJsonObject(parsed.counts)) return null;
 
-  return {
+  const signature = parsed.signature;
+  let signatureValue: string | undefined;
+
+  if (signature !== undefined) {
+    if (
+      !isJsonObject(signature) ||
+      signature.alg !== "hmac-sha256" ||
+      !isString(signature.value) ||
+      !SHA256_RE.test(signature.value)
+    ) {
+      return null;
+    }
+
+    signatureValue = signature.value;
+  }
+
+  const manifest: BackupManifest = {
     format: MANIFEST_FORMAT,
     id: parsed.id,
     createdAt: parsed.createdAt,
@@ -110,6 +127,12 @@ export function parseManifest(raw: string): BackupManifest | null {
       monitors: readCount(parsed.counts, "monitors"),
     },
   };
+
+  if (signatureValue !== undefined) {
+    manifest.signature = { alg: "hmac-sha256", value: signatureValue };
+  }
+
+  return manifest;
 }
 
 export function parseCountsJson(raw: string): BackupCounts {

@@ -1,7 +1,8 @@
 import type { Context } from "hono";
 import type { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { isUuid } from "../auth/ids.js";
-import { requirePermission, requireUser } from "../auth/middleware.js";
+import { can, getAuth, requirePermission, requireUser } from "../auth/middleware.js";
 import type { AppEnv } from "../auth/middleware.js";
 import type { Config } from "../env.js";
 import { isBoolean, isFiniteNumber, isJsonObject, isString } from "../json.js";
@@ -42,6 +43,14 @@ export function registerBackupRoutes(
   void deps.storage;
   void deps.config;
 
+  app.use(
+    "/v1/backups/*",
+    bodyLimit({
+      maxSize: 256 * 1024,
+      onError: (c) => c.json({ error: "payload too large (max 256 KiB)" }, 413),
+    }),
+  );
+
   // ================= status =================
 
   app.get("/v1/backups/status", async (c) => {
@@ -69,6 +78,12 @@ export function registerBackupRoutes(
     let refreshWarning: string | undefined;
 
     if (refresh === "1" || refresh === "true") {
+      // A refresh lists the bucket and may delete orphaned objects; keep that
+      // side effect behind the write permission.
+      const deniedWrite = requirePermission(c, "backups.write");
+
+      if (deniedWrite) return deniedWrite;
+
       try {
         await engine.refresh();
       } catch (cause) {
@@ -222,7 +237,31 @@ export function registerBackupRoutes(
 
     if (!isUuid(id)) return c.json({ error: "invalid snapshot id" }, 400);
 
+    const force = c.req.query("force") === "1";
+
+    if (force) {
+      const authInfo = getAuth(c);
+
+      if (!(authInfo.kind === "user" && can(authInfo, "backups.restore"))) {
+        return c.json({ error: "force delete requires the restore permission" }, 403);
+      }
+    }
+
     try {
+      const snapshots = await engine.list();
+      const target = snapshots.find((snapshot) => snapshot.id.toLowerCase() === id.toLowerCase());
+      const ready = snapshots.filter((snapshot) => snapshot.state === "ready");
+
+      if (target?.state === "ready" && ready.length <= 1 && !force) {
+        return c.json(
+          {
+            error:
+              "refusing to delete the last ready snapshot; pass force=1 with the restore permission to confirm",
+          },
+          409,
+        );
+      }
+
       await engine.remove(id);
 
       return c.json({ ok: true });

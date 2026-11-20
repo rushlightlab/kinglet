@@ -102,9 +102,16 @@ export function registerSystemEventsRoute(
 
         if (ticks % REVALIDATE_EVERY_TICKS === 0) {
           void (async () => {
-            const allowed = await isSystemAdmin(deps.auth, c.req.raw.headers);
+            try {
+              const allowed = await isSystemAdmin(deps.auth, c.req.raw.headers);
 
-            if (!allowed) {
+              if (!allowed) {
+                finish();
+                void stream.close();
+              }
+            } catch {
+              // A revalidation failure must close the stream, not leave an
+              // admin-only feed open until its lifetime cap.
               finish();
               void stream.close();
             }

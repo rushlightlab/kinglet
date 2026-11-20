@@ -396,7 +396,7 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
           // data, so it only happens when the admin opted in.
           if (input.settings.deleteOnFailure && pending.ids.length > 0) {
             try {
-              await deleteEventIds(pending.ids);
+              await deleteEventIds(pending.ids, projectId);
             } catch (deleteCause) {
               console.warn(
                 "[kinglet] archive failure override could not delete rows:",
@@ -596,7 +596,10 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
       });
 
       setPhase(input.runId, input.projectId, "delete");
-      await deleteEventIds(input.rows.map((row) => row.id));
+      await deleteEventIds(
+        input.rows.map((row) => row.id),
+        input.projectId,
+      );
 
       publishSystemEvent({
         type: "archive.succeeded",
@@ -644,14 +647,20 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
       .onConflictDoNothing();
   }
 
-  async function deleteEventIds(ids: readonly number[]): Promise<number> {
+  async function deleteEventIds(ids: readonly number[], projectId: string): Promise<number> {
     let deleted = 0;
 
     for (let index = 0; index < ids.length; index += DELETE_CHUNK) {
       const chunk = ids.slice(index, index + DELETE_CHUNK);
 
+      // Keep the project predicate in the DELETE itself: SQLite can reuse
+      // rowids after a concurrent clear/project wipe, and the archive boundary
+      // must not depend on a separate read.
       const result = await storage.db.run(
-        sql`DELETE FROM events WHERE ${inArray(schema.events.id, chunk)}`,
+        sql`DELETE FROM events WHERE ${eq(schema.events.projectId, projectId)} AND ${inArray(
+          schema.events.id,
+          chunk,
+        )}`,
       );
 
       deleted += Number(result.rowsAffected ?? 0);

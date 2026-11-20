@@ -110,11 +110,9 @@ export function registerEventTools(server: McpServer, client: KingletClient): vo
     {
       title: "Get event histogram",
       description:
-        "Return bucket counts for a filter and time range. Times are epoch milliseconds; the API " +
-        "clamps the window to 31 days. Use this to find spikes before searching raw events. " +
-        "Max 240 buckets.",
+        "Return bucket counts for a time range. Times are epoch milliseconds; the API clamps the " +
+        "window to 31 days. Use this to find spikes before searching raw events. Max 240 buckets.",
       inputSchema: {
-        q: z.string().max(500).optional().describe("Filter expression; omit for all events."),
         ...timeRangeQuery,
         buckets: z.number().int().min(1).max(240).optional().describe("Bucket count, default 60."),
       },

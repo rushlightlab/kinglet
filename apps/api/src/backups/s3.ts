@@ -17,8 +17,12 @@ import { pipeline } from "node:stream/promises";
 import { isUuid } from "../auth/ids.js";
 import type { BackupConfig } from "../env.js";
 import { isFiniteNumber, isJsonObject, isString } from "../json.js";
+import {
+  signManifest as signManifestWithKey,
+  verifyManifestSignature as verifyManifestSignatureWithKey,
+} from "./manifest-signature.js";
 import { BackupError } from "./types.js";
-import type { BackupEncryption } from "./types.js";
+import type { BackupEncryption, BackupManifest } from "./types.js";
 
 /**
  * S3 access for snapshots. All object keys and user-visible errors are built
@@ -150,6 +154,18 @@ export class BackupStore {
 
   objectKey(id: string, encryption: BackupEncryption): string {
     return `${this.prefix}/${relativeObjectKey(id, encryption)}`;
+  }
+
+  private manifestSigningKey(): string {
+    return this.config.manifestSecret ?? this.config.secretAccessKey;
+  }
+
+  signManifest(manifest: BackupManifest): BackupManifest {
+    return signManifestWithKey(manifest, this.manifestSigningKey());
+  }
+
+  verifyManifestSignature(manifest: BackupManifest): boolean {
+    return verifyManifestSignatureWithKey(manifest, this.manifestSigningKey());
   }
 
   /** Snapshot id from a full manifest key, or null when it is unrelated. */
@@ -316,6 +332,7 @@ export class BackupStore {
         Key: key,
         ResponseContentDisposition: `attachment; filename="${filename}"`,
         ResponseContentType: "application/octet-stream",
+        ResponseCacheControl: "no-store",
       }),
       { expiresIn: DOWNLOAD_TTL_SECONDS },
     );

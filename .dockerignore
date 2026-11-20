@@ -18,3 +18,8 @@ data
 **/auth-secret.txt
 .env
 **/.env
+**/.env.*
+.npmrc
+**/.npmrc
+**/*.pem
+**/*.key

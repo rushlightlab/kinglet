@@ -39,8 +39,6 @@ import {
   formatRelativeTime,
   redactWebhookUrls,
 } from "../../format";
-import { isJsonObject, isString } from "../../json";
-import type { JsonValue } from "../../json";
 import { useSystemEvents } from "../../system-events";
 import type {
   ArchiveSettings,
@@ -128,8 +126,6 @@ const TRIGGER_LABELS: Record<BackupTrigger, string> = {
   discovered: "discovered",
 };
 
-const STAGED_KEY = "kinglet.restore.staged";
-
 const MY_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 function supportedTimezones(): string[] {
@@ -145,40 +141,6 @@ function supportedTimezones(): string[] {
 }
 
 const TIMEZONES = supportedTimezones();
-
-interface StagedRestore {
-  id: string;
-  at: number;
-}
-
-function isFiniteNumber(value: JsonValue | undefined): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function readStagedRestore(): StagedRestore | null {
-  try {
-    const raw = window.localStorage.getItem(STAGED_KEY);
-
-    if (!raw) return null;
-
-    const parsed: unknown = JSON.parse(raw);
-
-    if (!isJsonObject(parsed) || !isString(parsed.id) || !isFiniteNumber(parsed.at)) return null;
-
-    return { id: parsed.id, at: parsed.at };
-  } catch {
-    return null;
-  }
-}
-
-function writeStagedRestore(value: StagedRestore | null): void {
-  try {
-    if (value) window.localStorage.setItem(STAGED_KEY, JSON.stringify(value));
-    else window.localStorage.removeItem(STAGED_KEY);
-  } catch {
-    // Private browsing modes may reject storage; the banner is best-effort.
-  }
-}
 
 function reasonText(reason: Error | string): string {
   return reason instanceof Error ? reason.message : String(reason);
@@ -289,7 +251,6 @@ export default function BackupsPanel() {
   const [savingRetention, setSavingRetention] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
-  const [stagedLocal, setStagedLocal] = useState<StagedRestore | null>(() => readStagedRestore());
   const [pendingDelete, setPendingDelete] = useState<BackupSnapshot | null>(null);
   const [pendingRestore, setPendingRestore] = useState<BackupSnapshot | null>(null);
 
@@ -446,7 +407,7 @@ export default function BackupsPanel() {
 
   const running = liveBackup?.running === true || events.backupProgress !== null;
   const phase = events.backupProgress?.phase ?? liveBackup?.phase ?? null;
-  const stagedId = events.restoreStagedId ?? stagedLocal?.id ?? null;
+  const stagedId = events.restoreStagedId;
 
   const retentionCount = useMemo(() => {
     const parsed = Number.parseInt(draftRetention, 10);
@@ -610,14 +571,10 @@ export default function BackupsPanel() {
     try {
       await restoreBackup(snapshot.id);
 
-      const staged: StagedRestore = { id: snapshot.id, at: Date.now() };
-
-      setStagedLocal(staged);
-      writeStagedRestore(staged);
       setPendingRestore(null);
       toast.warning("Restore staged", {
         description: "Restart Kinglet to apply the restored database.",
-        duration: Number.POSITIVE_INFINITY,
+        duration: 15_000,
       });
       await load();
     } catch (err) {
@@ -699,22 +656,7 @@ export default function BackupsPanel() {
               start the Kinglet process (Docker: <code>docker compose restart</code>) to swap the
               database. Sessions are cleared on boot; API keys stay valid.
             </p>
-            <p className="mt-1">
-              A pre-restore copy of the current database is kept for rollback.
-              {stagedId === stagedLocal?.id && (
-                <Button
-                  variant="link"
-                  size="xs"
-                  className="ml-2 h-auto p-0 text-[10px]"
-                  onClick={() => {
-                    setStagedLocal(null);
-                    writeStagedRestore(null);
-                  }}
-                >
-                  dismiss
-                </Button>
-              )}
-            </p>
+            <p className="mt-1">A pre-restore copy of the current database is kept for rollback.</p>
           </AlertDescription>
         </Alert>
       )}
@@ -888,7 +830,7 @@ export default function BackupsPanel() {
                 <Alert variant="destructive">
                   <TriangleAlertIcon />
                   <AlertTitle>Last run error</AlertTitle>
-                  <AlertDescription>{liveBackup.lastError}</AlertDescription>
+                  <AlertDescription>{redactWebhookUrls(liveBackup.lastError)}</AlertDescription>
                 </Alert>
               )}
 
@@ -1329,7 +1271,7 @@ export default function BackupsPanel() {
                 <Alert variant="destructive">
                   <TriangleAlertIcon />
                   <AlertTitle>Archive error</AlertTitle>
-                  <AlertDescription>{liveArchive.lastError}</AlertDescription>
+                  <AlertDescription>{redactWebhookUrls(liveArchive.lastError)}</AlertDescription>
                 </Alert>
               )}
 

@@ -1,7 +1,8 @@
 import { Decrypter } from "age-encryption";
 import { eq } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { createZstdDecompress } from "node:zlib";
 import { isUuid } from "../auth/ids.js";
 import { describeBackupError } from "../backups/s3.js";
@@ -27,6 +28,10 @@ const INSERT_CHUNK = 500;
 
 const PART_RE =
   /^date=(\d{4}-\d{2}-\d{2})\/part-(\d+)-(\d+)-(\d+)-([0-9a-fA-F]{12})\.ndjson\.zst(\.age)?$/;
+
+const MAX_IMPORT_MESSAGE = 8_000;
+const MAX_IMPORT_FIELDS = 32_768;
+const MAX_IMPORT_FUTURE_SKEW_MS = 5 * 60_000;
 
 export interface ImportArchiveOptions {
   projectId: string;
@@ -148,7 +153,12 @@ async function importPart(
   let response: Response;
 
   try {
-    response = await fetch(signed.url);
+    // Bound the download and do not follow redirects: the presigned URL is
+    // already the final object location.
+    response = await fetch(signed.url, {
+      signal: AbortSignal.timeout(10_000),
+      redirect: "manual",
+    });
   } catch {
     throw new ArchiveError("archive object download failed", 502);
   }
@@ -177,7 +187,16 @@ async function importPart(
     }
   }
 
-  const decompressed = source.pipe(createZstdDecompress());
+  const digest = createHash("sha256");
+
+  const hasher = new Transform({
+    transform(chunk, _encoding, callback) {
+      digest.update(chunk);
+      callback(null, chunk);
+    },
+  });
+
+  const decompressed = source.pipe(createZstdDecompress()).pipe(hasher);
   const lines = createInterface({ input: decompressed, crlfDelay: Infinity });
 
   let imported = 0;
@@ -191,6 +210,18 @@ async function importPart(
       const line = parseArchiveLine(raw);
 
       if (line === null) {
+        skipped++;
+        continue;
+      }
+
+      if (
+        line.uid.length > 128 ||
+        line.message.length > MAX_IMPORT_MESSAGE ||
+        (line.fields !== null && JSON.stringify(line.fields).length > MAX_IMPORT_FIELDS) ||
+        (line.service?.length ?? 0) > 128 ||
+        (line.env?.length ?? 0) > 64 ||
+        line.ts > Date.now() + MAX_IMPORT_FUTURE_SKEW_MS
+      ) {
         skipped++;
         continue;
       }
@@ -255,7 +286,40 @@ async function importPart(
     downloaded.destroy();
   }
 
+  await verifyPartDigest(storage, ref.key, filename, digest.digest("hex"));
+
   return { imported, skipped };
+}
+
+async function verifyPartDigest(
+  storage: Storage,
+  objectKey: string,
+  filename: string,
+  actual: string,
+): Promise<void> {
+  const rows = await storage.db
+    .select({ sha256: schema.archiveParts.sha256 })
+    .from(schema.archiveParts)
+    .where(eq(schema.archiveParts.objectKey, objectKey))
+    .limit(1);
+
+  const cached = rows[0]?.sha256;
+
+  if (cached !== undefined) {
+    if (actual !== cached) {
+      throw new ArchiveError("archive object checksum did not match the cached part", 502);
+    }
+
+    return;
+  }
+
+  // Importing a part from another instance may not have a local cache row.
+  // The deterministic key still commits to the first 12 hex characters.
+  const match = /^part-\d+-\d+-\d+-([0-9a-f]{12})\.ndjson\.zst(?:\.age)?$/.exec(filename);
+
+  if (!match || !actual.startsWith(match[1] ?? "")) {
+    throw new ArchiveError("archive object checksum did not match its key", 502);
+  }
 }
 
 async function flushBatch(storage: Storage, batch: ImportRow[]): Promise<ArchiveImportResult> {

@@ -40,6 +40,8 @@ import { isUuid, uuidv7 } from "./auth/ids.js";
 import { canCapability, keyCan } from "./auth/key-capabilities.js";
 import type { KeyCapability } from "./auth/key-capabilities.js";
 import type { BackupStatus } from "./backups/types.js";
+import { deleteArchivedProjectObjects } from "./archive/cleanup.js";
+import { ArchiveError } from "./archive/types.js";
 import { buildKeyContext } from "./mcp/context.js";
 import { APP_VERSION } from "./version.js";
 import {
@@ -239,7 +241,10 @@ function readScopeError(authInfo: AuthInfo): string {
 }
 
 function monitorForAuth(authInfo: AuthInfo, monitor: Monitor): Monitor {
-  if (authInfo.kind === "user" && can(authInfo, "monitors.write")) return monitor;
+  // Inline legacy URLs are bearer secrets. Only administrators who can manage
+  // shared notification channels see them; other monitor writers get the
+  // same URL-free projection as machine keys.
+  if (authInfo.kind === "user" && can(authInfo, "notifications.write")) return monitor;
 
   return {
     ...monitor,
@@ -449,6 +454,19 @@ export function registerRoutes(
 
     if (!(await projectExists(storage, id))) return c.json({ error: "project not found" }, 404);
 
+    // Archived logs live in S3, outside the database transaction. Remove them
+    // before the project row so a successful delete does not leave the
+    // project's log content behind in the bucket.
+    try {
+      await deleteArchivedProjectObjects(config, id);
+    } catch (cause) {
+      if (cause instanceof ArchiveError) return c.json({ error: cause.message }, cause.status);
+
+      console.warn("[kinglet] archived project objects could not be deleted:", String(cause));
+
+      return c.json({ error: "archived project objects could not be deleted" }, 502);
+    }
+
     const monitorIds = storage.db
       .select({ id: schema.monitors.id })
       .from(schema.monitors)
@@ -596,18 +614,27 @@ export function registerRoutes(
     if (name !== undefined) await updateUserName(storage, userId, name);
 
     if (role !== undefined && role !== target.role) {
+      const demotion = role === "viewer" || (role === "member" && target.role === "admin");
+
+      // Offboarding: a demoted user must not keep machine credentials that
+      // outlive their permissions. Revoke before the role change so a failed
+      // key deletion leaves the old role in place and the operator can retry.
+      if (demotion) {
+        try {
+          const revoked = await deleteApiKeysByOwner(storage, userId);
+
+          if (revoked > 0)
+            console.log(`[kinglet] revoked ${revoked} API key(s) for demoted user ${userId}`);
+        } catch {
+          return c.json({ error: "could not revoke owned keys; role unchanged" }, 500);
+        }
+      }
+
       try {
         await setUserRole(storage, auth, c.req.raw.headers, userId, role);
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : "could not change role" }, 400);
       }
-
-      // Offboarding: a demoted user must not keep machine credentials that
-      // outlive their permissions.
-      const revoked = await deleteApiKeysByOwner(storage, userId);
-
-      if (revoked > 0)
-        console.log(`[kinglet] revoked ${revoked} API key(s) for demoted user ${userId}`);
     }
 
     const updated = await getUserById(storage, userId);
@@ -1029,10 +1056,13 @@ export function registerRoutes(
         ),
       );
 
-    if (Number(result.rowsAffected ?? 0) === 0) return c.json({ error: "member not found" }, 404);
     // Offboarding a project member must revoke the machine credentials that
     // member minted for this project; otherwise the key outlives the membership.
+    // Revoke even when the membership row is already gone so a retry after a
+    // partial failure still completes the offboarding.
     const revokedKeys = await deleteApiKeysByOwnerInProject(storage, userId, projectId);
+
+    if (Number(result.rowsAffected ?? 0) === 0) return c.json({ error: "member not found" }, 404);
 
     return c.json({ ok: true, revokedKeys });
   });
@@ -1251,6 +1281,22 @@ export function registerRoutes(
     }
 
     const deleted = await storage.deleteByProject(projectId, range);
+
+    // An all-time clear means the project's archived logs too. Range clears
+    // leave archive parts alone: deleting whole date parts for a partial range
+    // would remove events outside the requested window.
+    if (range === undefined) {
+      try {
+        await deleteArchivedProjectObjects(config, projectId);
+      } catch (cause) {
+        if (cause instanceof ArchiveError) return c.json({ error: cause.message }, cause.status);
+
+        console.warn("[kinglet] archived project objects could not be deleted:", String(cause));
+
+        return c.json({ error: "archived project objects could not be deleted" }, 502);
+      }
+    }
+
     projectCountCache.delete(projectId);
     invalidateDbSizeCache();
     console.log(
@@ -1553,6 +1599,25 @@ export function registerRoutes(
 
   // ================= monitors =================
 
+  // Monitor test sends share the notification-channel cooldown: an operator
+  // should not be able to turn a monitor writer into a repeated outbound
+  // request loop.
+  const monitorTestLocks = new Map<string, number>();
+  const MONITOR_TEST_COOLDOWN_MS = 60_000;
+
+  function monitorTestRetryAfter(key: string): number | null {
+    const now = Date.now();
+    const last = monitorTestLocks.get(key) ?? 0;
+
+    if (last > 0 && now - last < MONITOR_TEST_COOLDOWN_MS) {
+      return MONITOR_TEST_COOLDOWN_MS - (now - last);
+    }
+
+    monitorTestLocks.set(key, now);
+
+    return null;
+  }
+
   app.post("/v1/monitors/test-channel", async (c) => {
     // Outbound test sends are user-only: an AI credential must not turn the
     // server into a URL fetcher, even with SSRF checks.
@@ -1578,6 +1643,14 @@ export function registerRoutes(
     const urlError = validateWebhookUrl(url, config.allowPrivateWebhooks);
 
     if (urlError) return c.json({ error: urlError }, 400);
+
+    const retryAfterMs = monitorTestRetryAfter(`url:${type}:${url}`);
+
+    if (retryAfterMs !== null) {
+      c.header("retry-after", String(Math.ceil(retryAfterMs / 1000)));
+
+      return c.json({ error: "channel was tested recently", retryAfterMs }, 429);
+    }
 
     const project = await storage.db
       .select({ name: schema.projects.name })
@@ -1622,8 +1695,9 @@ export function registerRoutes(
     const monitors = await listMonitors(storage, projectId);
     const authInfo = getAuth(c);
     // Webhook URLs are bearer secrets and engine errors may name internal
-    // hosts: only human monitor writers see them. MCP keys never do.
-    const canSeeChannels = authInfo.kind === "user" && can(authInfo, "monitors.write");
+    // hosts: only administrators who manage shared channels see them. Other
+    // monitor writers and MCP keys get the URL-free projection.
+    const canSeeChannels = authInfo.kind === "user" && can(authInfo, "notifications.write");
 
     return c.json({
       monitors: canSeeChannels
@@ -1645,6 +1719,17 @@ export function registerRoutes(
     const denied = monitorGuard(c, true);
 
     if (denied) return denied;
+
+    if (getAuth(c).kind === "key" && !config.mcpAllowMonitorWrites) {
+      return c.json(
+        {
+          error:
+            "MCP monitor writes are disabled; set KINGLET_MCP_ALLOW_MONITOR_WRITES=1 to enable",
+        },
+        403,
+      );
+    }
+
     const projectId = await resolveProjectId(c, storage);
 
     if (projectId instanceof Response) return projectId;
@@ -1663,8 +1748,16 @@ export function registerRoutes(
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
 
-    if (getAuth(c).kind === "key" && body.channels !== undefined) {
-      return c.json({ error: "MCP monitor writes must use channelIds, not webhook URLs" }, 400);
+    const createAuth = getAuth(c);
+
+    if (
+      body.channels !== undefined &&
+      !(createAuth.kind === "user" && can(createAuth, "notifications.write"))
+    ) {
+      return c.json(
+        { error: "only administrators can configure legacy inline webhook channels" },
+        403,
+      );
     }
 
     const result = await createMonitorFromRaw(storage, projectId, body, {
@@ -1681,6 +1774,17 @@ export function registerRoutes(
     const denied = monitorGuard(c, true);
 
     if (denied) return denied;
+
+    if (getAuth(c).kind === "key" && !config.mcpAllowMonitorWrites) {
+      return c.json(
+        {
+          error:
+            "MCP monitor writes are disabled; set KINGLET_MCP_ALLOW_MONITOR_WRITES=1 to enable",
+        },
+        403,
+      );
+    }
+
     const projectId = await resolveProjectId(c, storage);
 
     if (projectId instanceof Response) return projectId;
@@ -1692,8 +1796,16 @@ export function registerRoutes(
     if (!parsedBody.ok) return c.json({ error: parsedBody.error }, 400);
     const body = parsedBody.body;
 
-    if (getAuth(c).kind === "key" && body.channels !== undefined) {
-      return c.json({ error: "MCP monitor writes must use channelIds, not webhook URLs" }, 400);
+    const updateAuth = getAuth(c);
+
+    if (
+      body.channels !== undefined &&
+      !(updateAuth.kind === "user" && can(updateAuth, "notifications.write"))
+    ) {
+      return c.json(
+        { error: "only administrators can configure legacy inline webhook channels" },
+        403,
+      );
     }
 
     const result = await updateMonitorFromRaw(storage, id, projectId, body, {
@@ -1715,6 +1827,17 @@ export function registerRoutes(
     const denied = monitorGuard(c, true);
 
     if (denied) return denied;
+
+    if (getAuth(c).kind === "key" && !config.mcpAllowMonitorWrites) {
+      return c.json(
+        {
+          error:
+            "MCP monitor writes are disabled; set KINGLET_MCP_ALLOW_MONITOR_WRITES=1 to enable",
+        },
+        403,
+      );
+    }
+
     const projectId = await resolveProjectId(c, storage);
 
     if (projectId instanceof Response) return projectId;
@@ -1744,6 +1867,14 @@ export function registerRoutes(
     const monitor = await getMonitor(storage, id, projectId);
 
     if (!monitor) return c.json({ error: "monitor not found" }, 404);
+
+    const retryAfterMs = monitorTestRetryAfter(`monitor:${monitor.id}`);
+
+    if (retryAfterMs !== null) {
+      c.header("retry-after", String(Math.ceil(retryAfterMs / 1000)));
+
+      return c.json({ error: "monitor was tested recently", retryAfterMs }, 429);
+    }
 
     const project = await storage.db
       .select({ name: schema.projects.name })
@@ -1797,9 +1928,25 @@ export function registerRoutes(
     const alerts = await listAlerts(storage, limit, projectId);
     const authInfo = getAuth(c);
     const canSeeErrors = authInfo.kind === "user" && can(authInfo, "monitors.write");
+    const canSeeSamples = canCapability(authInfo, "logs.read");
 
     return c.json({
-      alerts: canSeeErrors ? alerts : alerts.map((a) => ({ ...a, notifyError: null })),
+      alerts: alerts.map((alert) => {
+        const projected = {
+          ...alert,
+          notifyError: canSeeErrors ? alert.notifyError : null,
+        };
+
+        // Alert summaries and samples are derived from event content. A
+        // principal that can read monitor state but not logs must not receive
+        // log text through the alert list.
+        if (!canSeeSamples) {
+          projected.summary = "log content hidden";
+          projected.sampleMessage = null;
+        }
+
+        return projected;
+      }),
     });
   });
 

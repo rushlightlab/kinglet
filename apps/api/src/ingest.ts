@@ -100,11 +100,15 @@ export function normalizeEvent(raw: JsonValue): NormalizedResult {
   let fields: string | null = null;
   const rawFields = obj.fields;
 
-  if (
-    rawFields !== undefined &&
-    rawFields !== null &&
-    (isJsonObject(rawFields) || Array.isArray(rawFields))
-  ) {
+  if (rawFields !== undefined && rawFields !== null) {
+    // The documented contract is a JSON object. Arrays were accepted here but
+    // dropped by the archive codec, so a later archive/restore silently lost
+    // data. Reject them at the boundary instead of storing a shape the rest of
+    // the pipeline cannot preserve.
+    if (!isJsonObject(rawFields)) {
+      return { ok: false, error: "fields must be a JSON object" };
+    }
+
     const serialized = JSON.stringify(rawFields);
     fields =
       serialized.length > MAX_FIELDS ? JSON.stringify({ _kinglet_truncated: true }) : serialized;

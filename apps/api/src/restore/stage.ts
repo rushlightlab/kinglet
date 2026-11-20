@@ -63,7 +63,13 @@ export async function stageRestore(options: StageRestoreOptions): Promise<StageR
   const store = requireBackupStore(options.config);
 
   try {
-    return await stageSnapshot(options.config, options.snapshotId, "snapshot", store);
+    return await stageSnapshot(
+      options.config,
+      options.snapshotId,
+      "snapshot",
+      store,
+      options.userId,
+    );
   } finally {
     store.destroy();
   }
@@ -75,9 +81,12 @@ export async function stageLatestRestore(
   const store = requireBackupStore(options.config);
 
   try {
-    const snapshotId = await findLatestSnapshotId(store);
+    const snapshotId = await findLatestSnapshotId(
+      store,
+      options.config.backup?.allowUnsignedManifests ?? false,
+    );
 
-    return await stageSnapshot(options.config, snapshotId, "latest", store);
+    return await stageSnapshot(options.config, snapshotId, "latest", store, options.userId);
   } finally {
     store.destroy();
   }
@@ -107,7 +116,10 @@ function requireBackupStore(config: Config): BackupStore {
   }
 }
 
-async function findLatestSnapshotId(store: BackupStore): Promise<string> {
+async function findLatestSnapshotId(
+  store: BackupStore,
+  allowUnsignedManifests: boolean,
+): Promise<string> {
   let objects: BackupObject[];
 
   try {
@@ -138,7 +150,15 @@ async function findLatestSnapshotId(store: BackupStore): Promise<string> {
 
     const manifest = parseManifest(raw);
 
-    if (manifest !== null && manifest.id === id) return id;
+    if (manifest === null || manifest.id !== id) continue;
+
+    if (manifest.signature === undefined) {
+      if (!allowUnsignedManifests) continue;
+    } else if (!store.verifyManifestSignature(manifest)) {
+      continue;
+    }
+
+    return id;
   }
 
   throw new BackupError("no restorable snapshots were found in the bucket", 404);
@@ -149,6 +169,7 @@ async function stageSnapshot(
   snapshotId: string,
   source: RestoreSource,
   store: BackupStore,
+  userId?: string | null,
 ): Promise<StageRestoreResult> {
   if (staging) throw new BackupError("a restore is already being staged", 409);
 
@@ -173,9 +194,10 @@ async function stageSnapshot(
   try {
     await fs.promises.mkdir(paths.restoreDir, { recursive: true, mode: 0o700 });
 
-    const manifest = await loadManifest(store, id);
+    const manifest = await loadManifest(store, id, backup);
 
-    assertRestorable(manifest, backup.passphrase);
+    assertRestorable(manifest, backup);
+    await assertRestoreDiskSpace(config.dataDir, manifest);
 
     await removeFile(downloadPath);
     await removeFile(partPath);
@@ -216,7 +238,7 @@ async function stageSnapshot(
 
     const decodedBytes = await decodeSnapshot(downloadPath, partPath, manifest, backup.passphrase);
 
-    if (manifest.sizeBytes > 0 && decodedBytes !== manifest.sizeBytes) {
+    if (decodedBytes !== manifest.sizeBytes) {
       throw new BackupError("decompressed snapshot size did not match the manifest", 502);
     }
 
@@ -256,6 +278,7 @@ async function stageSnapshot(
       snapshotId: id,
       source,
       stagedAt: Date.now(),
+      requestedBy: userId ?? null,
     });
     markerWritten = true;
 
@@ -285,7 +308,11 @@ async function stageSnapshot(
   }
 }
 
-async function loadManifest(store: BackupStore, id: string): Promise<BackupManifest> {
+async function loadManifest(
+  store: BackupStore,
+  id: string,
+  backup: NonNullable<Config["backup"]>,
+): Promise<BackupManifest> {
   let raw: string;
 
   try {
@@ -303,19 +330,73 @@ async function loadManifest(store: BackupStore, id: string): Promise<BackupManif
     throw new BackupError("snapshot manifest is invalid", 502);
   }
 
+  if (manifest.signature === undefined) {
+    if (!backup.allowUnsignedManifests) {
+      throw new BackupError(
+        "snapshot manifest is not signed; set KINGLET_BACKUP_ALLOW_UNSIGNED_MANIFESTS=1 only for legacy snapshots",
+        409,
+      );
+    }
+  } else if (!store.verifyManifestSignature(manifest)) {
+    throw new BackupError("snapshot manifest signature is invalid", 409);
+  }
+
   return manifest;
 }
 
-function assertRestorable(manifest: BackupManifest, passphrase: string | undefined): void {
+function assertRestorable(manifest: BackupManifest, backup: NonNullable<Config["backup"]>): void {
   if (manifest.schemaVersion > SCHEMA_VERSION) {
     throw new BackupError(schemaTooNewMessage(manifest.schemaVersion), 409);
   }
 
-  if (manifest.encryption === "age" && (passphrase === undefined || passphrase === "")) {
+  if (manifest.objectBytes > backup.maxSnapshotBytes) {
+    throw new BackupError("snapshot exceeds the configured size limit", 409);
+  }
+
+  if (manifest.sizeBytes > backup.maxSnapshotBytes) {
+    throw new BackupError("snapshot database exceeds the configured size limit", 409);
+  }
+
+  if (
+    manifest.encryption === "age" &&
+    (backup.passphrase === undefined || backup.passphrase === "")
+  ) {
     throw new BackupError(
       "snapshot is age-encrypted but KINGLET_BACKUP_PASSPHRASE is not set",
       409,
     );
+  }
+
+  // If a passphrase is configured, do not let a bucket writer choose an
+  // unencrypted snapshot. The escape hatch exists only for legacy snapshots.
+  if (
+    backup.passphrase !== undefined &&
+    backup.passphrase !== "" &&
+    manifest.encryption !== "age" &&
+    !backup.allowUnencryptedSnapshots
+  ) {
+    throw new BackupError(
+      "snapshot is not age-encrypted; set KINGLET_BACKUP_ALLOW_UNENCRYPTED_SNAPSHOTS=1 only for legacy snapshots",
+      409,
+    );
+  }
+}
+
+async function assertRestoreDiskSpace(dataDir: string, manifest: BackupManifest): Promise<void> {
+  const margin = Math.max(64 * 1024 * 1024, Math.ceil(manifest.sizeBytes * 0.25));
+  const required = manifest.objectBytes + manifest.sizeBytes + margin;
+
+  try {
+    const stats = await fs.promises.statfs(dataDir);
+    const free = Number(stats.bavail) * Number(stats.bsize);
+
+    if (Number.isFinite(free) && free < required) {
+      throw new BackupError("not enough free disk space to stage the snapshot", 409);
+    }
+  } catch (cause) {
+    if (cause instanceof BackupError) throw cause;
+
+    console.warn("[kinglet] restore disk check skipped:", describeBackupError(cause));
   }
 }
 
@@ -360,7 +441,7 @@ async function decodeSnapshot(
   }
 
   let decodedBytes = 0;
-  const decodedLimit = manifest.sizeBytes > 0 ? manifest.sizeBytes : Number.MAX_SAFE_INTEGER;
+  const decodedLimit = manifest.sizeBytes;
 
   const meter = new Transform({
     transform(chunk, _encoding, callback) {

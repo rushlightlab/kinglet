@@ -8,7 +8,7 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 /** Bump when a migration changes the on-disk contract (restore uses this). */
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /**
  * Kinglet's schema in Drizzle.
@@ -235,7 +235,10 @@ export const archiveParts = sqliteTable(
     sizeBytes: integer("size_bytes").notNull(),
     createdAt: integer("created_at").notNull(),
   },
-  (table) => [index("idx_archive_parts_project_date").on(table.projectId, table.date)],
+  (table) => [
+    index("idx_archive_parts_project_date").on(table.projectId, table.date),
+    uniqueIndex("uq_archive_parts_object_key").on(table.objectKey),
+  ],
 );
 
 export const monitors = sqliteTable(

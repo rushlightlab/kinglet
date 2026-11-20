@@ -10,9 +10,10 @@ import { fileExists, writeFileAtomic } from "./util.js";
  *   pending.json  a staged snapshot is ready to be applied at next boot
  *   applied.json  the swap happened; sessions still need clearing
  *
- * A marker contains only the snapshot id, where the request came from, and
- * timestamps. Never put bucket names, object keys, credentials, or signed URLs
- * in a marker: it survives on disk and is copied around by operators.
+ * A marker contains only the snapshot id, where the request came from, the
+ * requesting user id, and timestamps. Never put bucket names, object keys,
+ * credentials, or signed URLs in a marker: it survives on disk and is copied
+ * around by operators.
  */
 
 export const RESTORE_MARKER_FORMAT = "kinglet-restore/v1";
@@ -27,6 +28,8 @@ export interface RestoreMarker {
   stagedAt: number;
   /** Epoch milliseconds when the boot swap completed. */
   appliedAt?: number;
+  /** Authenticated user who staged the restore; null for the CLI. */
+  requestedBy?: string | null;
 }
 
 export interface RestorePaths {
@@ -69,6 +72,16 @@ export function isRestoreMarker(value: unknown): value is RestoreMarker {
   if (!isTimestamp(value.stagedAt)) return false;
 
   if (value.appliedAt !== undefined && !isTimestamp(value.appliedAt)) return false;
+
+  if (
+    value.requestedBy !== undefined &&
+    value.requestedBy !== null &&
+    (!isString(value.requestedBy) ||
+      value.requestedBy.length === 0 ||
+      value.requestedBy.length > 128)
+  ) {
+    return false;
+  }
 
   return true;
 }

@@ -19,6 +19,11 @@ export interface BackupConfig {
   kmsKeyId?: string;
   passphrase?: string;
   partSizeBytes: number;
+  /** Stable HMAC key for manifests; falls back to the S3 secret access key. */
+  manifestSecret?: string;
+  allowUnsignedManifests: boolean;
+  allowUnencryptedSnapshots: boolean;
+  maxSnapshotBytes: number;
 }
 
 export interface Config {
@@ -30,6 +35,8 @@ export interface Config {
   baseUrl?: string;
   /** Allow webhook channels that point at private/loopback addresses. */
   allowPrivateWebhooks: boolean;
+  /** Explicit opt-in for MCP keys to create/update/delete monitors. */
+  mcpAllowMonitorWrites: boolean;
   /** Secret used to sign sessions/cookies — env override or persisted file. */
   authSecret: string;
   /** Reverse-proxy CIDRs allowed to supply X-Forwarded-For. */
@@ -144,6 +151,18 @@ function resolveBackupConfig(): BackupConfigResolution {
     if (endpoint.protocol !== "https:" && endpoint.protocol !== "http:") {
       return { backup: null, problem: "KINGLET_BACKUP_S3_ENDPOINT must be an http(s) URL" };
     }
+
+    const host = endpoint.hostname.toLowerCase();
+
+    const loopback =
+      host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+
+    if (endpoint.protocol === "http:" && !loopback) {
+      return {
+        backup: null,
+        problem: "KINGLET_BACKUP_S3_ENDPOINT must use https (http is allowed only for loopback)",
+      };
+    }
   } catch {
     return { backup: null, problem: "KINGLET_BACKUP_S3_ENDPOINT is not a valid URL" };
   }
@@ -179,6 +198,11 @@ function resolveBackupConfig(): BackupConfigResolution {
 
   const partSizeMb = Number.isFinite(partMb) ? Math.max(5, partMb) : 8;
 
+  const maxSnapshotMb = Number.parseInt(process.env.KINGLET_BACKUP_MAX_SNAPSHOT_MB ?? "8192", 10);
+
+  const maxSnapshotBytes =
+    (Number.isFinite(maxSnapshotMb) && maxSnapshotMb > 0 ? maxSnapshotMb : 8192) * 1024 * 1024;
+
   const prefix = (process.env.KINGLET_BACKUP_S3_PREFIX?.trim() || "kinglet").replace(
     /^\/+|\/+$/g,
     "",
@@ -200,6 +224,14 @@ function resolveBackupConfig(): BackupConfigResolution {
       kmsKeyId,
       passphrase: process.env.KINGLET_BACKUP_PASSPHRASE?.trim() || undefined,
       partSizeBytes: partSizeMb * 1024 * 1024,
+      manifestSecret: process.env.KINGLET_BACKUP_MANIFEST_SECRET?.trim() || undefined,
+      allowUnsignedManifests: ["1", "true", "yes"].includes(
+        (process.env.KINGLET_BACKUP_ALLOW_UNSIGNED_MANIFESTS ?? "").toLowerCase(),
+      ),
+      allowUnencryptedSnapshots: ["1", "true", "yes"].includes(
+        (process.env.KINGLET_BACKUP_ALLOW_UNENCRYPTED_SNAPSHOTS ?? "").toLowerCase(),
+      ),
+      maxSnapshotBytes,
     },
     problem: null,
   };
@@ -258,6 +290,9 @@ export function loadConfig(): Config {
     baseUrl,
     allowPrivateWebhooks: ["1", "true", "yes"].includes(
       (process.env.KINGLET_ALLOW_PRIVATE_WEBHOOKS ?? "").toLowerCase(),
+    ),
+    mcpAllowMonitorWrites: ["1", "true", "yes"].includes(
+      (process.env.KINGLET_MCP_ALLOW_MONITOR_WRITES ?? "").toLowerCase(),
     ),
     authSecret: resolveAuthSecret(dataDir),
     trustedProxies: (process.env.KINGLET_TRUSTED_PROXIES ?? "")

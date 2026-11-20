@@ -23,6 +23,7 @@ import type { MonitorEngine } from "./monitors.js";
 import { notifyAction, startNotificationEngine } from "./notifications/engine.js";
 import { registerNotificationRoutes } from "./notifications/routes.js";
 import { finalizePendingRestore, preparePendingRestore } from "./restore/boot.js";
+import { readRestoreMarker, restorePaths } from "./restore/marker.js";
 import { registerRestoreRoutes } from "./restore/routes.js";
 import { maintenanceState } from "./restore/state.js";
 import { startRetentionJob } from "./retention.js";
@@ -286,7 +287,11 @@ async function main(): Promise<void> {
   registerSystemEventsRoute(app, {
     auth,
     getStatus: async () => {
-      const [status, archive] = await Promise.all([backupEngine.status(), archiveEngine.status()]);
+      const [status, archive, pendingRestore] = await Promise.all([
+        backupEngine.status(),
+        archiveEngine.status(),
+        readRestoreMarker(restorePaths(config.dataDir).pendingPath),
+      ]);
 
       return {
         backup: {
@@ -300,6 +305,7 @@ async function main(): Promise<void> {
           lastError: status.lastError,
           databaseBytes: status.databaseBytes,
           setupMissing: status.setupMissing,
+          restoreStagedId: pendingRestore.kind === "ok" ? pendingRestore.marker.snapshotId : null,
         },
         archive: {
           enabled: archive.enabled,
@@ -326,7 +332,11 @@ async function main(): Promise<void> {
     void storage.close().finally(() => process.exit(1));
   });
   startRetentionJob(storage, config.retentionDays, config.alertRetentionDays, {
-    excludedProjectIds: () => listArchiveEnabledProjectIds(storage),
+    // Archive can only own deletion when S3 is configured. If the operator
+    // removes S3 after enabling archive, retention must not keep skipping the
+    // project and letting events accumulate forever.
+    excludedProjectIds: () =>
+      config.backup === null ? Promise.resolve([]) : listArchiveEnabledProjectIds(storage),
     onWarning: (message) => {
       void notifyAction(storage, config, {
         action: "system.warning",

@@ -153,6 +153,9 @@ export async function preparePendingRestore(config: Config): Promise<RestoreBoot
   let preRestorePath: string | null = null;
 
   if (liveExists) {
+    // Keep the rollback copies bounded. Each one is a full database with
+    // password hashes, API-key hashes, and channel URLs.
+    await prunePreRestoreCopies(config.dataDir, 2);
     preRestorePath = await nextPreRestorePath(config.dataDir);
     const copied = await savePreRestoreCopy(livePath, preRestorePath);
 
@@ -229,15 +232,21 @@ export async function finalizePendingRestore(storage: Storage, config: Config): 
 
   // A leaked snapshot must not turn old session cookies back into logins. API
   // keys are intentionally kept: they are project-scoped and revocable.
+  // Fail closed: if session clearing fails, do not serve the restored database.
   try {
-    await storage.db.delete(schema.session);
+    await storage.db.transaction(async (tx) => {
+      await tx.delete(schema.session);
+      await tx.delete(schema.verification);
+    });
   } catch (cause) {
-    console.warn(
-      "[kinglet] could not clear sessions after restore; keeping the marker so the next boot retries:",
-      describeBackupError(cause),
+    const message = describeBackupError(cause);
+
+    console.error(
+      "[kinglet] could not clear sessions after restore; refusing to serve the restored database:",
+      message,
     );
 
-    return;
+    throw new Error(`restore session clearing failed: ${message}`, { cause });
   }
 
   if (snapshotId !== null) {
@@ -505,6 +514,42 @@ async function savePreRestoreCopy(livePath: string, destinationPath: string): Pr
     console.warn("[kinglet] pre-restore copy failed:", describeBackupError(cause));
 
     return false;
+  }
+}
+
+async function prunePreRestoreCopies(dataDir: string, keep: number): Promise<void> {
+  let names: string[];
+
+  try {
+    names = await fs.promises.readdir(dataDir);
+  } catch {
+    return;
+  }
+
+  const candidates: Array<{ filePath: string; mtime: number }> = [];
+
+  for (const name of names) {
+    if (!name.startsWith("pre-restore-") || !name.endsWith(".db")) continue;
+
+    const filePath = path.join(dataDir, name);
+
+    try {
+      const stat = await fs.promises.stat(filePath);
+
+      if (stat.isFile()) candidates.push({ filePath, mtime: stat.mtimeMs });
+    } catch {
+      // A copy that disappeared is already pruned.
+    }
+  }
+
+  candidates.sort((left, right) => right.mtime - left.mtime);
+
+  for (const old of candidates.slice(keep)) {
+    const sidecars = databaseSidecarPaths(old.filePath);
+
+    await removeFile(old.filePath);
+    await removeFile(sidecars.wal);
+    await removeFile(sidecars.shm);
   }
 }
 

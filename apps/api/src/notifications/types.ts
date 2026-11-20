@@ -137,6 +137,11 @@ export function safeErrorMessage(error: Error | string, max = 500): string {
 
   const redacted = raw
     .replace(/\b(?:https?|wss?):\/\/[^\s"'<>]+/gi, "[url]")
+    // Bare addresses can name an internal host even when the URL was redacted.
+    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b/g, "[ip]")
+    .replace(/\[[0-9a-f:.]+\](?::\d{1,5})?/gi, "[ip]")
+    .replace(/\b(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{0,4}\b/gi, "[ip]")
+    .replace(/\b::1?\b/g, "[ip]")
     // Control characters are stripped from untrusted error text.
     // oxlint-disable-next-line no-control-regex
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")

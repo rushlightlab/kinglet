@@ -224,7 +224,7 @@ export function startNotificationEngine(options: {
   // libSQL driver does not tolerate another write transaction racing it.
   const ready = (async () => {
     try {
-      await migrateLegacyMonitorChannels(storage);
+      await migrateLegacyMonitorChannels(storage, config.allowPrivateWebhooks);
     } catch (err) {
       console.warn(
         "[kinglet] notification channel migration failed:",

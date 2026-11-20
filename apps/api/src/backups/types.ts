@@ -102,6 +102,8 @@ export interface BackupManifest {
   encryption: BackupEncryption;
   storage: "sqlite";
   counts: BackupCounts;
+  /** HMAC-SHA256 over the canonical manifest fields, excluding this field. */
+  signature?: { alg: "hmac-sha256"; value: string };
 }
 
 export type BackupErrorStatus = 400 | 404 | 409 | 500 | 502 | 503;

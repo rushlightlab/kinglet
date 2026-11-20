@@ -252,7 +252,7 @@ export function SystemEventsProvider({ children }: { children: ReactNode }) {
         if (next) {
           setStatus(next);
 
-          if (next.backup.restoreStagedId) setRestoreStagedId(next.backup.restoreStagedId);
+          setRestoreStagedId(next.backup.restoreStagedId ?? null);
         }
       });
 

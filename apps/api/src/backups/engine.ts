@@ -394,17 +394,19 @@ function createEngine(storage: Storage, config: Config): BackupEngine {
         throw new BackupError("uploaded object checksum did not match", 502);
       }
 
-      const manifest = buildManifest({
-        id: snapshotId,
-        createdAt: Date.now(),
-        appVersion: APP_VERSION,
-        schemaVersion,
-        sizeBytes: snapshotBytes,
-        objectBytes: finalBytes,
-        sha256: finalSha256,
-        encryption,
-        counts: manifestCounts,
-      });
+      const manifest = activeStore.signManifest(
+        buildManifest({
+          id: snapshotId,
+          createdAt: Date.now(),
+          appVersion: APP_VERSION,
+          schemaVersion,
+          sizeBytes: snapshotBytes,
+          objectBytes: finalBytes,
+          sha256: finalSha256,
+          encryption,
+          counts: manifestCounts,
+        }),
+      );
 
       const manifestKey = activeStore.manifestKey(snapshotId);
 
@@ -598,6 +600,16 @@ function createEngine(storage: Storage, config: Config): BackupEngine {
 
         if (manifest === null || manifest.id !== id) {
           console.warn(`[kinglet] backup manifest ${id} is invalid; skipping`);
+          continue;
+        }
+
+        if (manifest.signature === undefined) {
+          if (!(config.backup?.allowUnsignedManifests ?? false)) {
+            console.warn(`[kinglet] backup manifest ${id} is unsigned; skipping`);
+            continue;
+          }
+        } else if (!activeStore.verifyManifestSignature(manifest)) {
+          console.warn(`[kinglet] backup manifest ${id} failed signature verification; skipping`);
           continue;
         }
 
