@@ -8,11 +8,15 @@ import { isUuid } from "../auth/ids.js";
 import { describeBackupError } from "../backups/s3.js";
 import type { BackupObjectStore } from "../backups/s3.js";
 import { eventSizeBytes } from "../storage/events.js";
+import type { KingletDb } from "../storage/db.js";
 import type { Storage } from "../storage/index.js";
 import * as schema from "../storage/schema.js";
 import { archiveLevelIndex, parseArchiveLine } from "./ndjson.js";
 import { ArchiveError, isArchiveDate } from "./types.js";
 import type { ArchiveImportResult } from "./types.js";
+
+/** Transaction executor with the same query surface as the database. */
+type ImportDb = Parameters<Parameters<KingletDb["transaction"]>[0]>[0];
 
 /**
  * Streamed archive import.
@@ -199,81 +203,89 @@ async function importPart(
   const decompressed = source.pipe(createZstdDecompress()).pipe(hasher);
   const lines = createInterface({ input: decompressed, crlfDelay: Infinity });
 
-  let imported = 0;
-  let skipped = 0;
-  let batch: ImportRow[] = [];
-
   try {
-    for await (const raw of lines) {
-      if (raw.trim() === "") continue;
+    // Verify before the transaction commits. A digest mismatch, a cross-project
+    // row, or any parse failure rolls back every event inserted from this part.
+    return await storage.db.transaction(async (tx) => {
+      let imported = 0;
+      let skipped = 0;
+      let batch: ImportRow[] = [];
 
-      const line = parseArchiveLine(raw);
+      for await (const raw of lines) {
+        if (raw.trim() === "") continue;
 
-      if (line === null) {
-        skipped++;
-        continue;
-      }
+        const line = parseArchiveLine(raw);
 
-      if (
-        line.uid.length > 128 ||
-        line.message.length > MAX_IMPORT_MESSAGE ||
-        (line.fields !== null && JSON.stringify(line.fields).length > MAX_IMPORT_FIELDS) ||
-        (line.service?.length ?? 0) > 128 ||
-        (line.env?.length ?? 0) > 64 ||
-        line.ts > Date.now() + MAX_IMPORT_FUTURE_SKEW_MS
-      ) {
-        skipped++;
-        continue;
-      }
+        if (line === null) {
+          skipped++;
+          continue;
+        }
 
-      if (line.projectId.toLowerCase() !== projectId) {
-        throw new ArchiveError("archive object contains events for another project", 400);
-      }
+        if (
+          line.uid.length > 128 ||
+          line.message.length > MAX_IMPORT_MESSAGE ||
+          (line.fields !== null && JSON.stringify(line.fields).length > MAX_IMPORT_FIELDS) ||
+          (line.service?.length ?? 0) > 128 ||
+          (line.env?.length ?? 0) > 64 ||
+          line.ts > Date.now() + MAX_IMPORT_FUTURE_SKEW_MS
+        ) {
+          skipped++;
+          continue;
+        }
 
-      const level = archiveLevelIndex(line.level);
+        if (line.projectId.toLowerCase() !== projectId) {
+          throw new ArchiveError("archive object contains events for another project", 400);
+        }
 
-      if (level < 0) {
-        skipped++;
-        continue;
-      }
+        const level = archiveLevelIndex(line.level);
 
-      const fields = line.fields === null ? null : JSON.stringify(line.fields);
+        if (level < 0) {
+          skipped++;
+          continue;
+        }
 
-      batch.push({
-        uid: line.uid,
-        projectId,
-        apiKeyId: null,
-        ts: line.ts,
-        level,
-        service: line.service,
-        env: line.env,
-        message: line.message,
-        fields,
-        sizeBytes: eventSizeBytes({
+        const fields = line.fields === null ? null : JSON.stringify(line.fields);
+
+        batch.push({
+          uid: line.uid,
+          projectId,
+          apiKeyId: null,
           ts: line.ts,
           level,
           service: line.service,
           env: line.env,
           message: line.message,
           fields,
-        }),
-      });
+          sizeBytes: eventSizeBytes({
+            ts: line.ts,
+            level,
+            service: line.service,
+            env: line.env,
+            message: line.message,
+            fields,
+          }),
+        });
 
-      if (batch.length >= INSERT_CHUNK) {
-        const flushed = await flushBatch(storage, batch);
+        if (batch.length >= INSERT_CHUNK) {
+          const flushed = await flushBatch(tx, batch);
+
+          imported += flushed.imported;
+          skipped += flushed.skipped;
+          batch = [];
+        }
+      }
+
+      if (batch.length > 0) {
+        const flushed = await flushBatch(tx, batch);
 
         imported += flushed.imported;
         skipped += flushed.skipped;
-        batch = [];
       }
-    }
 
-    if (batch.length > 0) {
-      const flushed = await flushBatch(storage, batch);
+      await verifyPartDigest(tx, ref.key, filename, digest.digest("hex"));
 
-      imported += flushed.imported;
-      skipped += flushed.skipped;
-    }
+      return { imported, skipped };
+    });
   } catch (cause) {
     if (cause instanceof ArchiveError) throw cause;
 
@@ -285,19 +297,15 @@ async function importPart(
     source.destroy();
     downloaded.destroy();
   }
-
-  await verifyPartDigest(storage, ref.key, filename, digest.digest("hex"));
-
-  return { imported, skipped };
 }
 
 async function verifyPartDigest(
-  storage: Storage,
+  db: ImportDb,
   objectKey: string,
   filename: string,
   actual: string,
 ): Promise<void> {
-  const rows = await storage.db
+  const rows = await db
     .select({ sha256: schema.archiveParts.sha256 })
     .from(schema.archiveParts)
     .where(eq(schema.archiveParts.objectKey, objectKey))
@@ -322,10 +330,10 @@ async function verifyPartDigest(
   }
 }
 
-async function flushBatch(storage: Storage, batch: ImportRow[]): Promise<ArchiveImportResult> {
+async function flushBatch(db: ImportDb, batch: ImportRow[]): Promise<ArchiveImportResult> {
   if (batch.length === 0) return { imported: 0, skipped: 0 };
 
-  const inserted = await storage.db
+  const inserted = await db
     .insert(schema.events)
     .values(batch)
     .onConflictDoNothing()

@@ -2,8 +2,8 @@ import { defineConfig } from "vitest/config";
 
 /**
  * Integration suites: real temporary SQLite databases through the app seam.
- * Each test file owns and removes its own temp directory; nothing listens on a
- * network port or calls out.
+ * Each test file owns and removes its own temp directory. Loopback-only HTTP
+ * sockets are allowed for machine-contract tests; nothing may call out.
  */
 export default defineConfig({
   test: {

@@ -258,6 +258,32 @@ describe("system event stream contract", () => {
     }
   });
 
+  it("keeps an admin stream open across the same heartbeat window", async () => {
+    const test = current();
+    let reader: SseReader | null = null;
+
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
+    try {
+      reader = await openEvents(test.adminJar);
+
+      expect((await reader.next())?.event).toBe("system.status");
+
+      vi.advanceTimersByTime(60_000);
+
+      for (let tick = 0; tick < 4; tick++) {
+        const frame = await reader.next();
+
+        expect(frame?.comment).toBe("ping");
+      }
+
+      await expect(reader.next(300)).rejects.toThrow(/timed out/);
+    } finally {
+      vi.useRealTimers();
+      await reader?.close();
+    }
+  });
+
   it("closes a demoted admin's stream when the heartbeat revalidates the session", async () => {
     const test = current();
     let reader: SseReader | null = null;

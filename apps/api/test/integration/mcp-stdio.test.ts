@@ -141,13 +141,26 @@ beforeAll(async () => {
       alertId,
     };
   } catch (err) {
-    await client?.close();
+    const cleanupSteps = [
+      async () => client?.close(),
+      async () => {
+        if (server !== null) await server.close();
+      },
+      async () => {
+        if (session !== null) await session.close();
+      },
+      async () => {
+        if (cwd !== null) await fs.promises.rm(cwd, { recursive: true, force: true });
+      },
+    ];
 
-    if (server !== null) await server.close();
-
-    if (session !== null) await session.close();
-
-    if (cwd !== null) await fs.promises.rm(cwd, { recursive: true, force: true });
+    for (const step of cleanupSteps) {
+      try {
+        await step();
+      } catch {
+        // Preserve the setup failure; cleanup is best-effort.
+      }
+    }
 
     throw err;
   }
@@ -162,6 +175,7 @@ afterAll(async () => {
 
   try {
     await closing.client.close();
+    expect(closing.client.terminated).toBe(true);
   } finally {
     try {
       await closing.server.close();
@@ -182,6 +196,32 @@ function current(): McpFixture {
 }
 
 describe("MCP stdio contract", () => {
+  it("keeps stdout protocol-only, stderr audit-only, and creates no files in its cwd", async () => {
+    const test = current();
+    const before = test.client.stderrLines.length;
+
+    await test.client.callTool("get_context");
+    await test.client.callTool("list_channels");
+    await test.client.waitForStderr(before + 2);
+
+    const after = test.client.stderrLines.length;
+    const newLines = test.client.stderrLines.slice(before);
+
+    expect(after).toBeGreaterThanOrEqual(before + 2);
+    expect(after).toBeGreaterThan(before);
+    expect(newLines.some((line) => line.includes("tool=get_context"))).toBe(true);
+    expect(newLines.some((line) => line.includes("tool=list_channels"))).toBe(true);
+    expect(test.client.stdoutGarbage).toEqual([]);
+    expect(test.client.stderrLines.length).toBeGreaterThan(0);
+
+    for (const line of test.client.stderrLines) {
+      expect(line).toMatch(/^kinglet-mcp tool=\S+ duration=\d+ms status=(ok|error) rows=\d+$/);
+    }
+
+    expect(test.client.stderrLines.join("\n")).not.toContain(test.writeKey);
+    expect(fs.readdirSync(test.cwd)).toEqual([]);
+  });
+
   it("exposes the complete tool list over a real stdio session", async () => {
     const tools = await current().client.listTools();
     const names = tools.map((tool) => tool.name);
@@ -226,6 +266,7 @@ describe("MCP stdio contract", () => {
     expect(isJsonObject(project) ? project.id : null).toBe(test.session.data.projects.alpha.id);
     expect(isJsonObject(project) ? project.name : null).toBe(test.session.data.projects.alpha.name);
     expect(serialized).not.toContain(test.session.data.projects.beta.id);
+    expect(serialized).not.toContain(test.writeKey);
     expect(isJsonObject(key) ? key.keyType : null).toBe("mcp");
     expect(isJsonObject(capabilities) ? capabilities["logs.read"] : null).toBe(true);
     expect(isJsonObject(capabilities) ? capabilities["logs.write"] : null).toBe(false);
@@ -292,22 +333,5 @@ describe("MCP stdio contract", () => {
     }
 
     expect(alertsArray[0]).not.toHaveProperty("notifyError");
-  });
-
-  it("keeps stdout protocol-only, stderr audit-only, and creates no local database", async () => {
-    const test = current();
-
-    await test.client.callTool("get_context");
-    await test.client.callTool("list_channels");
-
-    expect(test.client.stdoutGarbage).toEqual([]);
-    expect(test.client.stderrLines.length).toBeGreaterThan(0);
-
-    for (const line of test.client.stderrLines) {
-      expect(line).toMatch(/^kinglet-mcp tool=\S+ duration=\d+ms status=(ok|error) rows=\d+$/);
-    }
-
-    expect(test.client.stderrLines.join("\n")).not.toContain(test.writeKey);
-    expect(fs.readdirSync(test.cwd)).toEqual([]);
   });
 });

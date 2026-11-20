@@ -126,6 +126,15 @@ async function newProject(name: string): Promise<string> {
   return project.id;
 }
 
+async function eventCount(projectId: string): Promise<number> {
+  const rows = await current()
+    .storage.db.select({ id: schema.events.id })
+    .from(schema.events)
+    .where(eq(schema.events.projectId, projectId));
+
+  return rows.length;
+}
+
 describe("archive import integrity", () => {
   it("rejects a part whose digest differs from the cached archive row", async () => {
     const { storage } = current();
@@ -160,6 +169,7 @@ describe("archive import integrity", () => {
     expect(error.message).toBe("archive object checksum did not match the cached part");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(await signedUrl(store, part.key));
+    expect(await eventCount(projectId)).toBe(0);
   });
 
   it("rejects an uncached part whose key prefix does not match its digest", async () => {
@@ -180,6 +190,7 @@ describe("archive import integrity", () => {
 
     expect(error.status).toBe(502);
     expect(error.message).toBe("archive object checksum did not match its key");
+    expect(await eventCount(projectId)).toBe(0);
   });
 });
 
@@ -249,7 +260,15 @@ describe("archive import validation", () => {
     const projectId = await newProject("cross-project");
     const otherProjectId = await newProject("cross-project-other");
     const store = new InMemoryBackupStore();
-    const part = storePart(store, projectId, [makeLine(otherProjectId)]);
+
+    const validLines = Array.from({ length: 501 }, (_, index) =>
+      makeLine(projectId, { sourceId: index + 1, message: `valid-${index}` }),
+    );
+
+    const part = storePart(store, projectId, [
+      ...validLines,
+      makeLine(otherProjectId, { message: "other project" }),
+    ]);
 
     stubDownload(part.compressed);
 
@@ -264,12 +283,8 @@ describe("archive import validation", () => {
     expect(error.status).toBe(400);
     expect(error.message).toBe("archive object contains events for another project");
 
-    const rows = await storage.db
-      .select({ id: schema.events.id })
-      .from(schema.events)
-      .where(eq(schema.events.projectId, projectId));
-
-    expect(rows).toEqual([]);
+    expect(await eventCount(projectId)).toBe(0);
+    expect(await eventCount(otherProjectId)).toBe(0);
   });
 });
 

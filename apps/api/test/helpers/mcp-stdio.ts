@@ -55,6 +55,7 @@ export class McpStdioClient {
   private readonly ready: Promise<void>;
   private readonly pending = new Map<number, PendingCall>();
   private readonly exitPromise: Promise<void>;
+  private readonly stderrWaiters = new Set<() => void>();
   private nextId = 1;
   private exited = false;
 
@@ -68,16 +69,14 @@ export class McpStdioClient {
 
     void this.exitPromise.then(() => {
       this.exited = true;
-
-      for (const call of this.pending.values()) {
-        clearTimeout(call.timer);
-        call.reject(new Error("MCP server exited before replying"));
-      }
-
-      this.pending.clear();
+      this.failPending("MCP server exited before replying");
 
       return undefined;
     });
+
+    // A dead child can emit EPIPE on the next write; never let it become an
+    // unhandled stream error. Pending calls reject through the exit path.
+    child.stdin.on("error", () => this.failPending("MCP server stdin closed"));
 
     const stdout = createInterface({ input: child.stdout });
 
@@ -86,8 +85,15 @@ export class McpStdioClient {
     const stderr = createInterface({ input: child.stderr });
 
     stderr.on("line", (line) => {
-      if (line.trim() !== "") this.stderrLines.push(line);
+      if (line.trim() === "") return;
+
+      this.stderrLines.push(line);
+      this.notifyStderrWaiters();
     });
+  }
+
+  get terminated(): boolean {
+    return this.exited;
   }
 
   static async start(options: McpStdioOptions): Promise<McpStdioClient> {
@@ -157,6 +163,29 @@ export class McpStdioClient {
     const result = await this.call("tools/call", { name, arguments: args });
 
     return parseToolResult(result);
+  }
+
+  /** Wait until stderr has at least `count` audit lines (stdio is async). */
+  async waitForStderr(count: number, timeoutMs = 5_000): Promise<void> {
+    if (this.stderrLines.length >= count) return;
+
+    await new Promise<void>((resolve, reject) => {
+      let timer: NodeJS.Timeout;
+
+      const check = (): void => {
+        if (this.stderrLines.length < count) return;
+
+        clearTimeout(timer);
+        this.stderrWaiters.delete(check);
+        resolve();
+      };
+
+      timer = setTimeout(() => {
+        this.stderrWaiters.delete(check);
+        reject(new Error(`timed out waiting for ${count} MCP stderr line(s)`));
+      }, timeoutMs);
+      this.stderrWaiters.add(check);
+    });
   }
 
   async close(): Promise<void> {
@@ -267,6 +296,19 @@ export class McpStdioClient {
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
+  }
+
+  private failPending(message: string): void {
+    for (const call of this.pending.values()) {
+      clearTimeout(call.timer);
+      call.reject(new Error(message));
+    }
+
+    this.pending.clear();
+  }
+
+  private notifyStderrWaiters(): void {
+    for (const waiter of this.stderrWaiters) waiter();
   }
 }
 

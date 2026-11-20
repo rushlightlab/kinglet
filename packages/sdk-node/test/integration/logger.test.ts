@@ -36,29 +36,38 @@ class FakeIngestServer {
 
     fake.server.on("request", (request, response) => {
       void (async () => {
-        const chunks: Buffer[] = [];
+        try {
+          const chunks: Buffer[] = [];
 
-        for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          for await (const chunk of request) {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          }
+
+          const index = fake.requests.length;
+          const reply = fake.responder(index);
+
+          const captured: CapturedRequest = {
+            method: request.method ?? "GET",
+            path: request.url ?? "",
+            headers: request.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+            status: reply.status,
+          };
+
+          fake.requests.push(captured);
+          fake.notify();
+
+          response.statusCode = reply.status;
+          response.setHeader("content-type", "text/plain");
+          response.end(reply.body ?? "");
+        } catch {
+          // Aborted clients can reject the body read; never leave the handler
+          // promise unhandled.
+          if (!response.writableEnded) {
+            response.statusCode = 500;
+            response.end("fake ingest server failure");
+          }
         }
-
-        const index = fake.requests.length;
-        const reply = fake.responder(index);
-
-        const captured: CapturedRequest = {
-          method: request.method ?? "GET",
-          path: request.url ?? "",
-          headers: request.headers,
-          body: Buffer.concat(chunks).toString("utf8"),
-          status: reply.status,
-        };
-
-        fake.requests.push(captured);
-        fake.notify();
-
-        response.statusCode = reply.status;
-        response.setHeader("content-type", "text/plain");
-        response.end(reply.body ?? "");
       })();
     });
 
