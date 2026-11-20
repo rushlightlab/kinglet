@@ -11,8 +11,9 @@ conflicts with an explicit request from the user, ask first.
   without explicit user approval. This repository is intentionally local-first
   during pre-release work.
 - Never commit secrets, `apps/api/data`, databases, `dist`, or generated files.
-- Run `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, and `pnpm build` before
-  declaring work complete.
+- Run `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, `pnpm build`,
+  `pnpm test:unit`, and `pnpm test:integration` before declaring work complete.
+  Run `pnpm test:e2e` for UI, auth, routing, or boot-path changes.
 - Security-sensitive changes need a targeted runtime check, not just a build.
 
 ## What Kinglet is
@@ -41,7 +42,8 @@ stdio MCP server.
 | `packages/config/`                 | Shared TypeScript config                                                      |
 | `packages/sdk-node/`               | `@kinglet/sdk-node`, the batching Node client                                 |
 | `packages/mcp/`                    | `@kinglet/mcp`, the stdio MCP server for AI clients                           |
-| `scripts/`                         | Local demos (`demo-logs.mjs`, `webhook-catcher.mjs`)                          |
+| `scripts/`                         | Local demos and the Playwright server fixture (`e2e-server.mjs`)              |
+| `e2e/`                             | Playwright end-to-end specs, setup/teardown, and fixtures                     |
 | `deploy/`                          | Caddy and Docker Compose TLS examples                                         |
 | `tools/oxlint/anti-slop/`          | Vendored Oxlint plugin and its provenance                                     |
 | `.github/workflows/`               | CI, Docker release, and docs-release trigger                                  |
@@ -83,6 +85,31 @@ pnpm demo:webhook   # listens on http://localhost:3999
 Configuration reference: `.env.example` and the README config table. Never copy
 a real `.env` into Git or an image.
 
+## Testing
+
+Vitest unit and integration suites live in `apps/api/test`, `packages/*/test`,
+and `apps/web/test`; Playwright E2E lives in `e2e/`. The root scripts are
+authoritative:
+
+```bash
+pnpm test:unit          # no database or network
+pnpm test:integration   # temporary SQLite; run pnpm build first
+pnpm test:e2e           # built UI/API on loopback; run pnpm build first
+pnpm test               # unit, then integration
+```
+
+The integration suite spawns `packages/mcp/dist/cli.js`, so `pnpm build` must
+precede it. E2E needs the built API/UI and a browser; install Chromium with
+`pnpm exec playwright install --with-deps chromium` (CI uses bundled Chromium;
+local runs prefer installed Chrome). Tests use temporary directories, an
+in-memory backup store, and loopback-only servers. Never point tests at
+`apps/api/data`, a real S3 bucket, or an external network. See
+`docs/testing.md` for the layout, isolation rules, and known coverage
+boundaries.
+
+Do not claim a suite passed unless you ran it. The suite does not cover every
+route or every hosted-libSQL variant.
+
 ## Definition of done
 
 For code changes:
@@ -91,12 +118,16 @@ For code changes:
 2. `pnpm format:check` passes.
 3. `pnpm typecheck` passes.
 4. `pnpm build` passes.
-5. Runtime-sensitive changes get a live smoke test against a temporary database.
-6. Public behavior, configuration, or security changes are reflected in the
+5. `pnpm test:unit` and `pnpm test:integration` pass.
+6. `pnpm test:e2e` passes locally for UI, auth, routing, or boot-path changes.
+7. Runtime-sensitive changes get a live smoke test against a temporary database.
+8. Public behavior, configuration, or security changes are reflected in the
    docs repository.
 
-There is currently **no automated test suite**. Do not claim that tests passed.
-If you add tests, add a package script and wire it into CI.
+New behavior needs a test in the matching suite. Keep unit tests database-free
+and integration tests on temporary storage; CI runs both. E2E runs on pull
+requests. Do not weaken a test to make a product bug pass, and do not claim a
+suite passed when it was skipped or did not run.
 
 ## How Kinglet works
 

@@ -411,6 +411,24 @@ also saved to `apps/api/data/admin-password.txt` for a local database — set
 `KINGLET_ADMIN_EMAIL` / `KINGLET_ADMIN_PASSWORD` before the first run to choose
 your own). Sign in at `http://localhost:5173`.
 
+### Tests
+
+```bash
+pnpm test:unit          # fast Vitest unit suites; no database or network
+pnpm test:integration   # temporary SQLite databases and in-memory backups
+pnpm test:e2e           # Playwright against the built UI/API on loopback
+pnpm test               # unit, then integration
+```
+
+Run `pnpm build` before `pnpm test:integration` (the MCP stdio test spawns
+`packages/mcp/dist/cli.js`) and before `pnpm test:e2e` (the fixture serves the
+built API and UI). Install Chromium once with
+`pnpm exec playwright install --with-deps chromium`; local runs use Google Chrome
+when present, and `PLAYWRIGHT_CHANNEL=chromium` forces the bundled browser.
+Integration tests never touch `apps/api/data`, S3, or an external network. See
+[docs/testing.md](./docs/testing.md) for the layout, single-file commands, and
+known coverage boundaries.
+
 Port 3000 already taken by another app? Point both dev servers elsewhere:
 
 ```bash
