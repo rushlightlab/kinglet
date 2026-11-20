@@ -126,18 +126,81 @@ directory remains under `%TEMP%`.
    kills the server process tree, waits for the API to exit, and removes the
    temporary directory. The server script also cleans up on SIGINT/SIGTERM and
    removes a stale run's temp directory at startup.
-5. **No production changes.** The suite only exercises existing public
-   behavior. `pnpm build`, unit, integration, lint, format, and typecheck all
-   remain green.
-6. **Pre-existing legacy-editor observation (not a test failure, no change
-   made).** `MonitorForm`'s `legacyMode` branch checks
-   `initial.channelIds === undefined`, but the API's `rowToMonitor` always
-   returns an array (empty when there are no linked channels). A legacy monitor
-   therefore renders the "No reusable channels exist yet" state rather than the
-   "inline destinations stay hidden" notice. The API still masks legacy URLs
-   (`url: "hidden"`), and the member test verifies that boundary plus the
-   absence of the URL from the DOM. This should be triaged separately if the
-   legacy editor text is expected behavior.
+5. **Production changes.** The original suite was test-only. Review round 1
+   authorized two small product fixes (`KINGLET_HOST` and the legacy monitor
+   checks); see “Fix round 1” below.
+6. **Legacy-editor fix is covered by E2E.** The member test now asserts the
+   legacy card shows `1 channel` and `paused`, the editor shows the inline
+   destination notice, and the URL is absent. See “Fix round 1”.
+
+## Fix round 1 — review findings
+
+Status: complete. Base `9d20e3a`; fix commit `ddc6236`.
+
+### Findings addressed
+
+1. **Loopback bind.** Added optional `host?: string` to `Config`, loaded from
+   `KINGLET_HOST` (unset keeps Node's all-interface default), and passed it as
+   `hostname` to `serve()`. The E2E server sets `KINGLET_HOST=127.0.0.1`.
+   `.env.example` and the README config table document the variable.
+   Targeted runtime check: started the fixture on port 3399 and
+   `Get-NetTCPConnection -LocalPort 3399 -State Listen` reported only
+   `127.0.0.1`.
+2. **Deterministic stream readiness.** Removed the 500ms sleep from
+   `e2e/logs.spec.ts`. An `addInitScript` EventSource wrapper sets
+   `window.__kingletE2eStreamOpen` on the real `open` event for `/v1/stream`
+   (the admin `/v1/system/events` feed deliberately does not set it). The test
+   waits for that flag before posting the event.
+3. **Seed hardening.** `.e2e/` is created with mode `0700` by both global setup
+   and the server script; any stale `seed.json` is removed at setup start; the
+   seed and both storage-state files are written with mode `0600` (storage state
+   is chmodded after Playwright writes it). Global teardown removes the seed and
+   the whole directory. Windows/NTFS does not implement POSIX mode bits; this
+   is effective on POSIX and Linux CI.
+4. **Legacy monitor fix.** `channelCount` now counts inline `channels` when
+   there are no linked `channelIds`. `isLegacyMonitor` treats a monitor with
+   `channels.length > 0` and `channelIds.length === 0` as legacy, covering both
+   the `undefined` and empty-array shapes. The card summary now shows the
+   inline count, and the editor shows the legacy notice / "choose reusable
+   channels" control instead of the empty reusable-channel state. The member
+   E2E test asserts the paused card, `1 channel`, absence of “no channels”, the
+   legacy notice, and the absence of the URL. This assertion fails against the
+   previous checks.
+
+### Minor findings
+
+- `e2e/backups.spec.ts` now asserts `GET /v1/backups/status` reports
+  `configured === false` and `setupMissing` contains `KINGLET_BACKUP_S3_BUCKET`,
+  then asserts one stable “Connect a bucket” setup card. The weak “one-time
+  text count” flash assertion was removed.
+- Removed the external `KINGLET_E2E_BASE_URL` override. The suite derives
+  `http://127.0.0.1:<port>` from `KINGLET_E2E_PORT`, so it cannot target a
+  non-loopback base URL.
+- `e2e/README.md` documents hard-kill residue, state permissions, and the
+  Linux CI sequence (`build` → `playwright install --with-deps chromium` →
+  `test:e2e`).
+- The MCP `@kinglet/mcp@0.3.0` literal is unchanged; it is intentional pinning.
+- Task 8’s trace-upload advice now says traces can contain session cookies and
+  server state, and `.e2e/` must never be uploaded.
+
+### Commands and results
+
+| Command | Result |
+| --- | --- |
+| `pnpm build` | Pass (API + web rebuilt after the source changes) |
+| `pnpm test:e2e` (installed Chrome) | Pass — 13 tests, 39.2s |
+| `PLAYWRIGHT_CHANNEL=chromium pnpm test:e2e` | Pass — 13 tests, 39.2s |
+| `pnpm test:unit` | Pass — 251 tests in 15 files |
+| `pnpm test:integration` | Pass — 119 tests in 21 files |
+| `pnpm lint` | Pass |
+| `pnpm format:check` | Pass |
+| `pnpm typecheck` | Pass (Turbo + `tsconfig.e2e.json`) |
+| Loopback runtime check | `127.0.0.1:3399` only (manual fixture start) |
+
+Both E2E runs left `.e2e/` and the `kinglet-e2e-*` temp directories removed.
+The deliberate hard-kill during the loopback check left one temp directory,
+which was removed manually; this is the residue case now documented in
+`e2e/README.md`.
 
 ## Task 8: CI wiring recommendation
 
@@ -160,6 +223,10 @@ Notes for that job:
 - The built API and UI must exist before `test:e2e`; the job must run `build`
   first. The script fails with a clear message if either is missing.
 - Upload `test-results/` (traces and failure screenshots) when the job fails.
+  Treat those artifacts as sensitive: traces can contain session cookies,
+  request headers, and state exchanged with the test server, and uploaded
+  artifacts must not include `.e2e/` (storage states and the seed key).
+  Restrict artifact retention and access accordingly.
 - Cache Playwright browsers keyed on the `@playwright/test` version or
   `pnpm-lock.yaml` to avoid downloading Chromium on every run.
 - `pnpm typecheck` already covers `playwright.config.ts` and `e2e/**`, so the
