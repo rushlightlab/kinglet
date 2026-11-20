@@ -34,6 +34,8 @@ export interface TestHarness {
 export interface TestHarnessOptions {
   config?: Partial<Config>;
   engines?: TestEngineOverrides;
+  /** Test seam for archive cleanup; receives the harness config. */
+  deleteArchivedObjects?: (config: Config, projectId: string) => Promise<number>;
 }
 
 /**
@@ -111,6 +113,7 @@ export async function createTestHarness(options: TestHarnessOptions = {}): Promi
       auth,
       engines,
       staticUi: false,
+      deleteArchivedObjects: options.deleteArchivedObjects,
     });
 
     return {

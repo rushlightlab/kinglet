@@ -6,7 +6,7 @@ import { Readable, Transform } from "node:stream";
 import { createZstdDecompress } from "node:zlib";
 import { isUuid } from "../auth/ids.js";
 import { describeBackupError } from "../backups/s3.js";
-import type { BackupStore } from "../backups/s3.js";
+import type { BackupObjectStore } from "../backups/s3.js";
 import { eventSizeBytes } from "../storage/events.js";
 import type { Storage } from "../storage/index.js";
 import * as schema from "../storage/schema.js";
@@ -41,7 +41,7 @@ export interface ImportArchiveOptions {
   /** Kept for CLI parity; streaming import does not need local temp files. */
   dataDir: string;
   passphrase?: string;
-  s3: BackupStore;
+  s3: BackupObjectStore;
 }
 
 interface ArchiveObjectRef {
@@ -87,7 +87,7 @@ export async function importArchive(
 
   const prefix = `${options.s3.prefix}/archive/events/project=${projectId}/`;
 
-  let objects: Awaited<ReturnType<BackupStore["listObjects"]>>;
+  let objects: Awaited<ReturnType<BackupObjectStore["listObjects"]>>;
 
   try {
     objects = await options.s3.listObjects(prefix);

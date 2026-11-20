@@ -50,6 +50,11 @@ export interface CreateAppOptions {
    * restart into the swap; tests and embedders can leave it undefined.
    */
   onRestoreStaged?: () => void;
+  /**
+   * Test/embedding seam for archived-object cleanup on project deletion and
+   * all-time clear. Production leaves it undefined.
+   */
+  deleteArchivedObjects?: (config: Config, projectId: string) => Promise<number>;
 }
 
 /**
@@ -220,6 +225,7 @@ export function createApp(options: CreateAppOptions): Hono<AppEnv> {
 
   registerRoutes(app, storage, engines.monitor, config, auth, {
     backupStatus: () => engines.backup.status(),
+    deleteArchivedObjects: options.deleteArchivedObjects,
   });
   registerNotificationRoutes(app, {
     storage,

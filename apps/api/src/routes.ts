@@ -282,8 +282,17 @@ export function registerRoutes(
   engine: MonitorEngine,
   config: Config,
   auth: KingletAuth,
-  services?: { backupStatus?: () => Promise<BackupStatus> },
+  services?: {
+    backupStatus?: () => Promise<BackupStatus>;
+    /**
+     * Test/embedding seam for archive object cleanup. Production leaves this
+     * undefined and uses the S3-backed implementation.
+     */
+    deleteArchivedObjects?: typeof deleteArchivedProjectObjects;
+  },
 ): void {
+  const deleteArchivedObjects = services?.deleteArchivedObjects ?? deleteArchivedProjectObjects;
+
   // ================= current user =================
 
   app.get("/v1/me", async (c) => {
@@ -458,7 +467,7 @@ export function registerRoutes(
     // before the project row so a successful delete does not leave the
     // project's log content behind in the bucket.
     try {
-      await deleteArchivedProjectObjects(config, id);
+      await deleteArchivedObjects(config, id);
     } catch (cause) {
       if (cause instanceof ArchiveError) return c.json({ error: cause.message }, cause.status);
 
@@ -1287,7 +1296,7 @@ export function registerRoutes(
     // would remove events outside the requested window.
     if (range === undefined) {
       try {
-        await deleteArchivedProjectObjects(config, projectId);
+        await deleteArchivedObjects(config, projectId);
       } catch (cause) {
         if (cause instanceof ArchiveError) return c.json({ error: cause.message }, cause.status);
 
