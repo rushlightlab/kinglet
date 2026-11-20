@@ -100,9 +100,10 @@ export class SseReader {
 
   /**
    * Cancels the client reader and waits for the cancellation contract to
-   * settle. ReadableStream cancellation runs the route's `onAbort` handler
-   * first, so the stream is marked closed (and the live tail unsubscribes from
-   * the event bus) before this resolves.
+   * settle. For `/v1/stream`, cancellation runs the route's `onAbort` cleanup,
+   * which unsubscribes from the event bus synchronously. For
+   * `/v1/system/events`, `onAbort` marks the stream closed and its `finally`
+   * block unsubscribes. Awaiting cancellation replaces a fixed sleep.
    */
   async close(): Promise<void> {
     if (!this.closed) {

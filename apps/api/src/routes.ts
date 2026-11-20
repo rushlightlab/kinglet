@@ -584,44 +584,29 @@ export function registerRoutes(
       return c.json({ error: "administrators cannot be disabled" }, 400);
     }
 
-    if (disabled !== undefined) {
-      if (disabled && userId === me.id) {
-        return c.json({ error: "you cannot disable your own account" }, 400);
-      }
-
-      try {
-        await setManagedUserDisabled(storage, auth, c.req.raw.headers, userId, disabled);
-      } catch (err) {
-        return c.json(
-          { error: err instanceof Error ? err.message : "could not update user status" },
-          400,
-        );
-      }
-
-      if (disabled) {
-        // Disabling is an offboarding event: keys must not come back on unban.
-        const revoked = await deleteApiKeysByOwner(storage, userId);
-
-        if (revoked > 0)
-          console.log(`[kinglet] revoked ${revoked} API key(s) for disabled user ${userId}`);
-      }
+    if (disabled === true && userId === me.id) {
+      return c.json({ error: "you cannot disable your own account" }, 400);
     }
 
-    if (
+    // Every check that can reject the request must run before the first write.
+    // A combined demote+disable removes the active-admin status either way, so
+    // it must not ban the target and then fail the last-admin check.
+    const removesActiveAdmin =
       target.role === "admin" &&
       target.disabled === false &&
-      role !== undefined &&
-      role !== "admin"
-    ) {
-      if ((await countAdmins(storage)) <= 1) {
-        return c.json({ error: "cannot demote the last administrator" }, 400);
-      }
+      ((role !== undefined && role !== "admin") || disabled === true);
+
+    if (removesActiveAdmin && (await countAdmins(storage)) <= 1) {
+      return c.json({ error: "cannot demote the last administrator" }, 400);
     }
 
     const name = isString(body.name) ? body.name.trim().slice(0, 80) : undefined;
 
     if (name !== undefined) await updateUserName(storage, userId, name);
 
+    // Role changes and their key revocation run before the disable/ban block.
+    // If the role change is rejected, nothing else was written; if a later
+    // disable fails, the target is already a non-admin, never a banned admin.
     if (role !== undefined && role !== target.role) {
       const demotion = role === "viewer" || (role === "member" && target.role === "admin");
 
@@ -643,6 +628,25 @@ export function registerRoutes(
         await setUserRole(storage, auth, c.req.raw.headers, userId, role);
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : "could not change role" }, 400);
+      }
+    }
+
+    if (disabled !== undefined) {
+      try {
+        await setManagedUserDisabled(storage, auth, c.req.raw.headers, userId, disabled);
+      } catch (err) {
+        return c.json(
+          { error: err instanceof Error ? err.message : "could not update user status" },
+          400,
+        );
+      }
+
+      if (disabled) {
+        // Disabling is an offboarding event: keys must not come back on unban.
+        const revoked = await deleteApiKeysByOwner(storage, userId);
+
+        if (revoked > 0)
+          console.log(`[kinglet] revoked ${revoked} API key(s) for disabled user ${userId}`);
       }
     }
 

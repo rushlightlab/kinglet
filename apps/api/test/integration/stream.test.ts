@@ -186,7 +186,7 @@ describe("live stream authentication", () => {
 });
 
 describe("live stream content", () => {
-  it("never delivers another project's events to a project key", async () => {
+  it("keeps each project key's live stream to its own project", async () => {
     const { data } = ctx();
     const alphaReader = await openStream(streamUrl(data.keys.alpha.plaintext));
     let betaReader: SseReader | null = null;
@@ -194,11 +194,17 @@ describe("live stream content", () => {
     try {
       betaReader = await openStream(streamUrl(data.keys.beta.plaintext));
 
-      await ingest(data.keys.beta.plaintext, { message: "beta-only" });
-      await ingest(data.keys.alpha.plaintext, { message: "alpha-only" });
+      // Interleave the projects: a leak would put the other project's message
+      // between the two own-project frames.
+      await ingest(data.keys.alpha.plaintext, { message: "alpha-one" });
+      await ingest(data.keys.beta.plaintext, { message: "beta-one" });
+      await ingest(data.keys.alpha.plaintext, { message: "alpha-two" });
+      await ingest(data.keys.beta.plaintext, { message: "beta-two" });
 
-      expect((await nextEvent(betaReader)).message).toBe("beta-only");
-      expect((await nextEvent(alphaReader)).message).toBe("alpha-only");
+      expect((await nextEvent(alphaReader)).message).toBe("alpha-one");
+      expect((await nextEvent(alphaReader)).message).toBe("alpha-two");
+      expect((await nextEvent(betaReader)).message).toBe("beta-one");
+      expect((await nextEvent(betaReader)).message).toBe("beta-two");
     } finally {
       await alphaReader.close();
       await betaReader?.close();
@@ -252,7 +258,14 @@ describe("live stream revalidation", () => {
       // Four heartbeat ticks (15s each) trigger the fresh-session revalidation.
       await vi.advanceTimersByTimeAsync(60_000);
 
+      for (let tick = 0; tick < 4; tick++) {
+        expect(await controlReader.nextComment()).toBe("ping");
+      }
+
+      // A fifth tick proves the control survived tick four's revalidation.
+      await vi.advanceTimersByTimeAsync(15_000);
       expect(await controlReader.nextComment()).toBe("ping");
+
       await expectClosed(disabledReader);
     } finally {
       try {
@@ -303,7 +316,14 @@ describe("live stream revalidation", () => {
 
       await vi.advanceTimersByTimeAsync(60_000);
 
+      for (let tick = 0; tick < 4; tick++) {
+        expect(await controlReader.nextComment()).toBe("ping");
+      }
+
+      // A fifth tick proves the control survived tick four's revalidation.
+      await vi.advanceTimersByTimeAsync(15_000);
       expect(await controlReader.nextComment()).toBe("ping");
+
       await expectClosed(revokedReader);
     } finally {
       try {
