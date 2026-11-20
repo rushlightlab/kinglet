@@ -100,12 +100,12 @@ pnpm test               # unit, then integration
 
 The integration suite spawns `packages/mcp/dist/cli.js`, so `pnpm build` must
 precede it. E2E needs the built API/UI and a browser; install Chromium with
-`pnpm exec playwright install --with-deps chromium` (CI uses bundled Chromium;
-local runs prefer installed Chrome). Tests use temporary directories, an
-in-memory backup store, and loopback-only servers. Never point tests at
-`apps/api/data`, a real S3 bucket, or an external network. See
-`docs/testing.md` for the layout, isolation rules, and known coverage
-boundaries.
+`pnpm exec playwright install chromium` locally (CI/Linux uses
+`pnpm exec playwright install --with-deps chromium`; local runs prefer installed
+Chrome). Tests use temporary directories, an in-memory backup store, and
+loopback-only servers. Never point tests at `apps/api/data`, a real S3 bucket,
+or an external network. See `docs/testing.md` for the layout, isolation rules,
+and known coverage boundaries.
 
 Do not claim a suite passed unless you ran it. The suite does not cover every
 route or every hosted-libSQL variant.
