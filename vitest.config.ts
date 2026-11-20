@@ -14,6 +14,11 @@ export default defineConfig({
       "packages/*/test/integration/**/*.test.ts",
       "apps/web/test/unit/**/*.test.ts",
     ],
+    // The default config also runs integration files directly; keep the same
+    // 30s budget as vitest.integration.config.ts so `vitest run` does not
+    // flake on a cold libSQL database.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     // Integration helpers release libSQL file handles with an explicit GC on
     // Windows; see test/helpers/temp.ts.
     execArgv: ["--expose-gc"],

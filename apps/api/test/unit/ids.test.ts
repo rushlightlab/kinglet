@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { isUuid, uuidv7 } from "../../src/auth/ids.js";
 
+describe("uuidv7", () => {
+  it("produces a version 7 UUID with the RFC 4122 variant", () => {
+    const value = uuidv7();
+
+    expect(isUuid(value)).toBe(true);
+    expect(value).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  it("is unique across calls", () => {
+    const values = new Set(Array.from({ length: 200 }, () => uuidv7()));
+
+    expect(values.size).toBe(200);
+  });
+});
+
 describe("isUuid", () => {
   it("accepts UUID v7 values", () => {
     expect(isUuid(uuidv7())).toBe(true);
