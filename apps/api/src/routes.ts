@@ -642,7 +642,7 @@ export function registerRoutes(
           if (revoked > 0)
             console.log(`[kinglet] revoked ${revoked} API key(s) for disabled user ${userId}`);
         } catch {
-          return c.json({ error: "could not revoke owned keys; account unchanged" }, 500);
+          return c.json({ error: "could not revoke owned keys; account not disabled" }, 500);
         }
       }
 

@@ -556,7 +556,7 @@ describe("offboarding side effects", () => {
 
       expect(response.status).toBe(500);
       expect(errorOf(await jsonBody(response))).toBe(
-        "could not revoke owned keys; account unchanged",
+        "could not revoke owned keys; account not disabled",
       );
     } finally {
       deleteSpy.mockRestore();
