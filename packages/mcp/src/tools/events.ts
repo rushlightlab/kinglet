@@ -1,6 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { ClientEvent, HistogramResult, KingletClient, ServiceInfo } from "../client.ts";
+import type {
+  AggregateGroup,
+  ClientEvent,
+  HistogramResult,
+  KingletClient,
+  ServiceInfo,
+} from "../client.ts";
 import { MAX_ROWS } from "../client.ts";
 import type { CappedPayload } from "./result.ts";
 import { errorResult, jsonResult, runTool } from "./result.ts";
@@ -28,6 +34,11 @@ interface ServicesPayload extends CappedPayload {
 
 interface HistogramPayload extends HistogramResult {
   truncated?: true;
+}
+
+interface CountPayload extends CappedPayload {
+  total: number;
+  groups?: AggregateGroup[];
 }
 
 function lastEventId(events: ClientEvent[]): number | null {
@@ -154,6 +165,52 @@ export function registerEventTools(server: McpServer, client: KingletClient): vo
             payload.truncated = true;
           },
         });
+      }),
+  );
+
+  server.registerTool(
+    "count_events",
+    {
+      title: "Count events",
+      description:
+        "Count matching events in a time range without fetching raw rows, optionally grouped by " +
+        "`service`, `level`, or `env`. `q` uses the Kinglet filter grammar; times are epoch " +
+        "milliseconds and the API clamps the window to 31 days. Grouped results default to 50 " +
+        "groups, max 200, ordered by count. `truncated` means more groups exist; null keys are " +
+        "events without a service or env.",
+      inputSchema: {
+        q: z.string().max(500).optional().describe("Filter expression; omit for all events."),
+        ...timeRangeQuery,
+        groupBy: z
+          .enum(["service", "level", "env"])
+          .optional()
+          .describe("Group the counts by this field."),
+        limit: z.number().int().min(1).max(MAX_ROWS).optional().describe("Group rows, default 50."),
+      },
+      annotations: readOnly,
+    },
+    (args) =>
+      runTool("count_events", async () => {
+        const result = await client.aggregateEvents(args);
+        const payload: CountPayload = { total: result.total };
+
+        if (result.groupBy !== undefined) {
+          payload.groups = result.groups ?? [];
+
+          if (result.truncated === true) payload.truncated = true;
+        }
+
+        return jsonResult(
+          payload,
+          payload.groups === undefined
+            ? {}
+            : {
+                list: payload.groups,
+                markTruncated: () => {
+                  payload.truncated = true;
+                },
+              },
+        );
       }),
   );
 }

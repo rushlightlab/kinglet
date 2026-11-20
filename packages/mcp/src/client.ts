@@ -97,6 +97,31 @@ export interface HistogramResult {
   points: HistogramPoint[];
 }
 
+export type AggregateGroupBy = "service" | "level" | "env";
+
+export interface AggregateGroup {
+  /** Null is a real group: events without a service or env. */
+  key: string | null;
+  count: number;
+}
+
+export interface AggregateEventsParams {
+  q?: string;
+  from?: number;
+  to?: number;
+  groupBy?: AggregateGroupBy;
+  limit?: number;
+}
+
+export interface AggregateEventsResult {
+  from: number;
+  to: number;
+  total: number;
+  groupBy?: AggregateGroupBy;
+  groups?: AggregateGroup[];
+  truncated?: true;
+}
+
 export interface ServiceInfo {
   name: string;
   count: number;
@@ -479,6 +504,20 @@ const HistogramResponseSchema = z.object({
   points: z.array(z.unknown()),
 });
 
+const AggregateGroupSchema = z.object({
+  key: z.string().nullable(),
+  count: z.number(),
+});
+
+const AggregateResponseSchema = z.object({
+  from: z.number(),
+  to: z.number(),
+  total: z.number(),
+  groupBy: z.enum(["service", "level", "env"]).optional(),
+  groups: z.array(z.unknown()).optional(),
+  truncated: z.boolean().optional(),
+});
+
 const ServicesResponseSchema = z.object({ services: z.array(z.unknown()) });
 
 const MonitorsResponseSchema = z.object({ monitors: z.array(z.unknown()) });
@@ -642,6 +681,45 @@ export class KingletClient {
 
       return parsed.success ? [parsed.data] : [];
     });
+  }
+
+  async aggregateEvents(params: AggregateEventsParams = {}): Promise<AggregateEventsResult> {
+    const query = new URLSearchParams();
+
+    if (params.q) query.set("q", params.q);
+
+    if (params.from !== undefined) query.set("from", String(params.from));
+
+    if (params.to !== undefined) query.set("to", String(params.to));
+
+    if (params.groupBy !== undefined) query.set("groupBy", params.groupBy);
+    const limit = Math.min(MAX_ROWS, Math.max(1, Math.trunc(params.limit ?? DEFAULT_ROWS)));
+
+    query.set("limit", String(limit));
+
+    const response = await this.request(
+      `/v1/aggregate?${query.toString()}`,
+      AggregateResponseSchema,
+    );
+
+    const result: AggregateEventsResult = {
+      from: response.from,
+      to: response.to,
+      total: response.total,
+    };
+
+    if (response.groupBy !== undefined) {
+      result.groupBy = response.groupBy;
+      result.groups = (response.groups ?? []).flatMap((row): AggregateGroup[] => {
+        const parsed = AggregateGroupSchema.safeParse(row);
+
+        return parsed.success ? [parsed.data] : [];
+      });
+    }
+
+    if (response.truncated === true) result.truncated = true;
+
+    return result;
   }
 
   async listMonitors(): Promise<MonitorInfo[]> {

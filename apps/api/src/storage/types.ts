@@ -13,6 +13,19 @@ export interface QueryOptions {
   cursor: number | null;
 }
 
+/** Closed set of group-by dimensions accepted by GET /v1/aggregate. */
+export type AggregateGroupBy = "service" | "level" | "env";
+
+export type AggregateGroupRow =
+  | { dimension: "service" | "env"; key: string | null; count: number }
+  | { dimension: "level"; key: number; count: number };
+
+export interface AggregateGroups {
+  groups: AggregateGroupRow[];
+  /** True when more groups exist beyond the requested limit. */
+  truncated: boolean;
+}
+
 export interface ServiceRow {
   name: string;
   count: number;
@@ -46,6 +59,13 @@ export interface Storage {
   ): Promise<StoredEvent[]>;
   queryEvents(opts: QueryOptions): Promise<StoredEvent[]>;
   getEventByUid(projectId: string, uid: string): Promise<StoredEvent | null>;
+  /** Total rows matching a project-scoped condition from buildWhere(). */
+  countEvents(filter: SQL): Promise<number>;
+  /**
+   * Top groups for one closed dimension. Returns at most `limit` rows and sets
+   * `truncated` when another group exists.
+   */
+  groupEventCounts(filter: SQL, groupBy: AggregateGroupBy, limit: number): Promise<AggregateGroups>;
   histogramPoints(
     projectId: string,
     from: number,

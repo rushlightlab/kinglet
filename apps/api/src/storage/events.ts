@@ -1,11 +1,17 @@
-import { and, count, desc, eq, gte, isNotNull, lt, lte, notInArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, isNotNull, lt, lte, notInArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { Normalized } from "../ingest.ts";
 import { uuidv7 } from "../auth/ids.ts";
 import type { StoredEvent } from "../types.ts";
 import type { KingletDb } from "./db.ts";
 import * as schema from "./schema.ts";
-import type { HistogramPointRow, QueryOptions, ServiceRow } from "./types.ts";
+import type {
+  AggregateGroupBy,
+  AggregateGroups,
+  HistogramPointRow,
+  QueryOptions,
+  ServiceRow,
+} from "./types.ts";
 
 /** SQLite caps the number of bound variables per statement. */
 const INSERT_CHUNK = 500;
@@ -108,6 +114,64 @@ export async function queryEvents(db: KingletDb, opts: QueryOptions): Promise<St
     .limit(opts.limit);
 
   return rows.map(mapEventRow);
+}
+
+/** Total rows matching a project-scoped condition built by buildWhere(). */
+export async function countEvents(db: KingletDb, filter: SQL): Promise<number> {
+  const rows = await db.select({ n: count() }).from(schema.events).where(filter);
+
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * Top groups for a closed dimension. The dimension is a typed union, never a
+ * caller-supplied SQL expression; one extra row detects truncation.
+ */
+export async function groupEventCounts(
+  db: KingletDb,
+  filter: SQL,
+  groupBy: AggregateGroupBy,
+  limit: number,
+): Promise<AggregateGroups> {
+  const bounded = Math.max(1, Math.trunc(limit));
+
+  if (groupBy === "level") {
+    const rows = await db
+      .select({ key: schema.events.level, n: count() })
+      .from(schema.events)
+      .where(filter)
+      .groupBy(schema.events.level)
+      .orderBy(desc(count()), asc(schema.events.level))
+      .limit(bounded + 1);
+
+    return {
+      groups: rows.slice(0, bounded).map((row) => ({
+        dimension: "level",
+        key: Number(row.key),
+        count: Number(row.n),
+      })),
+      truncated: rows.length > bounded,
+    };
+  }
+
+  const column = groupBy === "service" ? schema.events.service : schema.events.env;
+
+  const rows = await db
+    .select({ key: column, n: count() })
+    .from(schema.events)
+    .where(filter)
+    .groupBy(column)
+    .orderBy(desc(count()), asc(column))
+    .limit(bounded + 1);
+
+  return {
+    groups: rows.slice(0, bounded).map((row) => ({
+      dimension: groupBy,
+      key: row.key === null ? null : String(row.key),
+      count: Number(row.n),
+    })),
+    truncated: rows.length > bounded,
+  };
 }
 
 /** Single-event lookup for shareable UUIDs; fast thanks to uq_events_uid. */

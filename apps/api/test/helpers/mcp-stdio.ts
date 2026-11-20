@@ -25,9 +25,17 @@ interface RpcEnvelope {
   error: string | null;
 }
 
+export interface McpToolAnnotations {
+  readOnlyHint: boolean;
+  destructiveHint: boolean;
+  idempotentHint: boolean;
+  openWorldHint: boolean;
+}
+
 export interface McpToolDefinition {
   name: string;
   description?: string;
+  annotations?: McpToolAnnotations;
 }
 
 export interface McpToolTextPart {
@@ -153,6 +161,7 @@ export class McpStdioClient {
       defs.push({
         name: entry.name,
         description: isString(entry.description) ? entry.description : undefined,
+        annotations: parseToolAnnotations(entry.annotations),
       });
     }
 
@@ -310,6 +319,17 @@ export class McpStdioClient {
   private notifyStderrWaiters(): void {
     for (const waiter of this.stderrWaiters) waiter();
   }
+}
+
+function parseToolAnnotations(value: JsonValue | undefined): McpToolAnnotations | undefined {
+  if (!isJsonObject(value)) return undefined;
+
+  return {
+    readOnlyHint: value.readOnlyHint === true,
+    destructiveHint: value.destructiveHint === true,
+    idempotentHint: value.idempotentHint === true,
+    openWorldHint: value.openWorldHint === true,
+  };
 }
 
 /** Decode one stdout line. Non-response frames (notifications) are ignored. */

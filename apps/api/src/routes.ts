@@ -43,6 +43,12 @@ import type { BackupStatus } from "./backups/types.ts";
 import { deleteArchivedProjectObjects } from "./archive/cleanup.ts";
 import { ArchiveError } from "./archive/types.ts";
 import { buildKeyContext } from "./mcp/context.ts";
+import {
+  DEFAULT_AGGREGATE_GROUPS,
+  MAX_AGGREGATE_GROUPS,
+  isAggregateGroupBy,
+  toAggregateGroups,
+} from "./aggregate.ts";
 import { APP_VERSION } from "./version.ts";
 import {
   countAdmins,
@@ -1417,6 +1423,48 @@ export function registerRoutes(
     if (projectId instanceof Response) return projectId;
 
     return c.json({ services: await storage.listServices(projectId) });
+  });
+
+  app.get("/v1/aggregate", async (c) => {
+    const authInfo = getAuth(c);
+
+    if (!canCapability(authInfo, "logs.read")) {
+      return c.json({ error: readScopeError(authInfo) }, 403);
+    }
+
+    const projectId = await resolveProjectId(c, storage);
+
+    if (projectId instanceof Response) return projectId;
+
+    const q = c.req.query("q") ?? "";
+    const qError = validateQuery(q);
+
+    if (qError) return c.json({ error: qError }, 400);
+
+    const groupBy = c.req.query("groupBy");
+
+    if (groupBy !== undefined && !isAggregateGroupBy(groupBy)) {
+      return c.json({ error: "groupBy must be one of: service, level, env" }, 400);
+    }
+
+    const range = parseRange(c);
+
+    if (range instanceof Response) return range;
+    const { from, to } = range;
+    const filter = buildWhere(parseFilters(q), { from, to }, projectId);
+    const total = await storage.countEvents(filter);
+
+    if (groupBy === undefined) return c.json({ from, to, total });
+
+    const limit = clampInt(c.req.query("limit"), DEFAULT_AGGREGATE_GROUPS, 1, MAX_AGGREGATE_GROUPS);
+    const grouped = await storage.groupEventCounts(filter, groupBy, limit);
+    const groups = toAggregateGroups(grouped.groups);
+
+    if (grouped.truncated) {
+      return c.json({ from, to, total, groupBy, groups, truncated: true });
+    }
+
+    return c.json({ from, to, total, groupBy, groups });
   });
 
   app.get("/v1/stream", async (c) => {

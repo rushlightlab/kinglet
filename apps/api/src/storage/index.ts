@@ -23,6 +23,9 @@ export async function createStorage(settings: StorageSettings): Promise<Storage>
       eventsRepo.insertEvents(db, projectId, events, apiKeyId),
     queryEvents: (opts) => eventsRepo.queryEvents(db, opts),
     getEventByUid: (projectId, uid) => eventsRepo.getEventByUid(db, projectId, uid),
+    countEvents: (filter) => eventsRepo.countEvents(db, filter),
+    groupEventCounts: (filter, groupBy, limit) =>
+      eventsRepo.groupEventCounts(db, filter, groupBy, limit),
     histogramPoints: (projectId, from, to, bucketMs) =>
       eventsRepo.histogramPoints(db, projectId, from, to, bucketMs),
     listServices: (projectId) => eventsRepo.listServices(db, projectId),

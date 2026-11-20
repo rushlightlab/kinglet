@@ -181,6 +181,7 @@ never ingest, manage keys/users/projects, or change backups and settings.
 | `GET /v1/events`                              | Query. Params: `q` (filter grammar), `from`, `to` (epoch ms), `limit`, `cursor` |
 | `GET /v1/histogram`                           | Counts per level per bucket. Params: `from`, `to`, `buckets`                    |
 | `GET /v1/services`                            | Your known services and their event counts                                      |
+| `GET /v1/aggregate`                           | Totals for a filter; optional `groupBy=service\|level\|env`, `limit` ≤ 200      |
 | `GET /v1/stream`                              | SSE live tail. Params: `q` (cookie auth; `?key=` for headerless clients)        |
 | `GET/POST /v1/monitors`                       | List monitors / create one                                                      |
 | `PATCH/DELETE /v1/monitors/:id`               | Update / delete a monitor                                                       |
@@ -211,10 +212,15 @@ never ingest, manage keys/users/projects, or change backups and settings.
 | `GET /healthz`                                | Minimal health check (no auth)                                                  |
 
 Ingest is rate-limited to 600 batches/minute per identity. Filters are capped at
-500 characters / 32 terms, `limit` at 1000, `buckets` at 240, alerts at 500, and
-monitors at 100 per project. `from`/`to` are clamped to the last 31 days and
-5 minutes of future skew. Per-project event and database caps are configurable
-(see below).
+500 characters / 32 terms, `limit` at 1000, `buckets` at 240, alerts at 500,
+aggregate groups at 200, and monitors at 100 per project. `from`/`to` are
+clamped to the last 31 days and 5 minutes of future skew. Per-project event and
+database caps are configurable (see below).
+
+`GET /v1/aggregate` returns `{ from, to, total }`. With `groupBy` it adds
+`groups: [{ key, count }]` ordered by count and `truncated: true` when more
+groups exist. Null `service`/`env` keys are real groups for events without that
+field; `level` keys are names such as `error`.
 
 ### Filter grammar
 

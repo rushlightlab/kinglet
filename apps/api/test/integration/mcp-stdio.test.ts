@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { uuidv7 } from "../../src/auth/ids.ts";
-import { isJsonObject } from "../../src/json.ts";
+import { isJsonObject, isString } from "../../src/json.ts";
+import type { JsonObject } from "../../src/json.ts";
 import * as schema from "../../src/storage/schema.ts";
 import { startLoopbackApp } from "../helpers/loopback.ts";
 import type { LoopbackAppServer } from "../helpers/loopback.ts";
@@ -26,6 +27,7 @@ interface McpFixture {
   session: TestSession;
   server: LoopbackAppServer;
   client: McpStdioClient;
+  countClient: McpStdioClient;
   cwd: string;
   writeKey: string;
   alertId: string;
@@ -43,6 +45,7 @@ beforeAll(async () => {
   let session: TestSession | null = null;
   let server: LoopbackAppServer | null = null;
   let client: McpStdioClient | null = null;
+  let countClient: McpStdioClient | null = null;
   let cwd: string | null = null;
 
   try {
@@ -59,6 +62,13 @@ beforeAll(async () => {
       scopes: ["logs.read", "monitors.read", "monitors.write"],
     });
 
+    const countKey = await seedApiKey(storage, {
+      projectId: alpha.id,
+      name: "mcp-contract-count",
+      keyType: "mcp",
+      scopes: ["logs.read"],
+    });
+
     await storage.insertEvents(
       alpha.id,
       [
@@ -68,6 +78,30 @@ beforeAll(async () => {
           service: "api",
           env: "test",
           message: "alpha-only-marker",
+          fields: null,
+        },
+        {
+          ts: Date.now() - 3_000,
+          level: 3,
+          service: "api",
+          env: "test",
+          message: "alpha warning",
+          fields: null,
+        },
+        {
+          ts: Date.now() - 4_000,
+          level: 2,
+          service: "web",
+          env: "prod",
+          message: "alpha web info",
+          fields: null,
+        },
+        {
+          ts: Date.now() - 5_000,
+          level: 2,
+          service: null,
+          env: null,
+          message: "alpha unattributed",
           fields: null,
         },
       ],
@@ -82,6 +116,14 @@ beforeAll(async () => {
           service: "api",
           env: "test",
           message: "beta-only-marker",
+          fields: null,
+        },
+        {
+          ts: Date.now() - 3_000,
+          level: 3,
+          service: "beta-only-svc",
+          env: "prod",
+          message: "beta second event",
           fields: null,
         },
       ],
@@ -132,16 +174,28 @@ beforeAll(async () => {
     });
     await client.initialize();
 
+    // A second key keeps count_events calls out of the main client's 60/min
+    // bucket, which the established contract tests already approach.
+    countClient = await McpStdioClient.start({
+      url: server.url,
+      key: countKey.plaintext,
+      cwd,
+      cliPath: CLI_PATH,
+    });
+    await countClient.initialize();
+
     fixture = {
       session,
       server,
       client,
+      countClient,
       cwd,
       writeKey: writeKey.plaintext,
       alertId,
     };
   } catch (err) {
     const cleanupSteps = [
+      async () => countClient?.close(),
       async () => client?.close(),
       async () => {
         if (server !== null) await server.close();
@@ -176,6 +230,8 @@ afterAll(async () => {
   try {
     await closing.client.close();
     expect(closing.client.terminated).toBe(true);
+    await closing.countClient.close();
+    expect(closing.countClient.terminated).toBe(true);
   } finally {
     try {
       await closing.server.close();
@@ -246,9 +302,10 @@ describe("MCP stdio contract", () => {
     const tools = await current().client.listTools();
     const names = tools.map((tool) => tool.name);
 
-    expect(names).toHaveLength(12);
+    expect(names).toHaveLength(13);
 
     for (const name of [
+      "count_events",
       "create_monitor",
       "delete_monitor",
       "get_context",
@@ -266,6 +323,11 @@ describe("MCP stdio contract", () => {
     }
 
     expect(tools.every((tool) => (tool.description ?? "").length > 0)).toBe(true);
+
+    const count = tools.find((tool) => tool.name === "count_events");
+
+    expect(count?.annotations?.readOnlyHint).toBe(true);
+    expect(count?.annotations?.destructiveHint).toBe(false);
   });
 
   it("returns the key's project context without exposing another project", async () => {
@@ -303,6 +365,116 @@ describe("MCP stdio contract", () => {
     expect(text).not.toContain(current().session.data.projects.beta.id);
   });
 
+  it("counts and groups only the MCP key's project", async () => {
+    const test = current();
+    const client = test.countClient;
+
+    const ungrouped = await client.callTool("count_events", {});
+
+    expect(toolFailed(ungrouped)).toBe(false);
+
+    const ungroupedBody = parseToolJson(toolText(ungrouped));
+
+    if (ungroupedBody === null) throw new Error("count_events did not return an object");
+
+    expect(ungroupedBody.total).toBe(4);
+    expect(ungroupedBody.groups).toBeUndefined();
+    expect(ungroupedBody.truncated).toBeUndefined();
+
+    const grouped = await client.callTool("count_events", { groupBy: "service" });
+    const groupedText = toolText(grouped);
+    const groupedBody = parseToolJson(groupedText);
+
+    expect(toolFailed(grouped)).toBe(false);
+
+    if (groupedBody === null) throw new Error("count_events did not return an object");
+
+    expect(groupedBody.total).toBe(4);
+
+    const groups = groupedBody.groups;
+
+    if (!Array.isArray(groups)) throw new Error("count_events did not return groups");
+
+    const counts = new Map<string, number>();
+
+    for (const entry of groups) {
+      if (!isJsonObject(entry)) throw new Error("count_events group is not an object");
+
+      const key = entry.key === null ? "null" : String(entry.key);
+      const count = Number(entry.count);
+
+      counts.set(key, count);
+    }
+
+    expect(counts).toEqual(
+      new Map([
+        ["api", 2],
+        ["web", 1],
+        ["null", 1],
+      ]),
+    );
+    expect(groupedText).not.toContain("beta-only-svc");
+    expect(groupedText).not.toContain("beta-only-marker");
+    expect(groupedText).not.toContain(test.writeKey);
+
+    const limited = await client.callTool("count_events", {
+      groupBy: "service",
+      limit: 1,
+    });
+
+    const limitedBody = parseToolJson(toolText(limited));
+
+    if (limitedBody === null) throw new Error("count_events did not return an object");
+
+    if (!Array.isArray(limitedBody.groups)) throw new Error("count_events did not return groups");
+
+    expect(limitedBody.groups).toHaveLength(1);
+    expect(limitedBody.truncated).toBe(true);
+
+    const byLevel = await client.callTool("count_events", { groupBy: "level" });
+    const byLevelBody = parseToolJson(toolText(byLevel));
+
+    if (byLevelBody === null) throw new Error("count_events did not return an object");
+
+    if (!Array.isArray(byLevelBody.groups)) throw new Error("count_events did not return groups");
+
+    const levelKeys = byLevelBody.groups.flatMap((entry) =>
+      isJsonObject(entry) && isString(entry.key) ? [entry.key] : [],
+    );
+
+    expect(levelKeys).toHaveLength(3);
+    expect(levelKeys).toContain("error");
+    expect(levelKeys).toContain("info");
+    expect(levelKeys).toContain("warn");
+
+    const filtered = await client.callTool("count_events", { q: "level>=error" });
+    const filteredBody = parseToolJson(toolText(filtered));
+
+    if (filteredBody === null) throw new Error("count_events did not return an object");
+
+    expect(filteredBody.total).toBe(1);
+    expect(client.stdoutGarbage).toEqual([]);
+  });
+
+  it("rejects invalid count_events arguments at the schema boundary", async () => {
+    const client = current().countClient;
+
+    const invalidArguments: JsonObject[] = [
+      { groupBy: "message" },
+      { groupBy: "service", limit: 0 },
+      { groupBy: "service", limit: 201 },
+      { q: "a".repeat(501) },
+    ];
+
+    for (const args of invalidArguments) {
+      const result = await client.callTool("count_events", args);
+
+      expect(toolFailed(result)).toBe(true);
+      expect(toolText(result)).toContain("Input validation error");
+      expect(toolText(result)).not.toContain(current().writeKey);
+    }
+  });
+
   it("returns the monitor-write gate rejection without creating a monitor", async () => {
     const test = current();
 
@@ -327,11 +499,17 @@ describe("MCP stdio contract", () => {
     const monitors = toolText(await test.client.callTool("list_monitors"));
     const channels = toolText(await test.client.callTool("list_channels"));
     const alerts = toolText(await test.client.callTool("list_alerts", { limit: 50 }));
-    const combined = [monitors, channels, alerts].join("\n");
+
+    const counts = toolText(
+      await test.countClient.callTool("count_events", { groupBy: "service" }),
+    );
+
+    const combined = [monitors, channels, alerts, counts].join("\n");
 
     expect(monitors).toContain("leak-monitor");
     expect(channels).toContain("secret-channel");
     expect(alerts).toContain(test.alertId);
+    expect(counts).toContain("api");
 
     for (const secret of [
       SECRET_CHANNEL_URL,
