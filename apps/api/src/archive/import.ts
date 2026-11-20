@@ -37,6 +37,18 @@ const MAX_IMPORT_MESSAGE = 8_000;
 const MAX_IMPORT_FIELDS = 32_768;
 const MAX_IMPORT_FUTURE_SKEW_MS = 5 * 60_000;
 
+/**
+ * Decompressed spool cap for one archive part.
+ *
+ * The exporter writes at most 10,000 events per part; ingest caps a message at
+ * 8,000 characters and serialized fields at 32 KiB. Add ~1 KiB per line for
+ * `uid`, `projectId`, `service`, `env`, and JSON punctuation, and the
+ * theoretical worst case is about 400 MiB. 512 MiB leaves room for JSON
+ * escaping without letting a hostile bucket object spool without bound. A
+ * legitimate part is orders of magnitude smaller.
+ */
+export const MAX_SPOOL_BYTES = 512 * 1024 * 1024;
+
 export interface ImportArchiveOptions {
   projectId: string;
   /** Inclusive UTC date bounds, `YYYY-MM-DD`. */
@@ -46,6 +58,11 @@ export interface ImportArchiveOptions {
   dataDir: string;
   passphrase?: string;
   s3: BackupObjectStore;
+  /**
+   * Decompressed spool cap. Production uses `MAX_SPOOL_BYTES`; tests inject a
+   * small value so the bound can be exercised without a giant fixture.
+   */
+  maxSpoolBytes?: number;
 }
 
 interface ArchiveObjectRef {
@@ -74,8 +91,6 @@ export async function importArchive(
   storage: Storage,
   options: ImportArchiveOptions,
 ): Promise<ArchiveImportResult> {
-  void options.dataDir;
-
   const projectId = options.projectId.trim().toLowerCase();
 
   if (!isUuid(projectId)) throw new ArchiveError("invalid project id", 400);
@@ -192,20 +207,35 @@ async function importPart(
   }
 
   const digest = createHash("sha256");
+  const maxSpoolBytes = options.maxSpoolBytes ?? MAX_SPOOL_BYTES;
+  let spooledBytes = 0;
 
+  // Count decompressed bytes before they reach the spool file. Failing inside
+  // the pipeline tears down the download, so an oversized or hostile object
+  // never writes an unbounded stream to disk.
   const hasher = new Transform({
-    transform(chunk, _encoding, callback) {
+    transform(chunk: Buffer, _encoding, callback) {
+      spooledBytes += chunk.length;
+
+      if (spooledBytes > maxSpoolBytes) {
+        callback(new ArchiveError("archive part is too large to import", 413));
+
+        return;
+      }
+
       digest.update(chunk);
       callback(null, chunk);
     },
   });
 
-  const decompressed = source.pipe(createZstdDecompress()).pipe(hasher);
+  const zstd = createZstdDecompress();
   let tempDir: string | null = null;
 
   try {
     // Spool while downloading so the SQLite write lock is never held across a
-    // network read. Nothing is inserted until the digest is verified.
+    // network read. Nothing is inserted until the digest is verified. The
+    // whole chain goes through one pipeline so an early decompress or spool
+    // error is observed instead of surfacing as an unhandled stream error.
     const tempRoot = path.join(options.dataDir, "tmp");
 
     await fs.promises.mkdir(tempRoot, { recursive: true, mode: 0o700 });
@@ -213,7 +243,7 @@ async function importPart(
 
     const spoolPath = path.join(tempDir, "part.ndjson");
 
-    await pipeline(decompressed, fs.createWriteStream(spoolPath, { mode: 0o600 }));
+    await pipeline(source, zstd, hasher, fs.createWriteStream(spoolPath, { mode: 0o600 }));
 
     await verifyPartDigest(storage.db, ref.key, filename, digest.digest("hex"));
 
@@ -228,7 +258,8 @@ async function importPart(
     console.warn(`[kinglet] archive import failed for ${ref.key}:`, describeBackupError(cause));
     throw new ArchiveError("archive import failed", 500);
   } finally {
-    decompressed.destroy();
+    hasher.destroy();
+    zstd.destroy();
     source.destroy();
     downloaded.destroy();
 
@@ -252,7 +283,8 @@ async function validateSpoolFile(
   projectId: string,
   importNow: number,
 ): Promise<number> {
-  const lines = createInterface({ input: fs.createReadStream(filePath), crlfDelay: Infinity });
+  const stream = fs.createReadStream(filePath);
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
   let skipped = 0;
 
   try {
@@ -262,7 +294,9 @@ async function validateSpoolFile(
       if (parseImportLine(raw, projectId, importNow) === null) skipped++;
     }
   } finally {
+    // Closing the readline interface does not destroy its input stream.
     lines.close();
+    stream.destroy();
   }
 
   return skipped;
@@ -275,7 +309,8 @@ async function insertSpoolFile(
   projectId: string,
   importNow: number,
 ): Promise<ArchiveImportResult> {
-  const lines = createInterface({ input: fs.createReadStream(filePath), crlfDelay: Infinity });
+  const stream = fs.createReadStream(filePath);
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
   let imported = 0;
   let skipped = 0;
   let batch: ImportRow[] = [];
@@ -329,7 +364,9 @@ async function insertSpoolFile(
 
     return { imported, skipped };
   } finally {
+    // Closing the readline interface does not destroy its input stream.
     lines.close();
+    stream.destroy();
   }
 }
 

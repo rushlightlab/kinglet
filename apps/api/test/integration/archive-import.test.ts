@@ -249,6 +249,37 @@ describe("archive import integrity", () => {
     expect(await eventCount(projectId)).toBe(0);
   });
 
+  it("rejects a part whose decompressed NDJSON exceeds the spool cap", async () => {
+    const { config, storage } = current();
+    const projectId = await newProject("spool-cap");
+    const store = new InMemoryBackupStore();
+
+    const part = storePart(store, projectId, [
+      makeLine(projectId, { message: "a".repeat(2_000) }),
+      makeLine(projectId, { message: "b".repeat(2_000) }),
+    ]);
+
+    stubDownload(part.compressed);
+
+    const error = await archiveErrorOf(
+      importArchive(storage, {
+        projectId,
+        dataDir: config.dataDir,
+        s3: store,
+        // Injected so the cap is exercised without a 512 MiB fixture.
+        maxSpoolBytes: 1_000,
+      }),
+    );
+
+    expect(error.status).toBe(413);
+    expect(error.message).toBe("archive part is too large to import");
+    expect(await eventCount(projectId)).toBe(0);
+
+    const spoolRoot = path.join(config.dataDir, "tmp");
+
+    expect(fs.existsSync(spoolRoot) ? fs.readdirSync(spoolRoot) : []).toEqual([]);
+  });
+
   it("rejects an uncached part whose key prefix does not match its digest", async () => {
     const { storage } = current();
     const projectId = await newProject("key-checksum");

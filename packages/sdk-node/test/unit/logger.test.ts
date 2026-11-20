@@ -139,6 +139,97 @@ describe("createLogger batching", () => {
   });
 });
 
+interface ParsedEvent {
+  service?: string;
+  env?: string;
+}
+
+/** Parse one batch line; every line is a serialized event object. */
+function parseEvent(line: string | undefined): ParsedEvent {
+  // SAFETY: the SDK serializes each buffered event with JSON.stringify, so a
+  // batch line is a JSON object and the fields read here are optional strings.
+  return JSON.parse(line ?? "{}") as ParsedEvent;
+}
+
+describe("createLogger service and env tags", () => {
+  const service = "checkout-api";
+  const env = "prod";
+
+  function expectTagged(init: RequestInit | undefined): void {
+    const events = bodyLines(init).map((line) => parseEvent(line));
+
+    expect(events.length).toBeGreaterThan(0);
+
+    for (const event of events) {
+      expect(event.service).toBe(service);
+      expect(event.env).toBe(env);
+    }
+  }
+
+  it("attaches the configured tags to a count-driven flush", async () => {
+    const logger = makeLogger({ service, env, batchSize: 2 });
+
+    logger.info("first");
+    logger.info("second");
+    await settle();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const call = requests[0];
+
+    if (!call) throw new Error("expected one ingest request");
+    expectTagged(call.init);
+
+    await logger.close();
+  });
+
+  it("attaches the configured tags to a timer-driven flush", async () => {
+    const logger = makeLogger({ service, env, flushMs: 1_000 });
+
+    logger.info("timed");
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const call = requests[0];
+
+    if (!call) throw new Error("expected one ingest request");
+    expectTagged(call.init);
+
+    await logger.close();
+  });
+
+  it("attaches the configured tags to a close-driven flush", async () => {
+    const logger = makeLogger({ service, env });
+
+    logger.info("shutdown");
+    await logger.close();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const call = requests[0];
+
+    if (!call) throw new Error("expected one ingest request");
+    expectTagged(call.init);
+  });
+
+  it("omits the tags when they are not configured", async () => {
+    const logger = makeLogger();
+
+    logger.info("plain");
+    await logger.close();
+
+    const call = requests[0];
+
+    if (!call) throw new Error("expected one ingest request");
+
+    const event = parseEvent(bodyLines(call.init)[0]);
+
+    expect(event.service).toBeUndefined();
+    expect(event.env).toBeUndefined();
+  });
+});
+
 describe("createLogger failures", () => {
   it("requeues a failed batch and reports it through onError", async () => {
     let attempt = 0;

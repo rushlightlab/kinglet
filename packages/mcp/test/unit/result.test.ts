@@ -129,17 +129,32 @@ describe("runTool", () => {
   it("returns a successful tool result and audits only safe summary fields", async () => {
     const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
+    const eventContent = "secret event content that must not be audited";
+    const filterText = "level>=error service=billing";
+    const apiKey = "km_audit_must_never_print_this_key";
+    const items = [{ id: 1, message: eventContent }];
+
     const outcome = await runTool("search_logs", async () =>
-      jsonResult({ items: [{ id: 1 }, { id: 2 }] }, { list: [{ id: 1 }, { id: 2 }] }),
+      jsonResult({ items, query: filterText, key: apiKey }, { list: items }),
     );
 
     const audit = write.mock.calls.map((call) => String(call[0])).join("");
+    const text = resultText(outcome);
 
     expect(outcome.isError).toBeUndefined();
-    expect(resultText(outcome)).toContain('"id": 1');
+    expect(text).toContain('"id": 1');
+    // Prove the payload really carried the sensitive values before asserting
+    // that the audit line did not.
+    expect(text).toContain(eventContent);
+    expect(text).toContain(filterText);
+    expect(text).toContain(apiKey);
     expect(audit).toContain("kinglet-mcp tool=search_logs");
     expect(audit).toContain("status=ok");
-    expect(audit).toContain("rows=2");
+    expect(audit).toContain("rows=1");
+    expect(audit).not.toContain(eventContent);
+    expect(audit).not.toContain(filterText);
+    expect(audit).not.toContain(apiKey);
+    expect(audit.trimEnd().split("\n")).toHaveLength(1);
   });
 
   it("turns a Kinglet API error into an error result", async () => {

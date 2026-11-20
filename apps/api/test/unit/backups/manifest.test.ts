@@ -20,6 +20,13 @@ const SAMPLE_ID = "0190f5b2-7c3a-7def-8abc-0123456789ab";
 const SHA256 = "a".repeat(64);
 const SIGNING_KEY = "test-manifest-signing-key-not-a-real-secret";
 
+/** Canonical bytes for `sampleManifest()`, pinned independently of the helper. */
+const SIGNING_PAYLOAD =
+  '{"format":"kinglet-backup/v1","id":"0190f5b2-7c3a-7def-8abc-0123456789ab","createdAt":1750000000000,"appVersion":"0.3.0","schemaVersion":12,"object":"snapshots/0190f5b2-7c3a-7def-8abc-0123456789ab.db.zst","sizeBytes":4096,"objectBytes":1024,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","compression":"zstd","encryption":"none","storage":"sqlite","counts":{"projects":2,"users":3,"events":100,"monitors":4}}';
+
+/** HMAC-SHA256 of `SIGNING_PAYLOAD` under `SIGNING_KEY`. */
+const SIGNING_HMAC = "1d05ff1249de4616c1103ab60861080e67feb559fa9f7be967bcfd9cdea29b1d";
+
 function sampleManifest(overrides: Partial<ManifestInput> = {}): BackupManifest {
   return buildManifest({
     id: SAMPLE_ID,
@@ -293,6 +300,43 @@ describe("manifest signatures", () => {
     expect(payload).not.toContain("signature");
     expect(payload).toContain(SAMPLE_ID);
     expect(manifestSigningPayload(signed)).toBe(payload);
+  });
+});
+
+describe("manifest signing payload", () => {
+  it("serializes the canonical manifest bytes", () => {
+    const payload = manifestSigningPayload(sampleManifest());
+
+    expect(payload).toBe(SIGNING_PAYLOAD);
+    expect(Buffer.byteLength(payload, "utf8")).toBe(437);
+  });
+
+  it("signs those exact bytes with HMAC-SHA256", () => {
+    const signed = signManifest(sampleManifest(), SIGNING_KEY);
+
+    expect(signed.signature).toEqual({ alg: "hmac-sha256", value: SIGNING_HMAC });
+  });
+
+  it("is independent of object field order", () => {
+    const manifest = sampleManifest();
+
+    const reordered: BackupManifest = {
+      counts: manifest.counts,
+      storage: manifest.storage,
+      encryption: manifest.encryption,
+      compression: manifest.compression,
+      sha256: manifest.sha256,
+      objectBytes: manifest.objectBytes,
+      sizeBytes: manifest.sizeBytes,
+      object: manifest.object,
+      schemaVersion: manifest.schemaVersion,
+      appVersion: manifest.appVersion,
+      createdAt: manifest.createdAt,
+      id: manifest.id,
+      format: manifest.format,
+    };
+
+    expect(manifestSigningPayload(reordered)).toBe(SIGNING_PAYLOAD);
   });
 });
 

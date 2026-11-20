@@ -123,6 +123,23 @@ describe("validateCron", () => {
       expect(validateCron(preset.cron, "UTC").ok).toBe(true);
     }
   });
+
+  it("uses the now seam only for the future-run guard", () => {
+    // Croner computes runs from the wall clock; `now` only decides whether the
+    // first computed run counts as future. These values make that decision
+    // deterministic without changing the schedule itself.
+    const accepted = validateCron("0 3 * * *", "UTC", 0);
+
+    expect(accepted.ok).toBe(true);
+
+    if (accepted.ok) expect(accepted.nextRuns).toHaveLength(3);
+
+    const stale = validateCron("0 3 * * *", "UTC", Number.MAX_SAFE_INTEGER);
+
+    expect(stale.ok).toBe(false);
+
+    if (!stale.ok) expect(stale.error).toBe("schedule does not produce a future run");
+  });
 });
 
 describe("isValidTimezone", () => {

@@ -39,7 +39,8 @@ pnpm test:e2e
   real Better Auth, real routes, and a temporary SQLite database.
 - `apps/api/test/helpers/` - temp database, test config, app harness, request
   helpers, deterministic seed data, loopback servers, and the MCP stdio client.
-- `packages/mcp/test/unit/` - MCP config and result-size unit tests.
+- `packages/mcp/test/unit/` - MCP config, client error-bound, and result-size
+  unit tests.
 - `packages/sdk-node/test/unit/` and `packages/sdk-node/test/integration/` -
   batching, retry, headers, and no-secret-leak tests with a fake `fetch` or a
   loopback fake server.
@@ -179,6 +180,14 @@ These are intentional gaps, not claims of coverage:
 - Age-encrypted successful restore staging and a full backup-engine run against
   a fake store are not covered; the rejection paths are. The production
   `BackupStore.getObjectText` size cap is not unit-tested.
+- The SDK batches by event count, not bytes (`batchSize` is a count). A batch of
+  very large events can exceed the server body limit and is re-queued on the
+  rejection; byte-based batching is a product follow-up.
+- Archive import caps decompressed NDJSON at 512 MiB per part (`MAX_SPOOL_BYTES`;
+  legitimate parts hold at most 10,000 events) and spools under
+  `<dataDir>/tmp`. It does not preflight free space with `statfs`, so that path
+  needs room for the largest part. The cap test injects a small limit instead
+  of writing a 512 MiB fixture.
 - Test coverage is not measured or enforced. There are no coverage thresholds.
 
 Task 9 and the final suite review track the remaining hardening items; do not

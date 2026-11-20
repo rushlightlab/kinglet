@@ -53,6 +53,8 @@ interface PendingEvent {
   message: string;
   fields?: LogFields;
   ts: number;
+  service?: string;
+  env?: string;
 }
 
 export function createLogger(opts: LoggerOptions): Logger {
@@ -107,12 +109,21 @@ export function createLogger(opts: LoggerOptions): Logger {
 
   function enqueue(level: string, message: string, fields?: LogFields): void {
     if (closing) return;
-    buffer.push({
+
+    const event: PendingEvent = {
       level,
       message,
       fields,
       ts: Date.now(),
-    });
+    };
+
+    // `service` and `env` are top-level event fields, like the ingest
+    // normalizer expects. Leave them out entirely when unset.
+    if (opts.service !== undefined) event.service = opts.service;
+
+    if (opts.env !== undefined) event.env = opts.env;
+
+    buffer.push(event);
 
     if (buffer.length >= batchSize) void flush();
     else schedule();

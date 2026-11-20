@@ -100,6 +100,12 @@ export function describeCron(cron: string): string {
   }
 }
 
+/**
+ * `now` is a test seam for the future-run guard only: Croner computes
+ * `nextRuns` from the wall clock, so this argument cannot time-travel the
+ * schedule. Pass `0` in a test to accept the computed runs regardless of when
+ * the test executes.
+ */
 export function validateCron(raw: string, timezone: string, now = Date.now()): CronValidation {
   const normalized = normalize(raw);
 

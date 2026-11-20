@@ -153,7 +153,7 @@ export interface ArchiveEventRow {
   fields: string | null;
 }
 
-export type ArchiveErrorStatus = 400 | 404 | 409 | 500 | 502 | 503;
+export type ArchiveErrorStatus = 400 | 404 | 409 | 413 | 500 | 502 | 503;
 
 /** Expected, user-safe failure. Messages are sanitized before they get here. */
 export class ArchiveError extends Error {

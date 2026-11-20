@@ -75,6 +75,10 @@ describe("archive level names", () => {
 });
 
 describe("synthesizeArchiveUid", () => {
+  it("pins the exact uid for a fixed project and source id", () => {
+    expect(synthesizeArchiveUid(PROJECT_ID, 42)).toBe("e58176d6-fa21-5596-89a1-670f1ef42e72");
+  });
+
   it("is deterministic for the same project and source id", () => {
     expect(synthesizeArchiveUid(PROJECT_ID, 42)).toBe(synthesizeArchiveUid(PROJECT_ID, 42));
   });
