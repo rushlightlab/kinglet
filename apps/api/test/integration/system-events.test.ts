@@ -1,22 +1,22 @@
 import fs from "node:fs";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { uuidv7 } from "../../src/auth/ids.js";
-import { publishSystemEvent } from "../../src/system-events.js";
+import { uuidv7 } from "../../src/auth/ids.ts";
+import { publishSystemEvent } from "../../src/system-events.ts";
 import {
   RESTORE_MARKER_FORMAT,
   restorePaths,
   writeRestoreMarker,
-} from "../../src/restore/marker.js";
-import { isFiniteNumber, isJsonObject } from "../../src/json.js";
-import type { JsonObject } from "../../src/json.js";
-import * as schema from "../../src/storage/schema.js";
-import { errorOf, jsonBody, objectAt } from "../helpers/body.js";
-import { createTestSession } from "../helpers/session.js";
-import type { TestSession } from "../helpers/session.js";
-import { request } from "../helpers/request.js";
-import { SseReader } from "../helpers/sse.js";
-import type { SseFrame } from "../helpers/sse.js";
+} from "../../src/restore/marker.ts";
+import { isFiniteNumber, isJsonObject } from "../../src/json.ts";
+import type { JsonObject } from "../../src/json.ts";
+import * as schema from "../../src/storage/schema.ts";
+import { errorOf, jsonBody, objectAt } from "../helpers/body.ts";
+import { createTestSession } from "../helpers/session.ts";
+import type { TestSession } from "../helpers/session.ts";
+import { request } from "../helpers/request.ts";
+import { SseReader } from "../helpers/sse.ts";
+import type { SseFrame } from "../helpers/sse.ts";
 
 let session: TestSession | null = null;
 

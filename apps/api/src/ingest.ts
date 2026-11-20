@@ -11,8 +11,8 @@
  *   fields           arbitrary JSON object (<= 32KB serialized)
  */
 
-import { isFiniteNumber, isJsonObject, isString } from "./json.js";
-import type { JsonValue } from "./json.js";
+import { isFiniteNumber, isJsonObject, isString } from "./json.ts";
+import type { JsonValue } from "./json.ts";
 
 export interface Normalized {
   ts: number;

@@ -2,38 +2,38 @@ import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { Context } from "hono";
-import { isUuid, uuidv7 } from "../auth/ids.js";
-import { canCapability } from "../auth/key-capabilities.js";
-import { getAuth, requirePermission } from "../auth/middleware.js";
-import type { AppEnv } from "../auth/middleware.js";
-import type { Config } from "../env.js";
-import { isBoolean, isJsonObject, isString } from "../json.js";
-import type { JsonObject, JsonValue } from "../json.js";
-import { isChannelType, sendGeneric, validateWebhookUrl } from "../notify.js";
-import type { ChannelType } from "../notify.js";
-import * as schema from "../storage/schema.js";
-import type { Storage } from "../storage/index.js";
-import type { NotificationEngine } from "./engine.js";
-import { scrubLegacyChannelUrl } from "./migrate.js";
+import { isUuid, uuidv7 } from "../auth/ids.ts";
+import { canCapability } from "../auth/key-capabilities.ts";
+import { getAuth, requirePermission } from "../auth/middleware.ts";
+import type { AppEnv } from "../auth/middleware.ts";
+import type { Config } from "../env.ts";
+import { isBoolean, isJsonObject, isString } from "../json.ts";
+import type { JsonObject, JsonValue } from "../json.ts";
+import { isChannelType, sendGeneric, validateWebhookUrl } from "../notify.ts";
+import type { ChannelType } from "../notify.ts";
+import * as schema from "../storage/schema.ts";
+import type { Storage } from "../storage/index.ts";
+import type { NotificationEngine } from "./engine.ts";
+import { scrubLegacyChannelUrl } from "./migrate.ts";
 import {
   getChannelRecord,
   healthFromDelivery,
   latestDeliveryStates,
   listChannelRecords,
   listDeliveryRecords,
-} from "./store.js";
+} from "./store.ts";
 import {
   DEFAULT_NOTIFICATION_ACTIONS,
   NOTIFICATION_ACTIONS,
   isNotificationAction,
   maskChannelUrl,
   safeErrorMessage,
-} from "./types.js";
+} from "./types.ts";
 import type {
   NotificationAction,
   NotificationChannel,
   NotificationChannelSummary,
-} from "./types.js";
+} from "./types.ts";
 
 /**
  * Notification channel administration and delivery history.

@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { arrayAt, errorOf, jsonBody, objectAt, stringAt } from "../helpers/body.js";
-import { createTestHarness } from "../helpers/harness.js";
-import type { TestHarness } from "../helpers/harness.js";
-import { request } from "../helpers/request.js";
-import { seedApiKey, seedMonitor, seedProject } from "../helpers/seed.js";
-import type { SeededApiKey, SeededProject } from "../helpers/seed.js";
+import { arrayAt, errorOf, jsonBody, objectAt, stringAt } from "../helpers/body.ts";
+import { createTestHarness } from "../helpers/harness.ts";
+import type { TestHarness } from "../helpers/harness.ts";
+import { request } from "../helpers/request.ts";
+import { seedApiKey, seedMonitor, seedProject } from "../helpers/seed.ts";
+import type { SeededApiKey, SeededProject } from "../helpers/seed.ts";
 
 interface GateFixture {
   harness: TestHarness;

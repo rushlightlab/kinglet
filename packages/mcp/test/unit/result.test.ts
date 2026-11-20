@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { KingletApiError } from "../../src/client.js";
+import { KingletApiError } from "../../src/client.ts";
 import {
   describeError,
   errorResult,
   jsonResult,
   MAX_RESPONSE_BYTES,
   runTool,
-} from "../../src/tools/result.js";
+} from "../../src/tools/result.ts";
 
 function resultText(result: CallToolResult): string {
   const block = result.content[0];

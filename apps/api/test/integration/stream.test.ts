@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { JsonObject } from "../../src/json.js";
-import { isJsonObject } from "../../src/json.js";
-import { errorOf, jsonBody } from "../helpers/body.js";
-import { request } from "../helpers/request.js";
-import type { TestRequestOptions } from "../helpers/request.js";
-import { seedApiKey, seedUser } from "../helpers/seed.js";
-import { createTestSession, signInUser } from "../helpers/session.js";
-import type { TestSession } from "../helpers/session.js";
-import { SseReader } from "../helpers/sse.js";
+import type { JsonObject } from "../../src/json.ts";
+import { isJsonObject } from "../../src/json.ts";
+import { errorOf, jsonBody } from "../helpers/body.ts";
+import { request } from "../helpers/request.ts";
+import type { TestRequestOptions } from "../helpers/request.ts";
+import { seedApiKey, seedUser } from "../helpers/seed.ts";
+import { createTestSession, signInUser } from "../helpers/session.ts";
+import type { TestSession } from "../helpers/session.ts";
+import { SseReader } from "../helpers/sse.ts";
 
 /**
  * `/v1/stream` contract: credential forms, project isolation, query filtering,

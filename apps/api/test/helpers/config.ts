@@ -1,5 +1,5 @@
 import os from "node:os";
-import type { Config } from "../../src/env.js";
+import type { Config } from "../../src/env.ts";
 
 export const TEST_ADMIN_EMAIL = "admin@example.test";
 export const TEST_ADMIN_PASSWORD = "TestPass123!";

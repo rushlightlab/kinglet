@@ -8,7 +8,7 @@
  */
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { KingletApiError } from "../client.js";
+import { KingletApiError } from "../client.ts";
 
 export const MAX_RESPONSE_BYTES = 256 * 1024;
 

@@ -1,4 +1,4 @@
-import type { JsonObject } from "../json.js";
+import type { JsonObject } from "../json.ts";
 
 /**
  * Public DTOs for the S3 log archive.

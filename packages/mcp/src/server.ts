@@ -1,11 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import type { KingletClient } from "./client.js";
-import { MCP_VERSION } from "./config.js";
-import { registerAlertTools } from "./tools/alerts.js";
-import { registerContextTools } from "./tools/context.js";
-import { registerEventTools } from "./tools/events.js";
-import { registerMonitorTools } from "./tools/monitors.js";
+import type { KingletClient } from "./client.ts";
+import { MCP_VERSION } from "./config.ts";
+import { registerAlertTools } from "./tools/alerts.ts";
+import { registerContextTools } from "./tools/context.ts";
+import { registerEventTools } from "./tools/events.ts";
+import { registerMonitorTools } from "./tools/monitors.ts";
 
 const INSTRUCTIONS = [
   "Kinglet is a log platform. This server exposes read tools for one project's logs and",

@@ -1,5 +1,5 @@
 import type { Readable } from "node:stream";
-import { BackupError } from "./types.js";
+import { BackupError } from "./types.ts";
 
 /**
  * Read a bounded UTF-8 object body from a stream. The cap is enforced while

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { ensureSchemaExtras } from "../auth/setup.js";
-import { isUuid } from "../auth/ids.js";
-import { BackupStore } from "../backups/s3.js";
-import { loadConfig } from "../env.js";
-import { createStorage } from "../storage/index.js";
-import { importArchive } from "./import.js";
+import { ensureSchemaExtras } from "../auth/setup.ts";
+import { isUuid } from "../auth/ids.ts";
+import { BackupStore } from "../backups/s3.ts";
+import { loadConfig } from "../env.ts";
+import { createStorage } from "../storage/index.ts";
+import { importArchive } from "./import.ts";
 
 /**
  * Import archived NDJSON parts back into a project. Run this while the API is

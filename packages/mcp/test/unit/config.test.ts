@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ConfigError, loadConfig } from "../../src/config.js";
+import { ConfigError, loadConfig } from "../../src/config.ts";
 
 const BASE_ENV = {
   KINGLET_URL: "https://logs.example.com",

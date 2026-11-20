@@ -1,9 +1,9 @@
-import type { TestHarness, TestHarnessOptions } from "./harness.js";
-import { createTestHarness } from "./harness.js";
-import { signIn } from "./request.js";
-import type { CookieJar } from "./request.js";
-import { seedTestData } from "./seed.js";
-import type { SeededTestData } from "./seed.js";
+import type { TestHarness, TestHarnessOptions } from "./harness.ts";
+import { createTestHarness } from "./harness.ts";
+import { signIn } from "./request.ts";
+import type { CookieJar } from "./request.ts";
+import { seedTestData } from "./seed.ts";
+import type { SeededTestData } from "./seed.ts";
 
 export interface TestSession {
   harness: TestHarness;

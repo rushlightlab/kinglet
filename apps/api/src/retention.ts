@@ -1,6 +1,6 @@
-import type { Storage } from "./storage/index.js";
-import { invalidateDbSizeCache } from "./storage/db-size.js";
-import { systemStatus } from "./status.js";
+import type { Storage } from "./storage/index.ts";
+import { invalidateDbSizeCache } from "./storage/db-size.ts";
+import { systemStatus } from "./status.ts";
 
 export interface RetentionOptions {
   /** Projects whose archive job owns deletion; a throw skips deletion. */

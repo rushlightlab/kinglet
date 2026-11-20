@@ -12,12 +12,12 @@
  */
 
 import { eq } from "drizzle-orm";
-import type { Storage } from "../storage/index.js";
-import * as schema from "../storage/schema.js";
-import type { AuthInfo } from "../auth/middleware.js";
-import type { KeyType } from "../auth/roles.js";
-import { keyCan } from "../auth/key-capabilities.js";
-import { APP_VERSION } from "../version.js";
+import type { Storage } from "../storage/index.ts";
+import * as schema from "../storage/schema.ts";
+import type { AuthInfo } from "../auth/middleware.ts";
+import type { KeyType } from "../auth/roles.ts";
+import { keyCan } from "../auth/key-capabilities.ts";
+import { APP_VERSION } from "../version.ts";
 
 export interface KeyCapabilities {
   "logs.read": boolean;

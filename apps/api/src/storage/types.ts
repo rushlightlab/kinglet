@@ -1,8 +1,8 @@
 import type { Client } from "@libsql/client";
 import type { SQL } from "drizzle-orm";
-import type { Normalized } from "../ingest.js";
-import type { StoredEvent } from "../types.js";
-import type { KingletDb } from "./db.js";
+import type { Normalized } from "../ingest.ts";
+import type { StoredEvent } from "../types.ts";
+import type { KingletDb } from "./db.ts";
 
 export type StorageKind = "sqlite" | "libsql";
 

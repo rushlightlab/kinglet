@@ -1,12 +1,12 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMonitorFromRaw } from "../../src/monitors.js";
-import { migrateLegacyMonitorChannels } from "../../src/notifications/migrate.js";
-import * as schema from "../../src/storage/schema.js";
-import { createTestHarness } from "../helpers/harness.js";
-import type { TestHarness } from "../helpers/harness.js";
-import { seedProject } from "../helpers/seed.js";
-import type { SeededProject } from "../helpers/seed.js";
+import { createMonitorFromRaw } from "../../src/monitors.ts";
+import { migrateLegacyMonitorChannels } from "../../src/notifications/migrate.ts";
+import * as schema from "../../src/storage/schema.ts";
+import { createTestHarness } from "../helpers/harness.ts";
+import type { TestHarness } from "../helpers/harness.ts";
+import { seedProject } from "../helpers/seed.ts";
+import type { SeededProject } from "../helpers/seed.ts";
 
 const EXPECTED_DEFAULT_ACTIONS = [
   "backup.failed",

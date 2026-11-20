@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { errorOf, jsonBody, objectAt } from "../helpers/body.js";
-import { request } from "../helpers/request.js";
-import { createTestSession } from "../helpers/session.js";
-import type { TestSession } from "../helpers/session.js";
+import { errorOf, jsonBody, objectAt } from "../helpers/body.ts";
+import { request } from "../helpers/request.ts";
+import { createTestSession } from "../helpers/session.ts";
+import type { TestSession } from "../helpers/session.ts";
 
 const FOREIGN_ORIGIN = "https://evil.example";
 

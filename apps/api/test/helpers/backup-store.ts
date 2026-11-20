@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import { Readable } from "node:stream";
-import { isUuid } from "../../src/auth/ids.js";
-import { signManifest, verifyManifestSignature } from "../../src/backups/manifest-signature.js";
-import { relativeObjectKey } from "../../src/backups/s3.js";
-import type { BackupObject, BackupObjectStore, BackupUploadInput } from "../../src/backups/s3.js";
-import { BackupError } from "../../src/backups/types.js";
-import type { BackupEncryption, BackupManifest } from "../../src/backups/types.js";
+import { isUuid } from "../../src/auth/ids.ts";
+import { signManifest, verifyManifestSignature } from "../../src/backups/manifest-signature.ts";
+import { relativeObjectKey } from "../../src/backups/s3.ts";
+import type { BackupObject, BackupObjectStore, BackupUploadInput } from "../../src/backups/s3.ts";
+import { BackupError } from "../../src/backups/types.ts";
+import type { BackupEncryption, BackupManifest } from "../../src/backups/types.ts";
 
 /**
  * In-memory BackupStore adapter for integration tests. It mirrors the S3

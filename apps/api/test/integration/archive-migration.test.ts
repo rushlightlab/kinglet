@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { createTempDatabase } from "../helpers/temp.js";
+import { createTempDatabase } from "../helpers/temp.ts";
 
 const MIGRATION_PATH = new URL("../../drizzle/0009_young_the_spike.sql", import.meta.url);
 

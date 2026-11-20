@@ -1,8 +1,8 @@
 import path from "node:path";
-import { openDatabase, toLibsqlUrl } from "./db.js";
-import * as eventsRepo from "./events.js";
-import { resolveStorageKind } from "./types.js";
-import type { Storage, StorageSettings } from "./types.js";
+import { openDatabase, toLibsqlUrl } from "./db.ts";
+import * as eventsRepo from "./events.ts";
+import { resolveStorageKind } from "./types.ts";
+import type { Storage, StorageSettings } from "./types.ts";
 
 export async function createStorage(settings: StorageSettings): Promise<Storage> {
   const kind = resolveStorageKind(settings);
@@ -40,4 +40,4 @@ export async function createStorage(settings: StorageSettings): Promise<Storage>
   };
 }
 
-export type { Storage, StorageKind } from "./types.js";
+export type { Storage, StorageKind } from "./types.ts";

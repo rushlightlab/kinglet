@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { JsonObject } from "../../src/json.js";
-import { arrayAt, errorOf, jsonBody, numberAt, objectAt, stringAt } from "../helpers/body.js";
-import { createTestHarness } from "../helpers/harness.js";
-import type { TestHarness } from "../helpers/harness.js";
-import { reserveClosedLoopbackPort } from "../helpers/loopback.js";
-import { request, signIn } from "../helpers/request.js";
-import type { CookieJar } from "../helpers/request.js";
-import { seedProject } from "../helpers/seed.js";
-import type { SeededProject } from "../helpers/seed.js";
+import type { JsonObject } from "../../src/json.ts";
+import { arrayAt, errorOf, jsonBody, numberAt, objectAt, stringAt } from "../helpers/body.ts";
+import { createTestHarness } from "../helpers/harness.ts";
+import type { TestHarness } from "../helpers/harness.ts";
+import { reserveClosedLoopbackPort } from "../helpers/loopback.ts";
+import { request, signIn } from "../helpers/request.ts";
+import type { CookieJar } from "../helpers/request.ts";
+import { seedProject } from "../helpers/seed.ts";
+import type { SeededProject } from "../helpers/seed.ts";
 
 /**
  * Loopback-only delivery checks. The target port was reserved and released, so

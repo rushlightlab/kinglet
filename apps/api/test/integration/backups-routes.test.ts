@@ -1,16 +1,16 @@
 import { Hono } from "hono";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { uuidv7 } from "../../src/auth/ids.js";
-import type { AuthInfo, AppEnv } from "../../src/auth/middleware.js";
-import type { Permission } from "../../src/auth/roles.js";
-import type { BackupEngine } from "../../src/backups/engine.js";
-import { registerBackupRoutes } from "../../src/backups/routes.js";
-import type { BackupSnapshot } from "../../src/backups/types.js";
-import { errorOf, jsonBody } from "../helpers/body.js";
-import { createNoopBackupEngine } from "../helpers/engines.js";
-import { request } from "../helpers/request.js";
-import { createTestSession } from "../helpers/session.js";
-import type { TestSession } from "../helpers/session.js";
+import { uuidv7 } from "../../src/auth/ids.ts";
+import type { AuthInfo, AppEnv } from "../../src/auth/middleware.ts";
+import type { Permission } from "../../src/auth/roles.ts";
+import type { BackupEngine } from "../../src/backups/engine.ts";
+import { registerBackupRoutes } from "../../src/backups/routes.ts";
+import type { BackupSnapshot } from "../../src/backups/types.ts";
+import { errorOf, jsonBody } from "../helpers/body.ts";
+import { createNoopBackupEngine } from "../helpers/engines.ts";
+import { request } from "../helpers/request.ts";
+import { createTestSession } from "../helpers/session.ts";
+import type { TestSession } from "../helpers/session.ts";
 
 interface RouteContext {
   session: TestSession;

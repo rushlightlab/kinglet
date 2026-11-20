@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
-import type { AppEnv } from "../../src/auth/middleware.js";
-import type { JsonValue } from "../../src/json.js";
-import { isString } from "../../src/json.js";
+import type { AppEnv } from "../../src/auth/middleware.ts";
+import type { JsonValue } from "../../src/json.ts";
+import { isString } from "../../src/json.ts";
 
 const ORIGIN = "http://localhost:3000";
 

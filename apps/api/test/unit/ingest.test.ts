@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeEvent } from "../../src/ingest.js";
+import { normalizeEvent } from "../../src/ingest.ts";
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;

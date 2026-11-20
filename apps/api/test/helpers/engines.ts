@@ -1,17 +1,17 @@
-import type { AppEngines } from "../../src/app.js";
-import type { ArchiveEngine } from "../../src/archive/engine.js";
+import type { AppEngines } from "../../src/app.ts";
+import type { ArchiveEngine } from "../../src/archive/engine.ts";
 import type {
   ArchiveProjectSetting,
   ArchiveSettingsView,
   ArchiveStatus,
-} from "../../src/archive/types.js";
-import type { BackupEngine } from "../../src/backups/engine.js";
-import type { BackupSettings, BackupStatus } from "../../src/backups/types.js";
-import type { MonitorEngine } from "../../src/monitors.js";
-import type { NotificationEngine } from "../../src/notifications/engine.js";
-import { describeCron, validateCron } from "../../src/schedule.js";
-import { ArchiveError } from "../../src/archive/types.js";
-import { BackupError } from "../../src/backups/types.js";
+} from "../../src/archive/types.ts";
+import type { BackupEngine } from "../../src/backups/engine.ts";
+import type { BackupSettings, BackupStatus } from "../../src/backups/types.ts";
+import type { MonitorEngine } from "../../src/monitors.ts";
+import type { NotificationEngine } from "../../src/notifications/engine.ts";
+import { describeCron, validateCron } from "../../src/schedule.ts";
+import { ArchiveError } from "../../src/archive/types.ts";
+import { BackupError } from "../../src/backups/types.ts";
 
 /**
  * Deterministic no-op engines for the app seam. They never touch the network,

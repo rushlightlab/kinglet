@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { JsonObject, JsonValue } from "../../src/json.js";
-import { seedApiKey, seedUser } from "../helpers/seed.js";
-import type { SeededUser } from "../helpers/seed.js";
-import { arrayAt, errorOf, jsonBody, objectAt, stringAt } from "../helpers/body.js";
-import { request } from "../helpers/request.js";
-import type { CookieJar } from "../helpers/request.js";
-import { createTestSession, signInUser } from "../helpers/session.js";
-import type { TestSession } from "../helpers/session.js";
+import type { JsonObject, JsonValue } from "../../src/json.ts";
+import { seedApiKey, seedUser } from "../helpers/seed.ts";
+import type { SeededUser } from "../helpers/seed.ts";
+import { arrayAt, errorOf, jsonBody, objectAt, stringAt } from "../helpers/body.ts";
+import { request } from "../helpers/request.ts";
+import type { CookieJar } from "../helpers/request.ts";
+import { createTestSession, signInUser } from "../helpers/session.ts";
+import type { TestSession } from "../helpers/session.ts";
 
 interface KeyContext {
   session: TestSession;

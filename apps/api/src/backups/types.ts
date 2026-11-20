@@ -1,4 +1,4 @@
-import type { BackupPhase, BackupTrigger } from "../system-events.js";
+import type { BackupPhase, BackupTrigger } from "../system-events.ts";
 
 /**
  * Public DTOs for the S3 snapshot feature. Routes and the web UI consume these;

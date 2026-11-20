@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { StoredEvent } from "./types.js";
+import type { StoredEvent } from "./types.ts";
 
 /**
  * Tiny in-process pub/sub: ingest publishes batches, SSE live-tail

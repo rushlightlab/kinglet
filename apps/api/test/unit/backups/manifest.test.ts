@@ -7,14 +7,14 @@ import {
   parseCountsJson,
   parseManifest,
   serializeManifest,
-} from "../../../src/backups/manifest.js";
-import type { ManifestInput } from "../../../src/backups/manifest.js";
+} from "../../../src/backups/manifest.ts";
+import type { ManifestInput } from "../../../src/backups/manifest.ts";
 import {
   manifestSigningPayload,
   signManifest,
   verifyManifestSignature,
-} from "../../../src/backups/manifest-signature.js";
-import type { BackupManifest } from "../../../src/backups/types.js";
+} from "../../../src/backups/manifest-signature.ts";
+import type { BackupManifest } from "../../../src/backups/types.ts";
 
 const SAMPLE_ID = "0190f5b2-7c3a-7def-8abc-0123456789ab";
 const SHA256 = "a".repeat(64);

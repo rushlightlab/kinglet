@@ -1,10 +1,10 @@
 import { and, asc, desc, eq, inArray, lt, or } from "drizzle-orm";
-import { uuidv7 } from "../auth/ids.js";
-import { isChannelType } from "../notify.js";
-import type { ChannelType } from "../notify.js";
-import * as schema from "../storage/schema.js";
-import type { Storage } from "../storage/index.js";
-import { isNotificationAction } from "./types.js";
+import { uuidv7 } from "../auth/ids.ts";
+import { isChannelType } from "../notify.ts";
+import type { ChannelType } from "../notify.ts";
+import * as schema from "../storage/schema.ts";
+import type { Storage } from "../storage/index.ts";
+import { isNotificationAction } from "./types.ts";
 import type {
   MonitorChannelSummary,
   NotificationAction,
@@ -13,7 +13,7 @@ import type {
   NotificationDelivery,
   NotificationDeliveryStatus,
   NotificationTestStatus,
-} from "./types.js";
+} from "./types.ts";
 
 /**
  * Database access shared by the notification routes, engine, migration, and

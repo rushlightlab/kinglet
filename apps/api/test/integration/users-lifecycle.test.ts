@@ -1,15 +1,15 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { JsonObject } from "../../src/json.js";
-import * as schema from "../../src/storage/schema.js";
-import { arrayAt, errorOf, jsonBody, numberAt, objectAt, stringAt } from "../helpers/body.js";
-import { createTestHarness } from "../helpers/harness.js";
-import type { TestHarness } from "../helpers/harness.js";
-import { request, signIn } from "../helpers/request.js";
-import type { CookieJar, TestRequestOptions } from "../helpers/request.js";
-import { seedApiKey, seedProject, seedUser } from "../helpers/seed.js";
-import { createTestSession, signInUser } from "../helpers/session.js";
-import type { TestSession } from "../helpers/session.js";
+import type { JsonObject } from "../../src/json.ts";
+import * as schema from "../../src/storage/schema.ts";
+import { arrayAt, errorOf, jsonBody, numberAt, objectAt, stringAt } from "../helpers/body.ts";
+import { createTestHarness } from "../helpers/harness.ts";
+import type { TestHarness } from "../helpers/harness.ts";
+import { request, signIn } from "../helpers/request.ts";
+import type { CookieJar, TestRequestOptions } from "../helpers/request.ts";
+import { seedApiKey, seedProject, seedUser } from "../helpers/seed.ts";
+import { createTestSession, signInUser } from "../helpers/session.ts";
+import type { TestSession } from "../helpers/session.ts";
 
 /**
  * Last-admin and offboarding invariants through the real routes and Better

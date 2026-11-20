@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { isJsonObject } from "../../src/json.js";
-import { createTestHarness } from "../helpers/harness.js";
+import { isJsonObject } from "../../src/json.ts";
+import { createTestHarness } from "../helpers/harness.ts";
 
 describe("GET /healthz", () => {
   it("reports healthy for a migrated temporary database", async () => {

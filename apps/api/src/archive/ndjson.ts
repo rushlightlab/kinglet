@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { isFiniteNumber, isJsonObject, isString } from "../json.js";
-import type { JsonObject, JsonValue } from "../json.js";
-import { LEVEL_NAMES } from "../types.js";
-import type { ArchiveEventRow, ArchiveLine } from "./types.js";
+import { isFiniteNumber, isJsonObject, isString } from "../json.ts";
+import type { JsonObject, JsonValue } from "../json.ts";
+import { LEVEL_NAMES } from "../types.ts";
+import type { ArchiveEventRow, ArchiveLine } from "./types.ts";
 
 /**
  * NDJSON archive codec, shared by export (`engine.ts`) and import

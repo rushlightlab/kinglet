@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isUuid } from "../auth/ids.js";
-import { isFiniteNumber, isJsonObject, isString } from "../json.js";
-import { fileExists, writeFileAtomic } from "./util.js";
+import { isUuid } from "../auth/ids.ts";
+import { isFiniteNumber, isJsonObject, isString } from "../json.ts";
+import { fileExists, writeFileAtomic } from "./util.ts";
 
 /**
  * Restore markers live under `<dataDir>/restore/`:

@@ -1,9 +1,9 @@
 import { betterAuth } from "better-auth/minimal";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { admin } from "better-auth/plugins";
-import { PASSWORD_MIN_LENGTH } from "./password.js";
-import type { KingletDb } from "../storage/db.js";
-import * as schema from "../storage/schema.js";
+import { PASSWORD_MIN_LENGTH } from "./password.ts";
+import type { KingletDb } from "../storage/db.ts";
+import * as schema from "../storage/schema.ts";
 
 /**
  * Better Auth, tuned per the official performance guide:

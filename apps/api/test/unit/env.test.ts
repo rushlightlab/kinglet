@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadConfig } from "../../src/env.js";
+import { loadConfig } from "../../src/env.ts";
 
 const ENV_KEYS = ["KINGLET_HOST", "BETTER_AUTH_SECRET", "KINGLET_AUTH_SECRET"] as const;
 

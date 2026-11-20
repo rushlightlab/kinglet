@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { readObjectText } from "../../../src/backups/object-text.js";
-import { BackupError } from "../../../src/backups/types.js";
+import { readObjectText } from "../../../src/backups/object-text.ts";
+import { BackupError } from "../../../src/backups/types.ts";
 
 const MAX_OBJECT_BYTES = 64 * 1024;
 

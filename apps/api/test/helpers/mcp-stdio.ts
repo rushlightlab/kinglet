@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
-import { isFiniteNumber, isJsonObject, isString } from "../../src/json.js";
-import type { JsonObject, JsonValue } from "../../src/json.js";
+import { isFiniteNumber, isJsonObject, isString } from "../../src/json.ts";
+import type { JsonObject, JsonValue } from "../../src/json.ts";
 
 /**
  * Minimal JSON-RPC client for the real `@kinglet/mcp` stdio entry point.

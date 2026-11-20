@@ -1,11 +1,11 @@
 import { and, count, desc, eq, gte, isNotNull, lt, lte, notInArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
-import type { Normalized } from "../ingest.js";
-import { uuidv7 } from "../auth/ids.js";
-import type { StoredEvent } from "../types.js";
-import type { KingletDb } from "./db.js";
-import * as schema from "./schema.js";
-import type { HistogramPointRow, QueryOptions, ServiceRow } from "./types.js";
+import type { Normalized } from "../ingest.ts";
+import { uuidv7 } from "../auth/ids.ts";
+import type { StoredEvent } from "../types.ts";
+import type { KingletDb } from "./db.ts";
+import * as schema from "./schema.ts";
+import type { HistogramPointRow, QueryOptions, ServiceRow } from "./types.ts";
 
 /** SQLite caps the number of bound variables per statement. */
 const INSERT_CHUNK = 500;

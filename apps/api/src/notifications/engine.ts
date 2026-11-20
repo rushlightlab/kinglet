@@ -1,13 +1,13 @@
-import type { Config } from "../env.js";
-import { sendGeneric } from "../notify.js";
-import type { Storage } from "../storage/index.js";
-import { subscribeSystemEvents } from "../system-events.js";
-import type { SystemEvent } from "../system-events.js";
-import { migrateLegacyMonitorChannels } from "./migrate.js";
-import { channelsForAction, pruneDeliveries, recordDelivery } from "./store.js";
-import type { DeliveryRecordInput } from "./store.js";
-import { safeErrorMessage } from "./types.js";
-import type { NotificationAction, NotificationEvent } from "./types.js";
+import type { Config } from "../env.ts";
+import { sendGeneric } from "../notify.ts";
+import type { Storage } from "../storage/index.ts";
+import { subscribeSystemEvents } from "../system-events.ts";
+import type { SystemEvent } from "../system-events.ts";
+import { migrateLegacyMonitorChannels } from "./migrate.ts";
+import { channelsForAction, pruneDeliveries, recordDelivery } from "./store.ts";
+import type { DeliveryRecordInput } from "./store.ts";
+import { safeErrorMessage } from "./types.ts";
+import type { NotificationAction, NotificationEvent } from "./types.ts";
 
 /**
  * Global notification delivery.

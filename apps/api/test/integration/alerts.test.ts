@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { uuidv7 } from "../../src/auth/ids.js";
-import type { JsonObject } from "../../src/json.js";
-import * as schema from "../../src/storage/schema.js";
-import { arrayAt, jsonBody, objectAt, stringAt } from "../helpers/body.js";
-import { request } from "../helpers/request.js";
-import { seedApiKey, seedMonitor } from "../helpers/seed.js";
-import type { SeededApiKey } from "../helpers/seed.js";
-import { createTestSession } from "../helpers/session.js";
-import type { TestSession } from "../helpers/session.js";
+import { uuidv7 } from "../../src/auth/ids.ts";
+import type { JsonObject } from "../../src/json.ts";
+import * as schema from "../../src/storage/schema.ts";
+import { arrayAt, jsonBody, objectAt, stringAt } from "../helpers/body.ts";
+import { request } from "../helpers/request.ts";
+import { seedApiKey, seedMonitor } from "../helpers/seed.ts";
+import type { SeededApiKey } from "../helpers/seed.ts";
+import { createTestSession } from "../helpers/session.ts";
+import type { TestSession } from "../helpers/session.ts";
 
 interface AlertsContext {
   session: TestSession;

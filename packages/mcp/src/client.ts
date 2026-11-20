@@ -12,7 +12,7 @@
  */
 
 import { z } from "zod";
-import type { McpConfig } from "./config.js";
+import type { McpConfig } from "./config.ts";
 
 export const DEFAULT_ROWS = 50;
 export const MAX_ROWS = 200;

@@ -1,15 +1,15 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { deleteArchivedProjectObjects } from "../../src/archive/cleanup.js";
-import { uuidv7 } from "../../src/auth/ids.js";
-import * as schema from "../../src/storage/schema.js";
-import { InMemoryBackupStore } from "../helpers/backup-store.js";
-import { jsonBody, stringAt } from "../helpers/body.js";
-import { createTestSession } from "../helpers/session.js";
-import type { TestSession } from "../helpers/session.js";
-import { request } from "../helpers/request.js";
-import { seedProject } from "../helpers/seed.js";
-import type { SeededProject } from "../helpers/seed.js";
+import { deleteArchivedProjectObjects } from "../../src/archive/cleanup.ts";
+import { uuidv7 } from "../../src/auth/ids.ts";
+import * as schema from "../../src/storage/schema.ts";
+import { InMemoryBackupStore } from "../helpers/backup-store.ts";
+import { jsonBody, stringAt } from "../helpers/body.ts";
+import { createTestSession } from "../helpers/session.ts";
+import type { TestSession } from "../helpers/session.ts";
+import { request } from "../helpers/request.ts";
+import { seedProject } from "../helpers/seed.ts";
+import type { SeededProject } from "../helpers/seed.ts";
 
 interface CleanupCall {
   projectId: string;

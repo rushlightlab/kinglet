@@ -1,17 +1,17 @@
 import type { Context } from "hono";
 import type { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { isUuid } from "../auth/ids.js";
-import { requirePermission } from "../auth/middleware.js";
-import type { AppEnv } from "../auth/middleware.js";
-import { describeBackupError } from "../backups/s3.js";
-import type { Config } from "../env.js";
-import { isBoolean, isFiniteNumber, isJsonObject, isString } from "../json.js";
-import type { JsonObject } from "../json.js";
-import type { Storage } from "../storage/index.js";
-import type { ArchiveEngine } from "./engine.js";
-import { ArchiveError } from "./types.js";
-import type { ArchiveProjectToggle, ArchiveSettingsUpdate } from "./types.js";
+import { isUuid } from "../auth/ids.ts";
+import { requirePermission } from "../auth/middleware.ts";
+import type { AppEnv } from "../auth/middleware.ts";
+import { describeBackupError } from "../backups/s3.ts";
+import type { Config } from "../env.ts";
+import { isBoolean, isFiniteNumber, isJsonObject, isString } from "../json.ts";
+import type { JsonObject } from "../json.ts";
+import type { Storage } from "../storage/index.ts";
+import type { ArchiveEngine } from "./engine.ts";
+import { ArchiveError } from "./types.ts";
+import type { ArchiveProjectToggle, ArchiveSettingsUpdate } from "./types.ts";
 
 /**
  * Admin-only archive routes. Responses are DTOs: bucket object keys,

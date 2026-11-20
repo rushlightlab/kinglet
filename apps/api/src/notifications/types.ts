@@ -1,6 +1,6 @@
-import type { ChannelType } from "../notify.js";
+import type { ChannelType } from "../notify.ts";
 
-export type { ChannelType } from "../notify.js";
+export type { ChannelType } from "../notify.ts";
 
 /**
  * Global notification channels.

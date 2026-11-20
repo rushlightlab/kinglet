@@ -7,17 +7,17 @@ import { createInterface } from "node:readline";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createZstdDecompress } from "node:zlib";
-import { isUuid } from "../auth/ids.js";
-import { describeBackupError } from "../backups/s3.js";
-import type { BackupObjectStore } from "../backups/s3.js";
-import { eventSizeBytes } from "../storage/events.js";
-import type { KingletDb } from "../storage/db.js";
-import type { Storage } from "../storage/index.js";
-import * as schema from "../storage/schema.js";
-import { archiveLevelIndex, parseArchiveLine } from "./ndjson.js";
-import { resolveMaxSpoolBytes } from "./spool.js";
-import { ArchiveError, isArchiveDate } from "./types.js";
-import type { ArchiveImportResult, ArchiveLine } from "./types.js";
+import { isUuid } from "../auth/ids.ts";
+import { describeBackupError } from "../backups/s3.ts";
+import type { BackupObjectStore } from "../backups/s3.ts";
+import { eventSizeBytes } from "../storage/events.ts";
+import type { KingletDb } from "../storage/db.ts";
+import type { Storage } from "../storage/index.ts";
+import * as schema from "../storage/schema.ts";
+import { archiveLevelIndex, parseArchiveLine } from "./ndjson.ts";
+import { resolveMaxSpoolBytes } from "./spool.ts";
+import { ArchiveError, isArchiveDate } from "./types.ts";
+import type { ArchiveImportResult, ArchiveLine } from "./types.ts";
 
 /**
  * Streamed archive import.

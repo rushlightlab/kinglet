@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { JsonObject } from "../../src/json.js";
-import { arrayAt, errorOf, jsonBody, messagesOf, objectAt, stringAt } from "../helpers/body.js";
-import { request } from "../helpers/request.js";
-import { createTestSession } from "../helpers/session.js";
-import type { TestSession } from "../helpers/session.js";
+import type { JsonObject } from "../../src/json.ts";
+import { arrayAt, errorOf, jsonBody, messagesOf, objectAt, stringAt } from "../helpers/body.ts";
+import { request } from "../helpers/request.ts";
+import { createTestSession } from "../helpers/session.ts";
+import type { TestSession } from "../helpers/session.ts";
 
 let session: TestSession | null = null;
 

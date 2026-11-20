@@ -4,22 +4,22 @@ import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createZstdDecompress } from "node:zlib";
-import { isUuid } from "../auth/ids.js";
-import { MAX_MANIFEST_BYTES, parseManifest } from "../backups/manifest.js";
-import { BackupStore, describeBackupError, downloadToFile } from "../backups/s3.js";
-import type { BackupObject, BackupObjectHead, BackupObjectStore } from "../backups/s3.js";
-import { BackupError } from "../backups/types.js";
-import type { BackupManifest } from "../backups/types.js";
-import type { Config } from "../env.js";
-import { SCHEMA_VERSION } from "../storage/schema.js";
+import { isUuid } from "../auth/ids.ts";
+import { MAX_MANIFEST_BYTES, parseManifest } from "../backups/manifest.ts";
+import { BackupStore, describeBackupError, downloadToFile } from "../backups/s3.ts";
+import type { BackupObject, BackupObjectHead, BackupObjectStore } from "../backups/s3.ts";
+import { BackupError } from "../backups/types.ts";
+import type { BackupManifest } from "../backups/types.ts";
+import type { Config } from "../env.ts";
+import { SCHEMA_VERSION } from "../storage/schema.ts";
 import {
   RESTORE_MARKER_FORMAT,
   restorePaths,
   stagedDatabasePath,
   writeRestoreMarker,
-} from "./marker.js";
-import type { RestoreSource } from "./marker.js";
-import { beginMaintenance, endMaintenance } from "./state.js";
+} from "./marker.ts";
+import type { RestoreSource } from "./marker.ts";
+import { beginMaintenance, endMaintenance } from "./state.ts";
 import {
   databaseSidecarPaths,
   inspectDatabase,
@@ -27,8 +27,8 @@ import {
   moveFileOver,
   removeFile,
   sha256File,
-} from "./util.js";
-import type { DatabaseCheck } from "./util.js";
+} from "./util.ts";
+import type { DatabaseCheck } from "./util.ts";
 
 /**
  * Restore staging.

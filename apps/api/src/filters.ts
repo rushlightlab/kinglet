@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
-import { LEVEL_NAMES } from "./types.js";
+import { LEVEL_NAMES } from "./types.ts";
 
 /**
  * The filter grammar:

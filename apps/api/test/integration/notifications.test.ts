@@ -1,11 +1,11 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { JsonObject } from "../../src/json.js";
-import * as schema from "../../src/storage/schema.js";
-import { arrayAt, errorOf, jsonBody, objectAt, stringAt } from "../helpers/body.js";
-import { request } from "../helpers/request.js";
-import { createTestSession } from "../helpers/session.js";
-import type { TestSession } from "../helpers/session.js";
+import type { JsonObject } from "../../src/json.ts";
+import * as schema from "../../src/storage/schema.ts";
+import { arrayAt, errorOf, jsonBody, objectAt, stringAt } from "../helpers/body.ts";
+import { request } from "../helpers/request.ts";
+import { createTestSession } from "../helpers/session.ts";
+import type { TestSession } from "../helpers/session.ts";
 
 const EXPECTED_DEFAULT_ACTIONS = [
   "backup.failed",

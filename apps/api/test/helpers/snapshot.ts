@@ -3,12 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
-import { uuidv7 } from "../../src/auth/ids.js";
-import { buildManifest, serializeManifest } from "../../src/backups/manifest.js";
-import type { ManifestInput } from "../../src/backups/manifest.js";
-import type { BackupManifest } from "../../src/backups/types.js";
-import { SCHEMA_VERSION } from "../../src/storage/schema.js";
-import type { InMemoryBackupStore } from "./backup-store.js";
+import { uuidv7 } from "../../src/auth/ids.ts";
+import { buildManifest, serializeManifest } from "../../src/backups/manifest.ts";
+import type { ManifestInput } from "../../src/backups/manifest.ts";
+import type { BackupManifest } from "../../src/backups/types.ts";
+import { SCHEMA_VERSION } from "../../src/storage/schema.ts";
+import type { InMemoryBackupStore } from "./backup-store.ts";
 
 /**
  * Deterministic snapshot fixtures for restore tests: a tiny SQLite database

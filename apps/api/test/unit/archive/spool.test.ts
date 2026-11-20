@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_SPOOL_BYTES, resolveMaxSpoolBytes } from "../../../src/archive/spool.js";
+import { MAX_SPOOL_BYTES, resolveMaxSpoolBytes } from "../../../src/archive/spool.ts";
 
 describe("MAX_SPOOL_BYTES", () => {
   it("is 1 GiB", () => {

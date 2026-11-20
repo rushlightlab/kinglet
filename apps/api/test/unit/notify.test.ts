@@ -5,8 +5,8 @@ import {
   sanitizeNotificationText,
   slackPayload,
   validateWebhookUrl,
-} from "../../src/notify.js";
-import type { AlertNotice } from "../../src/notify.js";
+} from "../../src/notify.ts";
+import type { AlertNotice } from "../../src/notify.ts";
 
 function makeNotice(overrides: Partial<AlertNotice> = {}): AlertNotice {
   return {

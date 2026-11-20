@@ -1,11 +1,11 @@
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import type { KingletAuth } from "./auth/auth.js";
-import { requirePermission } from "./auth/middleware.js";
-import type { AppEnv } from "./auth/middleware.js";
-import { isRole, permissionsForRole } from "./auth/roles.js";
-import { formatSystemEvent, subscribeSystemEvents } from "./system-events.js";
-import type { SystemStatusSnapshot } from "./system-events.js";
+import type { KingletAuth } from "./auth/auth.ts";
+import { requirePermission } from "./auth/middleware.ts";
+import type { AppEnv } from "./auth/middleware.ts";
+import { isRole, permissionsForRole } from "./auth/roles.ts";
+import { formatSystemEvent, subscribeSystemEvents } from "./system-events.ts";
+import type { SystemStatusSnapshot } from "./system-events.ts";
 
 const HEARTBEAT_MS = 15_000;
 const REVALIDATE_EVERY_TICKS = 4;

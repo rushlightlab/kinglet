@@ -1,5 +1,5 @@
-import { isFiniteNumber, isJsonObject, isString } from "../../src/json.js";
-import type { JsonObject, JsonValue } from "../../src/json.js";
+import { isFiniteNumber, isJsonObject, isString } from "../../src/json.ts";
+import type { JsonObject, JsonValue } from "../../src/json.ts";
 
 /**
  * Response-body readers for integration tests. `Response.json()` is `any`;

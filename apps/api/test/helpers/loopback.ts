@@ -1,8 +1,8 @@
 import { createServer } from "node:http";
 import type { IncomingHttpHeaders, Server } from "node:http";
 import type { Hono } from "hono";
-import type { AppEnv } from "../../src/auth/middleware.js";
-import { isString } from "../../src/json.js";
+import type { AppEnv } from "../../src/auth/middleware.ts";
+import { isString } from "../../src/json.ts";
 
 /**
  * Small HTTP server that adapts real `node:http` requests to `app.fetch`.

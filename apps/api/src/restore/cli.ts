@@ -3,12 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { BackupStore, describeBackupError } from "../backups/s3.js";
-import { BackupError } from "../backups/types.js";
-import { loadConfig } from "../env.js";
-import { restorePaths } from "./marker.js";
-import { stageLatestRestore, stageRestore } from "./stage.js";
-import type { StageRestoreResult } from "./stage.js";
+import { BackupStore, describeBackupError } from "../backups/s3.ts";
+import { BackupError } from "../backups/types.ts";
+import { loadConfig } from "../env.ts";
+import { restorePaths } from "./marker.ts";
+import { stageLatestRestore, stageRestore } from "./stage.ts";
+import type { StageRestoreResult } from "./stage.ts";
 
 /**
  * Fresh-host restore entry point. Runs before the server opens the database:

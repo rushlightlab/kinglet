@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createLogger } from "../../src/index.js";
-import type { LoggerOptions } from "../../src/index.js";
+import { createLogger } from "../../src/index.ts";
+import type { LoggerOptions } from "../../src/index.ts";
 
 const TEST_TOKEN = "kl_test_key_not_a_real_secret";
 const TEST_URL = "https://logs.example.com";

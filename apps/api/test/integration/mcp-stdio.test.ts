@@ -4,15 +4,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { uuidv7 } from "../../src/auth/ids.js";
-import { isJsonObject } from "../../src/json.js";
-import * as schema from "../../src/storage/schema.js";
-import { startLoopbackApp } from "../helpers/loopback.js";
-import type { LoopbackAppServer } from "../helpers/loopback.js";
-import { McpStdioClient, parseToolJson, toolFailed, toolText } from "../helpers/mcp-stdio.js";
-import { createTestSession } from "../helpers/session.js";
-import type { TestSession } from "../helpers/session.js";
-import { seedApiKey, seedMonitor, seedNotificationChannel } from "../helpers/seed.js";
+import { uuidv7 } from "../../src/auth/ids.ts";
+import { isJsonObject } from "../../src/json.ts";
+import * as schema from "../../src/storage/schema.ts";
+import { startLoopbackApp } from "../helpers/loopback.ts";
+import type { LoopbackAppServer } from "../helpers/loopback.ts";
+import { McpStdioClient, parseToolJson, toolFailed, toolText } from "../helpers/mcp-stdio.ts";
+import { createTestSession } from "../helpers/session.ts";
+import type { TestSession } from "../helpers/session.ts";
+import { seedApiKey, seedMonitor, seedNotificationChannel } from "../helpers/seed.ts";
 
 const CLI_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),

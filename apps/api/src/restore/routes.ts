@@ -1,15 +1,15 @@
 import type { Context } from "hono";
 import type { Hono } from "hono";
-import { isUuid } from "../auth/ids.js";
-import { requirePermission, requireUser } from "../auth/middleware.js";
-import type { AppEnv } from "../auth/middleware.js";
-import { describeBackupError } from "../backups/s3.js";
-import type { BackupObjectStore } from "../backups/s3.js";
-import { BackupError } from "../backups/types.js";
-import type { Config } from "../env.js";
-import type { Storage } from "../storage/index.js";
-import { publishSystemEvent } from "../system-events.js";
-import { stageRestore } from "./stage.js";
+import { isUuid } from "../auth/ids.ts";
+import { requirePermission, requireUser } from "../auth/middleware.ts";
+import type { AppEnv } from "../auth/middleware.ts";
+import { describeBackupError } from "../backups/s3.ts";
+import type { BackupObjectStore } from "../backups/s3.ts";
+import { BackupError } from "../backups/types.ts";
+import type { Config } from "../env.ts";
+import type { Storage } from "../storage/index.ts";
+import { publishSystemEvent } from "../system-events.ts";
+import { stageRestore } from "./stage.ts";
 
 /**
  * Restore staging route. The handler returns 202 after the snapshot is staged;

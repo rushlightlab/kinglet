@@ -1,7 +1,7 @@
-import { BackupStore, describeBackupError } from "../backups/s3.js";
-import type { BackupObjectStore } from "../backups/s3.js";
-import type { Config } from "../env.js";
-import { ArchiveError } from "./types.js";
+import { BackupStore, describeBackupError } from "../backups/s3.ts";
+import type { BackupObjectStore } from "../backups/s3.ts";
+import type { Config } from "../env.ts";
+import { ArchiveError } from "./types.ts";
 
 /**
  * Delete every archived object for one project. Project deletion and an

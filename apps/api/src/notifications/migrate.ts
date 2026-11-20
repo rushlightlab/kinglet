@@ -1,11 +1,11 @@
 import { and, eq } from "drizzle-orm";
-import { isChannelType, validateWebhookUrl } from "../notify.js";
-import type { ChannelType } from "../notify.js";
-import { isJsonObject, isString } from "../json.js";
-import { uuidv7 } from "../auth/ids.js";
-import * as schema from "../storage/schema.js";
-import type { Storage } from "../storage/index.js";
-import { DEFAULT_NOTIFICATION_ACTIONS } from "./types.js";
+import { isChannelType, validateWebhookUrl } from "../notify.ts";
+import type { ChannelType } from "../notify.ts";
+import { isJsonObject, isString } from "../json.ts";
+import { uuidv7 } from "../auth/ids.ts";
+import * as schema from "../storage/schema.ts";
+import type { Storage } from "../storage/index.ts";
+import { DEFAULT_NOTIFICATION_ACTIONS } from "./types.ts";
 
 /**
  * One-time migration from `monitors.channels` inline JSON to first-class

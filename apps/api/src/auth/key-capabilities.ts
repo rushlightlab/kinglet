@@ -7,8 +7,8 @@
  * never true for a session user — users go through `can()`.
  */
 
-import { can } from "./middleware.js";
-import type { AuthInfo } from "./middleware.js";
+import { can } from "./middleware.ts";
+import type { AuthInfo } from "./middleware.ts";
 
 export type KeyCapability = "logs.read" | "logs.write" | "monitors.read" | "monitors.write";
 

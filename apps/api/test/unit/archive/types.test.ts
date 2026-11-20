@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ArchiveError, isArchiveDate } from "../../../src/archive/types.js";
+import { ArchiveError, isArchiveDate } from "../../../src/archive/types.ts";
 
 describe("isArchiveDate", () => {
   it("accepts real calendar dates", () => {

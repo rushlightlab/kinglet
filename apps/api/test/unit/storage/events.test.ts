@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Normalized } from "../../../src/ingest.js";
-import { eventSizeBytes } from "../../../src/storage/events.js";
+import type { Normalized } from "../../../src/ingest.ts";
+import { eventSizeBytes } from "../../../src/storage/events.ts";
 
 function makeEvent(overrides: Partial<Normalized> = {}): Normalized {
   return {

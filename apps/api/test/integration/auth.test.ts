@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { arrayAt, errorOf, jsonBody, objectAt } from "../helpers/body.js";
-import { request, signIn } from "../helpers/request.js";
-import { createTestSession } from "../helpers/session.js";
-import type { TestSession } from "../helpers/session.js";
+import { arrayAt, errorOf, jsonBody, objectAt } from "../helpers/body.ts";
+import { request, signIn } from "../helpers/request.ts";
+import { createTestSession } from "../helpers/session.ts";
+import type { TestSession } from "../helpers/session.ts";
 
 let session: TestSession | null = null;
 

@@ -6,8 +6,8 @@ import {
   eventToArchiveLine,
   parseArchiveLine,
   synthesizeArchiveUid,
-} from "../../../src/archive/ndjson.js";
-import type { ArchiveEventRow } from "../../../src/archive/types.js";
+} from "../../../src/archive/ndjson.ts";
+import type { ArchiveEventRow } from "../../../src/archive/types.ts";
 
 const PROJECT_ID = "0190f5b2-7c3a-7def-8abc-0123456789ab";
 const ROW_UID = "0190f5b2-7c3a-7def-8abc-fedcba987654";

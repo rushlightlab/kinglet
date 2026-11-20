@@ -14,16 +14,16 @@ import fs from "node:fs";
 import { Transform } from "node:stream";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { isUuid } from "../auth/ids.js";
-import type { BackupConfig } from "../env.js";
-import { isFiniteNumber, isJsonObject, isString } from "../json.js";
+import { isUuid } from "../auth/ids.ts";
+import type { BackupConfig } from "../env.ts";
+import { isFiniteNumber, isJsonObject, isString } from "../json.ts";
 import {
   signManifest as signManifestWithKey,
   verifyManifestSignature as verifyManifestSignatureWithKey,
-} from "./manifest-signature.js";
-import { readObjectText } from "./object-text.js";
-import { BackupError } from "./types.js";
-import type { BackupEncryption, BackupManifest } from "./types.js";
+} from "./manifest-signature.ts";
+import { readObjectText } from "./object-text.ts";
+import { BackupError } from "./types.ts";
+import type { BackupEncryption, BackupManifest } from "./types.ts";
 
 /**
  * S3 access for snapshots. All object keys and user-visible errors are built

@@ -5,7 +5,7 @@ import {
   MIN_SCHEDULE_GAP_MS,
   nextRuns,
   validateCron,
-} from "../../src/schedule.js";
+} from "../../src/schedule.ts";
 
 const MINUTE = 60_000;
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { KingletApiError, KingletClient } from "../../src/client.js";
-import type { McpConfig } from "../../src/config.js";
+import { KingletApiError, KingletClient } from "../../src/client.ts";
+import type { McpConfig } from "../../src/config.ts";
 
 const TEST_KEY = "km_client_error_bound_not_a_real_secret";
 

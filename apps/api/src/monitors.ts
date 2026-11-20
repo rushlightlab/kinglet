@@ -1,24 +1,24 @@
 import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
-import { subscribeEvents } from "./bus.js";
-import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
-import type { ParsedFilters } from "./filters.js";
-import { isJsonObject, isString } from "./json.js";
-import type { JsonObject, JsonValue } from "./json.js";
-import { validateQueryString } from "./query-validation.js";
-import { isChannelType, sendNotice, validateWebhookUrl } from "./notify.js";
-import type { AlertNotice, NotifyChannel } from "./notify.js";
-import { uuidv7, isUuid } from "./auth/ids.js";
-import { resolveMonitorChannelData, recordDelivery } from "./notifications/store.js";
-import type { MonitorChannelData } from "./notifications/store.js";
-import { safeErrorMessage } from "./notifications/types.js";
-import type { MonitorChannelSummary } from "./notifications/types.js";
-import { systemStatus } from "./status.js";
-import { localDbBytes } from "./storage/db-size.js";
-import * as schema from "./storage/schema.js";
-import type { Storage } from "./storage/index.js";
-import { LEVEL_NAMES } from "./types.js";
-import type { StoredEvent } from "./types.js";
+import { subscribeEvents } from "./bus.ts";
+import { buildWhere, matchesEvent, parseFilters } from "./filters.ts";
+import type { ParsedFilters } from "./filters.ts";
+import { isJsonObject, isString } from "./json.ts";
+import type { JsonObject, JsonValue } from "./json.ts";
+import { validateQueryString } from "./query-validation.ts";
+import { isChannelType, sendNotice, validateWebhookUrl } from "./notify.ts";
+import type { AlertNotice, NotifyChannel } from "./notify.ts";
+import { uuidv7, isUuid } from "./auth/ids.ts";
+import { resolveMonitorChannelData, recordDelivery } from "./notifications/store.ts";
+import type { MonitorChannelData } from "./notifications/store.ts";
+import { safeErrorMessage } from "./notifications/types.ts";
+import type { MonitorChannelSummary } from "./notifications/types.ts";
+import { systemStatus } from "./status.ts";
+import { localDbBytes } from "./storage/db-size.ts";
+import * as schema from "./storage/schema.ts";
+import type { Storage } from "./storage/index.ts";
+import { LEVEL_NAMES } from "./types.ts";
+import type { StoredEvent } from "./types.ts";
 
 /**
  * Monitors: standing queries that watch a project's event stream.

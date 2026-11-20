@@ -1,21 +1,21 @@
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import { createApp } from "../../src/app.js";
-import type { AppEngines } from "../../src/app.js";
-import type { AppEnv } from "../../src/auth/middleware.js";
-import { createAuth } from "../../src/auth/auth.js";
-import type { KingletAuth } from "../../src/auth/auth.js";
-import { ensureBootstrapAdmin, ensureSchemaExtras } from "../../src/auth/setup.js";
-import type { BackupObjectStore } from "../../src/backups/s3.js";
-import type { Config } from "../../src/env.js";
-import { endMaintenance } from "../../src/restore/state.js";
-import * as schema from "../../src/storage/schema.js";
-import { createStorage } from "../../src/storage/index.js";
-import type { Storage } from "../../src/storage/index.js";
-import { TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD, makeTestConfig } from "./config.js";
-import { createNoopEngines } from "./engines.js";
-import type { TestEngineOverrides } from "./engines.js";
-import { createTempDatabase } from "./temp.js";
+import { createApp } from "../../src/app.ts";
+import type { AppEngines } from "../../src/app.ts";
+import type { AppEnv } from "../../src/auth/middleware.ts";
+import { createAuth } from "../../src/auth/auth.ts";
+import type { KingletAuth } from "../../src/auth/auth.ts";
+import { ensureBootstrapAdmin, ensureSchemaExtras } from "../../src/auth/setup.ts";
+import type { BackupObjectStore } from "../../src/backups/s3.ts";
+import type { Config } from "../../src/env.ts";
+import { endMaintenance } from "../../src/restore/state.ts";
+import * as schema from "../../src/storage/schema.ts";
+import { createStorage } from "../../src/storage/index.ts";
+import type { Storage } from "../../src/storage/index.ts";
+import { TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD, makeTestConfig } from "./config.ts";
+import { createNoopEngines } from "./engines.ts";
+import type { TestEngineOverrides } from "./engines.ts";
+import { createTempDatabase } from "./temp.ts";
 
 export interface TestAdmin {
   id: string;

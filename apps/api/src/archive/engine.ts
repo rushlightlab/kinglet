@@ -7,25 +7,25 @@ import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createZstdCompress } from "node:zlib";
-import { isUuid, uuidv7 } from "../auth/ids.js";
-import { BackupStore, describeBackupError } from "../backups/s3.js";
-import type { Config } from "../env.js";
-import { isFiniteNumber } from "../json.js";
-import { createCronScheduler, validateCron } from "../schedule.js";
-import type { CronScheduler } from "../schedule.js";
-import type { Storage } from "../storage/index.js";
-import * as schema from "../storage/schema.js";
-import { publishSystemEvent } from "../system-events.js";
-import { importArchive } from "./import.js";
-import { archiveDateKey, eventToArchiveLine } from "./ndjson.js";
+import { isUuid, uuidv7 } from "../auth/ids.ts";
+import { BackupStore, describeBackupError } from "../backups/s3.ts";
+import type { Config } from "../env.ts";
+import { isFiniteNumber } from "../json.ts";
+import { createCronScheduler, validateCron } from "../schedule.ts";
+import type { CronScheduler } from "../schedule.ts";
+import type { Storage } from "../storage/index.ts";
+import * as schema from "../storage/schema.ts";
+import { publishSystemEvent } from "../system-events.ts";
+import { importArchive } from "./import.ts";
+import { archiveDateKey, eventToArchiveLine } from "./ndjson.ts";
 import {
   ensureArchiveSettings,
   getArchiveSettings,
   listArchiveEnabledProjectIds,
   setProjectArchiveEnabled,
   updateArchiveSettings,
-} from "./settings.js";
-import { ArchiveError, isArchiveDate } from "./types.js";
+} from "./settings.ts";
+import { ArchiveError, isArchiveDate } from "./types.ts";
 import type {
   ArchiveEncryption,
   ArchiveEventRow,
@@ -40,7 +40,7 @@ import type {
   ArchiveSettingsUpdate,
   ArchiveSettingsView,
   ArchiveStatus,
-} from "./types.js";
+} from "./types.ts";
 
 export type {
   ArchivePart,
@@ -48,9 +48,9 @@ export type {
   ArchiveSettings,
   ArchiveSettingsView,
   ArchiveStatus,
-} from "./types.js";
+} from "./types.ts";
 
-export { ArchiveError } from "./types.js";
+export { ArchiveError } from "./types.ts";
 
 /**
  * Log archive engine.

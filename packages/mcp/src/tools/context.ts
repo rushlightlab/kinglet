@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { KingletClient } from "../client.js";
-import { jsonResult, runTool } from "./result.js";
+import type { KingletClient } from "../client.ts";
+import { jsonResult, runTool } from "./result.ts";
 
 export function registerContextTools(server: McpServer, client: KingletClient): void {
   server.registerTool(

@@ -2,8 +2,8 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { Config } from "../env.js";
-import { isString } from "../json.js";
+import type { Config } from "../env.ts";
+import { isString } from "../json.ts";
 
 /**
  * Filesystem and database helpers shared by restore staging and the boot swap.

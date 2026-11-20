@@ -1,18 +1,18 @@
 import { eq } from "drizzle-orm";
-import type { KingletAuth } from "../../src/auth/auth.js";
-import { createApiKey } from "../../src/auth/apikeys.js";
-import type { ApiKey } from "../../src/auth/apikeys.js";
-import { uuidv7 } from "../../src/auth/ids.js";
-import { scopesForType } from "../../src/auth/roles.js";
-import type { AnyKeyScope, KeyType, Role } from "../../src/auth/roles.js";
-import { createMonitorFromRaw } from "../../src/monitors.js";
-import type { Monitor, MonitorKind } from "../../src/monitors.js";
-import type { ChannelType } from "../../src/notify.js";
-import { getChannelRecord } from "../../src/notifications/store.js";
-import { DEFAULT_NOTIFICATION_ACTIONS } from "../../src/notifications/types.js";
-import type { NotificationAction, NotificationChannel } from "../../src/notifications/types.js";
-import * as schema from "../../src/storage/schema.js";
-import type { Storage } from "../../src/storage/index.js";
+import type { KingletAuth } from "../../src/auth/auth.ts";
+import { createApiKey } from "../../src/auth/apikeys.ts";
+import type { ApiKey } from "../../src/auth/apikeys.ts";
+import { uuidv7 } from "../../src/auth/ids.ts";
+import { scopesForType } from "../../src/auth/roles.ts";
+import type { AnyKeyScope, KeyType, Role } from "../../src/auth/roles.ts";
+import { createMonitorFromRaw } from "../../src/monitors.ts";
+import type { Monitor, MonitorKind } from "../../src/monitors.ts";
+import type { ChannelType } from "../../src/notify.ts";
+import { getChannelRecord } from "../../src/notifications/store.ts";
+import { DEFAULT_NOTIFICATION_ACTIONS } from "../../src/notifications/types.ts";
+import type { NotificationAction, NotificationChannel } from "../../src/notifications/types.ts";
+import * as schema from "../../src/storage/schema.ts";
+import type { Storage } from "../../src/storage/index.ts";
 
 /**
  * Deterministic fixtures for integration tests. Users go through Better Auth

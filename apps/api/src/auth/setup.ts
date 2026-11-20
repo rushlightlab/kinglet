@@ -1,12 +1,12 @@
 import { count, eq } from "drizzle-orm";
 import fs from "node:fs";
 import path from "node:path";
-import type { Config } from "../env.js";
-import type { Storage } from "../storage/index.js";
-import * as schema from "../storage/schema.js";
-import type { KingletAuth } from "./auth.js";
-import { uuidv7 } from "./ids.js";
-import { generatePassword } from "./tokens.js";
+import type { Config } from "../env.ts";
+import type { Storage } from "../storage/index.ts";
+import * as schema from "../storage/schema.ts";
+import type { KingletAuth } from "./auth.ts";
+import { uuidv7 } from "./ids.ts";
+import { generatePassword } from "./tokens.ts";
 
 /**
  * Boot-time setup: the default project and the bootstrap administrator.

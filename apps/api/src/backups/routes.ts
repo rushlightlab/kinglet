@@ -1,17 +1,17 @@
 import type { Context } from "hono";
 import type { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { isUuid } from "../auth/ids.js";
-import { can, getAuth, requirePermission, requireUser } from "../auth/middleware.js";
-import type { AppEnv } from "../auth/middleware.js";
-import type { Config } from "../env.js";
-import { isBoolean, isFiniteNumber, isJsonObject, isString } from "../json.js";
-import type { JsonObject } from "../json.js";
-import type { Storage } from "../storage/index.js";
-import type { BackupEngine } from "./engine.js";
-import { describeBackupError } from "./s3.js";
-import { BackupError } from "./types.js";
-import type { BackupSnapshot } from "./types.js";
+import { isUuid } from "../auth/ids.ts";
+import { can, getAuth, requirePermission, requireUser } from "../auth/middleware.ts";
+import type { AppEnv } from "../auth/middleware.ts";
+import type { Config } from "../env.ts";
+import { isBoolean, isFiniteNumber, isJsonObject, isString } from "../json.ts";
+import type { JsonObject } from "../json.ts";
+import type { Storage } from "../storage/index.ts";
+import type { BackupEngine } from "./engine.ts";
+import { describeBackupError } from "./s3.ts";
+import { BackupError } from "./types.ts";
+import type { BackupSnapshot } from "./types.ts";
 
 /**
  * Admin-only snapshot routes. All responses are DTOs: credentials and bucket

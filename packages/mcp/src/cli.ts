@@ -4,9 +4,9 @@
  * frames; diagnostics go to stderr only.
  */
 
-import { KingletClient } from "./client.js";
-import { ConfigError, loadConfig } from "./config.js";
-import { startServer } from "./server.js";
+import { KingletClient } from "./client.ts";
+import { ConfigError, loadConfig } from "./config.ts";
+import { startServer } from "./server.ts";
 
 async function main(): Promise<void> {
   const config = loadConfig();

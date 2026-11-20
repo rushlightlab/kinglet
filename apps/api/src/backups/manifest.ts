@@ -1,8 +1,8 @@
-import { isUuid } from "../auth/ids.js";
-import { isFiniteNumber, isJsonObject, isString } from "../json.js";
-import type { JsonObject } from "../json.js";
-import { relativeObjectKey } from "./s3.js";
-import type { BackupCounts, BackupEncryption, BackupManifest } from "./types.js";
+import { isUuid } from "../auth/ids.ts";
+import { isFiniteNumber, isJsonObject, isString } from "../json.ts";
+import type { JsonObject } from "../json.ts";
+import { relativeObjectKey } from "./s3.ts";
+import type { BackupCounts, BackupEncryption, BackupManifest } from "./types.ts";
 
 /**
  * Manifest serialization and parsing. A manifest is the bucket's source of

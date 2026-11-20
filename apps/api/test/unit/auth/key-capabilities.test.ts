@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { canCapability, keyCan } from "../../../src/auth/key-capabilities.js";
-import type { AuthInfo } from "../../../src/auth/middleware.js";
-import type { AnyKeyScope, Permission, Role } from "../../../src/auth/roles.js";
+import { canCapability, keyCan } from "../../../src/auth/key-capabilities.ts";
+import type { AuthInfo } from "../../../src/auth/middleware.ts";
+import type { AnyKeyScope, Permission, Role } from "../../../src/auth/roles.ts";
 
 function apiKeyAuth(scopes: AnyKeyScope[]): AuthInfo {
   return {

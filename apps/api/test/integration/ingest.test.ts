@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { JsonObject, JsonValue } from "../../src/json.js";
+import type { JsonObject, JsonValue } from "../../src/json.ts";
 import {
   arrayAt,
   errorOf,
@@ -8,12 +8,12 @@ import {
   numberAt,
   objectAt,
   stringAt,
-} from "../helpers/body.js";
-import { createTestHarness } from "../helpers/harness.js";
-import type { TestHarness } from "../helpers/harness.js";
-import { request } from "../helpers/request.js";
-import { seedApiKey, seedProject, seedTestData } from "../helpers/seed.js";
-import type { SeededTestData } from "../helpers/seed.js";
+} from "../helpers/body.ts";
+import { createTestHarness } from "../helpers/harness.ts";
+import type { TestHarness } from "../helpers/harness.ts";
+import { request } from "../helpers/request.ts";
+import { seedApiKey, seedProject, seedTestData } from "../helpers/seed.ts";
+import type { SeededTestData } from "../helpers/seed.ts";
 
 let harness: TestHarness | null = null;
 let data: SeededTestData | null = null;

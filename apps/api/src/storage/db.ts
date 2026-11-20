@@ -6,8 +6,8 @@ import { migrate } from "drizzle-orm/libsql/migrator";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { uuidv7 } from "../auth/ids.js";
-import * as schema from "./schema.js";
+import { uuidv7 } from "../auth/ids.ts";
+import * as schema from "./schema.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

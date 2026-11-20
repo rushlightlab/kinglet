@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isUuid, uuidv7 } from "../../src/auth/ids.js";
+import { isUuid, uuidv7 } from "../../src/auth/ids.ts";
 
 describe("uuidv7", () => {
   it("produces a version 7 UUID with the RFC 4122 variant", () => {

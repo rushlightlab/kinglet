@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PASSWORD_MIN_LENGTH, passwordProblem } from "../../../src/auth/password.js";
+import { PASSWORD_MIN_LENGTH, passwordProblem } from "../../../src/auth/password.ts";
 import {
   isKeyScope,
   isKeyType,
@@ -13,7 +13,7 @@ import {
   ROLE_PERMISSIONS,
   scopesForType,
   validateKeyScopes,
-} from "../../../src/auth/roles.js";
+} from "../../../src/auth/roles.ts";
 
 describe("roles", () => {
   it("recognizes exactly the three built-in roles", () => {

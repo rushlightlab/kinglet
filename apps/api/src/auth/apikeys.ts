@@ -1,10 +1,10 @@
 import { and, eq, inArray } from "drizzle-orm";
-import type { Storage } from "../storage/index.js";
-import * as schema from "../storage/schema.js";
-import type { AnyKeyScope, KeyType } from "./roles.js";
-import { isKeyType, validateKeyScopes } from "./roles.js";
-import { uuidv7 } from "./ids.js";
-import { randomToken, sha256hex } from "./tokens.js";
+import type { Storage } from "../storage/index.ts";
+import * as schema from "../storage/schema.ts";
+import type { AnyKeyScope, KeyType } from "./roles.ts";
+import { isKeyType, validateKeyScopes } from "./roles.ts";
+import { uuidv7 } from "./ids.ts";
+import { randomToken, sha256hex } from "./tokens.ts";
 
 /** Kinglet API keys: kl_… — machine credentials scoped per project. */
 export const KEY_PREFIX = "kl_";

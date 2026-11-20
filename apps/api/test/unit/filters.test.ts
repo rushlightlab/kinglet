@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { matchesEvent, parseFilters } from "../../src/filters.js";
-import type { ParsedFilters } from "../../src/filters.js";
+import { matchesEvent, parseFilters } from "../../src/filters.ts";
+import type { ParsedFilters } from "../../src/filters.ts";
 
 function emptyFilters(): ParsedFilters {
   return {

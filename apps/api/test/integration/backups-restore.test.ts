@@ -1,31 +1,31 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { uuidv7 } from "../../src/auth/ids.js";
-import { MAX_MANIFEST_BYTES, serializeManifest } from "../../src/backups/manifest.js";
-import { BackupError } from "../../src/backups/types.js";
-import type { BackupManifest } from "../../src/backups/types.js";
-import type { BackupConfig, Config } from "../../src/env.js";
-import { finalizePendingRestore } from "../../src/restore/boot.js";
+import { uuidv7 } from "../../src/auth/ids.ts";
+import { MAX_MANIFEST_BYTES, serializeManifest } from "../../src/backups/manifest.ts";
+import { BackupError } from "../../src/backups/types.ts";
+import type { BackupManifest } from "../../src/backups/types.ts";
+import type { BackupConfig, Config } from "../../src/env.ts";
+import { finalizePendingRestore } from "../../src/restore/boot.ts";
 import {
   readRestoreMarker,
   RESTORE_MARKER_FORMAT,
   restorePaths,
   stagedDatabasePath,
   writeRestoreMarker,
-} from "../../src/restore/marker.js";
-import { endMaintenance, maintenanceState } from "../../src/restore/state.js";
-import { stageLatestRestore, stageRestore } from "../../src/restore/stage.js";
-import { createStorage } from "../../src/storage/index.js";
-import { SCHEMA_VERSION } from "../../src/storage/schema.js";
-import { InMemoryBackupStore } from "../helpers/backup-store.js";
-import { jsonBody } from "../helpers/body.js";
-import { makeTestConfig } from "../helpers/config.js";
-import { request } from "../helpers/request.js";
-import { createTestSession } from "../helpers/session.js";
-import { createSnapshotFixture, manifestFor, seedSnapshot } from "../helpers/snapshot.js";
-import { createTempDatabase } from "../helpers/temp.js";
-import type { TempDatabase } from "../helpers/temp.js";
+} from "../../src/restore/marker.ts";
+import { endMaintenance, maintenanceState } from "../../src/restore/state.ts";
+import { stageLatestRestore, stageRestore } from "../../src/restore/stage.ts";
+import { createStorage } from "../../src/storage/index.ts";
+import { SCHEMA_VERSION } from "../../src/storage/schema.ts";
+import { InMemoryBackupStore } from "../helpers/backup-store.ts";
+import { jsonBody } from "../helpers/body.ts";
+import { makeTestConfig } from "../helpers/config.ts";
+import { request } from "../helpers/request.ts";
+import { createTestSession } from "../helpers/session.ts";
+import { createSnapshotFixture, manifestFor, seedSnapshot } from "../helpers/snapshot.ts";
+import { createTempDatabase } from "../helpers/temp.ts";
+import type { TempDatabase } from "../helpers/temp.ts";
 
 const SIGNING_KEY = "task-5-manifest-signing-key-not-a-real-secret";
 const PASSPHRASE = "task-5-backup-passphrase";

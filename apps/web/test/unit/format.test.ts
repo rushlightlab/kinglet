@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  formatBytes,
-  formatCoverage,
-  maskWebhookUrl,
-  redactWebhookUrls,
-} from "../../src/format.js";
+import { formatBytes, formatCoverage, maskWebhookUrl, redactWebhookUrls } from "../../src/format";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;

@@ -3,7 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { Context } from "hono";
-import type { Config } from "./env.js";
+import type { Config } from "./env.ts";
 import {
   createApiKey,
   deleteApiKey,
@@ -14,8 +14,8 @@ import {
   rotateApiKey,
   updateApiKeyScopes,
   verifyApiKey,
-} from "./auth/apikeys.js";
-import type { KingletAuth } from "./auth/auth.js";
+} from "./auth/apikeys.ts";
+import type { KingletAuth } from "./auth/auth.ts";
 import {
   can,
   canAccessProject,
@@ -26,24 +26,24 @@ import {
   requireUser,
   resolveProjectId,
   userAuth,
-} from "./auth/middleware.js";
-import type { AppEnv, AuthInfo } from "./auth/middleware.js";
+} from "./auth/middleware.ts";
+import type { AppEnv, AuthInfo } from "./auth/middleware.ts";
 import {
   isKeyType,
   isRole,
   permissionsForRole,
   scopesForType,
   validateKeyScopes,
-} from "./auth/roles.js";
-import type { AnyKeyScope, KeyType, Role } from "./auth/roles.js";
-import { isUuid, uuidv7 } from "./auth/ids.js";
-import { canCapability, keyCan } from "./auth/key-capabilities.js";
-import type { KeyCapability } from "./auth/key-capabilities.js";
-import type { BackupStatus } from "./backups/types.js";
-import { deleteArchivedProjectObjects } from "./archive/cleanup.js";
-import { ArchiveError } from "./archive/types.js";
-import { buildKeyContext } from "./mcp/context.js";
-import { APP_VERSION } from "./version.js";
+} from "./auth/roles.ts";
+import type { AnyKeyScope, KeyType, Role } from "./auth/roles.ts";
+import { isUuid, uuidv7 } from "./auth/ids.ts";
+import { canCapability, keyCan } from "./auth/key-capabilities.ts";
+import type { KeyCapability } from "./auth/key-capabilities.ts";
+import type { BackupStatus } from "./backups/types.ts";
+import { deleteArchivedProjectObjects } from "./archive/cleanup.ts";
+import { ArchiveError } from "./archive/types.ts";
+import { buildKeyContext } from "./mcp/context.ts";
+import { APP_VERSION } from "./version.ts";
 import {
   countAdmins,
   createManagedUser,
@@ -54,17 +54,17 @@ import {
   setManagedUserDisabled,
   setUserRole,
   updateUserName,
-} from "./auth/user-admin.js";
-import { publishEvents, subscribeEvents } from "./bus.js";
-import { passwordProblem } from "./auth/password.js";
-import { buildWhere, matchesEvent, parseFilters } from "./filters.js";
-import type { Normalized } from "./ingest.js";
-import { normalizeEvent } from "./ingest.js";
-import { isBoolean, isJsonObject, isString } from "./json.js";
-import type { JsonObject, JsonValue } from "./json.js";
-import { validateQueryString } from "./query-validation.js";
-import { eventSizeBytes } from "./storage/events.js";
-import type { Monitor, MonitorEngine } from "./monitors.js";
+} from "./auth/user-admin.ts";
+import { publishEvents, subscribeEvents } from "./bus.ts";
+import { passwordProblem } from "./auth/password.ts";
+import { buildWhere, matchesEvent, parseFilters } from "./filters.ts";
+import type { Normalized } from "./ingest.ts";
+import { normalizeEvent } from "./ingest.ts";
+import { isBoolean, isJsonObject, isString } from "./json.ts";
+import type { JsonObject, JsonValue } from "./json.ts";
+import { validateQueryString } from "./query-validation.ts";
+import { eventSizeBytes } from "./storage/events.ts";
+import type { Monitor, MonitorEngine } from "./monitors.ts";
 import {
   createMonitorFromRaw,
   deleteMonitor,
@@ -73,14 +73,14 @@ import {
   listMonitors,
   resolveMonitorNotifyTargets,
   updateMonitorFromRaw,
-} from "./monitors.js";
-import { sendNotice, validateWebhookUrl } from "./notify.js";
-import type { AlertNotice } from "./notify.js";
-import { systemStatus } from "./status.js";
-import * as schema from "./storage/schema.js";
-import type { Storage } from "./storage/index.js";
-import { localDbBytes, invalidateDbSizeCache } from "./storage/db-size.js";
-import { toClientEvent } from "./types.js";
+} from "./monitors.ts";
+import { sendNotice, validateWebhookUrl } from "./notify.ts";
+import type { AlertNotice } from "./notify.ts";
+import { systemStatus } from "./status.ts";
+import * as schema from "./storage/schema.ts";
+import type { Storage } from "./storage/index.ts";
+import { localDbBytes, invalidateDbSizeCache } from "./storage/db-size.ts";
+import { toClientEvent } from "./types.ts";
 
 const MAX_BATCH = 10000;
 const MAX_STREAMS = 200;

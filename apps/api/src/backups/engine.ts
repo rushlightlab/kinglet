@@ -7,17 +7,17 @@ import { createHash } from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createZstdCompress } from "node:zlib";
-import { uuidv7 } from "../auth/ids.js";
-import type { Config } from "../env.js";
-import { isFiniteNumber, isString } from "../json.js";
-import { createCronScheduler, describeCron, validateCron } from "../schedule.js";
-import type { CronScheduler, CronValidation } from "../schedule.js";
-import { publishSystemEvent } from "../system-events.js";
-import type { BackupPhase, BackupTrigger } from "../system-events.js";
-import { SCHEMA_VERSION } from "../storage/schema.js";
-import * as schema from "../storage/schema.js";
-import type { Storage } from "../storage/index.js";
-import { APP_VERSION } from "../version.js";
+import { uuidv7 } from "../auth/ids.ts";
+import type { Config } from "../env.ts";
+import { isFiniteNumber, isString } from "../json.ts";
+import { createCronScheduler, describeCron, validateCron } from "../schedule.ts";
+import type { CronScheduler, CronValidation } from "../schedule.ts";
+import { publishSystemEvent } from "../system-events.ts";
+import type { BackupPhase, BackupTrigger } from "../system-events.ts";
+import { SCHEMA_VERSION } from "../storage/schema.ts";
+import * as schema from "../storage/schema.ts";
+import type { Storage } from "../storage/index.ts";
+import { APP_VERSION } from "../version.ts";
 import {
   buildManifest,
   countsToJson,
@@ -25,9 +25,9 @@ import {
   parseManifest,
   serializeManifest,
   MAX_MANIFEST_BYTES,
-} from "./manifest.js";
-import { BackupStore, describeBackupError } from "./s3.js";
-import { BackupError } from "./types.js";
+} from "./manifest.ts";
+import { BackupStore, describeBackupError } from "./s3.ts";
+import { BackupError } from "./types.ts";
 import type {
   BackupCounts,
   BackupDownload,
@@ -37,11 +37,11 @@ import type {
   BackupSnapshotState,
   BackupSnapshotTrigger,
   BackupStatus,
-} from "./types.js";
+} from "./types.ts";
 
-export type { BackupSettings, BackupSnapshot, BackupStatus } from "./types.js";
+export type { BackupSettings, BackupSnapshot, BackupStatus } from "./types.ts";
 
-export { BackupError } from "./types.js";
+export { BackupError } from "./types.ts";
 
 /**
  * Backup engine: a single-flight snapshot pipeline plus a cron scheduler and a

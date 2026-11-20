@@ -1,15 +1,15 @@
 import { asc, eq } from "drizzle-orm";
-import { isUuid } from "../auth/ids.js";
-import { describeCron, isValidTimezone, validateCron } from "../schedule.js";
-import type { Storage } from "../storage/index.js";
-import * as schema from "../storage/schema.js";
-import { ArchiveError } from "./types.js";
+import { isUuid } from "../auth/ids.ts";
+import { describeCron, isValidTimezone, validateCron } from "../schedule.ts";
+import type { Storage } from "../storage/index.ts";
+import * as schema from "../storage/schema.ts";
+import { ArchiveError } from "./types.ts";
 import type {
   ArchiveProjectSetting,
   ArchiveProjectToggle,
   ArchiveSettings,
   ArchiveSettingsUpdate,
-} from "./types.js";
+} from "./types.ts";
 
 /**
  * Archive settings live in one singleton row (`archive_settings.id = 1`) plus

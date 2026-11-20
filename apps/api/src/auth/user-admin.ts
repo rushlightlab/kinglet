@@ -1,11 +1,11 @@
 import { asc, eq } from "drizzle-orm";
-import type { Storage } from "../storage/index.js";
-import * as schema from "../storage/schema.js";
-import type { KingletAuth } from "./auth.js";
-import { passwordProblem } from "./password.js";
-import type { Role } from "./roles.js";
-import { isRole } from "./roles.js";
-import { generatePassword } from "./tokens.js";
+import type { Storage } from "../storage/index.ts";
+import * as schema from "../storage/schema.ts";
+import type { KingletAuth } from "./auth.ts";
+import { passwordProblem } from "./password.ts";
+import type { Role } from "./roles.ts";
+import { isRole } from "./roles.ts";
+import { generatePassword } from "./tokens.ts";
 
 /**
  * Admin user management, backed by Better Auth (password hashing, accounts)

@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { BackupManifest } from "./types.js";
+import type { BackupManifest } from "./types.ts";
 
 /**
  * Manifest authentication. The manifest describes the snapshot; without a MAC

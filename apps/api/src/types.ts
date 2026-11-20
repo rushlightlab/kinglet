@@ -1,5 +1,5 @@
-import { isJsonObject } from "./json.js";
-import type { JsonObject } from "./json.js";
+import { isJsonObject } from "./json.ts";
+import type { JsonObject } from "./json.ts";
 
 export const LEVEL_NAMES = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
 

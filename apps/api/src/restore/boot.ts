@@ -1,19 +1,19 @@
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
-import { describeBackupError } from "../backups/s3.js";
-import type { Config } from "../env.js";
-import { notifyAction } from "../notifications/engine.js";
-import type { Storage } from "../storage/index.js";
-import * as schema from "../storage/schema.js";
-import { SCHEMA_VERSION } from "../storage/schema.js";
+import { describeBackupError } from "../backups/s3.ts";
+import type { Config } from "../env.ts";
+import { notifyAction } from "../notifications/engine.ts";
+import type { Storage } from "../storage/index.ts";
+import * as schema from "../storage/schema.ts";
+import { SCHEMA_VERSION } from "../storage/schema.ts";
 import {
   readRestoreMarker,
   restorePaths,
   stagedDatabasePath,
   writeRestoreMarker,
-} from "./marker.js";
-import type { RestoreMarker } from "./marker.js";
+} from "./marker.ts";
+import type { RestoreMarker } from "./marker.ts";
 import {
   databaseSidecarPaths,
   fileExists,
@@ -22,8 +22,8 @@ import {
   localDatabasePath,
   moveFileOver,
   removeFile,
-} from "./util.js";
-import type { DatabaseCheck, DatabaseSidecars } from "./util.js";
+} from "./util.ts";
+import type { DatabaseCheck, DatabaseSidecars } from "./util.ts";
 
 /**
  * Boot-time restore application.

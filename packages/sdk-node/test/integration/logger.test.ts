@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import type { IncomingHttpHeaders, Server } from "node:http";
 import { describe, expect, it } from "vitest";
-import { createLogger } from "../../src/index.js";
+import { createLogger } from "../../src/index.ts";
 
 const TEST_TOKEN = "kl_sdk_integration_key_not_a_real_secret";
 

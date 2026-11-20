@@ -1,9 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { AlertInfo, ChannelSummary, KingletClient } from "../client.js";
-import { DEFAULT_ROWS, MAX_ROWS } from "../client.js";
-import type { CappedPayload } from "./result.js";
-import { jsonResult, runTool } from "./result.js";
+import type { AlertInfo, ChannelSummary, KingletClient } from "../client.ts";
+import { DEFAULT_ROWS, MAX_ROWS } from "../client.ts";
+import type { CappedPayload } from "./result.ts";
+import { jsonResult, runTool } from "./result.ts";
 
 const readOnly = {
   readOnlyHint: true,

@@ -1,13 +1,13 @@
 import { and, eq } from "drizzle-orm";
 import type { Context, MiddlewareHandler } from "hono";
-import type { Storage } from "../storage/index.js";
-import * as schema from "../storage/schema.js";
-import { verifyApiKey } from "./apikeys.js";
-import type { KingletAuth } from "./auth.js";
-import type { AnyKeyScope, KeyType, Permission, Role } from "./roles.js";
-import { isRole, permissionsForRole } from "./roles.js";
-import { isUuid } from "./ids.js";
-import { allowMcpRequest } from "./mcp-limit.js";
+import type { Storage } from "../storage/index.ts";
+import * as schema from "../storage/schema.ts";
+import { verifyApiKey } from "./apikeys.ts";
+import type { KingletAuth } from "./auth.ts";
+import type { AnyKeyScope, KeyType, Permission, Role } from "./roles.ts";
+import { isRole, permissionsForRole } from "./roles.ts";
+import { isUuid } from "./ids.ts";
+import { allowMcpRequest } from "./mcp-limit.ts";
 
 export type AuthInfo =
   | {
