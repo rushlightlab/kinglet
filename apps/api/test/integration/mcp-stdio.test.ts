@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { uuidv7 } from "../../src/auth/ids.ts";
-import { isJsonObject, isString } from "../../src/json.ts";
+import { isFiniteNumber, isJsonObject, isString } from "../../src/json.ts";
 import type { JsonObject, JsonValue } from "../../src/json.ts";
 import * as schema from "../../src/storage/schema.ts";
 import { startLoopbackApp } from "../helpers/loopback.ts";
@@ -13,7 +13,7 @@ import type { LoopbackAppServer } from "../helpers/loopback.ts";
 import { McpStdioClient, parseToolJson, toolFailed, toolText } from "../helpers/mcp-stdio.ts";
 import { createTestSession } from "../helpers/session.ts";
 import type { TestSession } from "../helpers/session.ts";
-import { seedApiKey, seedMonitor, seedNotificationChannel } from "../helpers/seed.ts";
+import { seedApiKey, seedMonitor, seedNotificationChannel, seedProject } from "../helpers/seed.ts";
 
 const CLI_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -30,11 +30,13 @@ interface McpFixture {
   countClient: McpStdioClient;
   alertClient: McpStdioClient;
   eventClient: McpStdioClient;
+  bulkClient: McpStdioClient;
   cwd: string;
   writeKey: string;
   countKey: string;
   alertKey: string;
   eventKey: string;
+  bulkKey: string;
   alertId: string;
   resolvedAlertId: string;
   betaAlertId: string;
@@ -61,6 +63,7 @@ beforeAll(async () => {
   let countClient: McpStdioClient | null = null;
   let alertClient: McpStdioClient | null = null;
   let eventClient: McpStdioClient | null = null;
+  let bulkClient: McpStdioClient | null = null;
   let cwd: string | null = null;
 
   try {
@@ -97,6 +100,30 @@ beforeAll(async () => {
       keyType: "mcp",
       scopes: ["logs.read"],
     });
+
+    const bulk = await seedProject(storage, { name: "Bulk", slug: "bulk" });
+
+    const bulkKey = await seedApiKey(storage, {
+      projectId: bulk.id,
+      name: "mcp-contract-bulk",
+      keyType: "mcp",
+      scopes: ["logs.read"],
+    });
+
+    // Large quoted payloads inflate the JSON far beyond the stored message
+    // size once the MCP result is serialized, forcing the 256 KiB trim.
+    const bulkNow = Date.now();
+
+    const bulkEvents = Array.from({ length: 40 }, (_, index) => ({
+      ts: bulkNow - (40 - index) * 1_000,
+      level: 2,
+      service: "bulk",
+      env: "test",
+      message: `bulk-${String(index).padStart(2, "0")}-${'"'.repeat(8_000)}`,
+      fields: null,
+    }));
+
+    await storage.insertEvents(bulk.id, bulkEvents, null);
 
     const alphaEvents = await storage.insertEvents(
       alpha.id,
@@ -276,6 +303,14 @@ beforeAll(async () => {
     });
     await eventClient.initialize();
 
+    bulkClient = await McpStdioClient.start({
+      url: server.url,
+      key: bulkKey.plaintext,
+      cwd,
+      cliPath: CLI_PATH,
+    });
+    await bulkClient.initialize();
+
     const newestEvent = alphaEvents[0];
     const middleEvent = alphaEvents[1];
     const oldestEvent = alphaEvents[3];
@@ -292,11 +327,13 @@ beforeAll(async () => {
       countClient,
       alertClient,
       eventClient,
+      bulkClient,
       cwd,
       writeKey: writeKey.plaintext,
       countKey: countKey.plaintext,
       alertKey: alertKey.plaintext,
       eventKey: eventKey.plaintext,
+      bulkKey: bulkKey.plaintext,
       alertId,
       resolvedAlertId,
       betaAlertId,
@@ -309,6 +346,7 @@ beforeAll(async () => {
     };
   } catch (err) {
     const cleanupSteps = [
+      async () => bulkClient?.close(),
       async () => eventClient?.close(),
       async () => alertClient?.close(),
       async () => countClient?.close(),
@@ -352,6 +390,8 @@ afterAll(async () => {
     expect(closing.alertClient.terminated).toBe(true);
     await closing.eventClient.close();
     expect(closing.eventClient.terminated).toBe(true);
+    await closing.bulkClient.close();
+    expect(closing.bulkClient.terminated).toBe(true);
   } finally {
     try {
       await closing.server.close();
@@ -425,6 +465,14 @@ function eventMessages(value: JsonValue | undefined): string[] {
 
     return String(entry.message);
   });
+}
+
+function bulkIndex(message: string): number {
+  const match = /^bulk-(\d{2})-/.exec(message);
+
+  if (!match?.[1]) throw new Error(`unexpected bulk message: ${message.slice(0, 20)}`);
+
+  return Number(match[1]);
 }
 
 describe("MCP stdio contract", () => {
@@ -657,6 +705,64 @@ describe("MCP stdio contract", () => {
       expect(toolFailed(invalid)).toBe(true);
       expect(toolText(invalid)).toContain("Input validation error");
     }
+  });
+
+  it("preserves the cursor when a projected search is trimmed", async () => {
+    const test = current();
+    const client = test.bulkClient;
+
+    const first = await client.callTool("search_events", {
+      q: "bulk",
+      limit: 40,
+      fields: ["message"],
+    });
+
+    const firstBody = parseToolJson(toolText(first));
+
+    expect(toolFailed(first)).toBe(false);
+
+    if (firstBody === null) throw new Error("search_events did not return an object");
+
+    expect(firstBody.truncated).toBe(true);
+
+    const cursor = firstBody.nextCursor;
+
+    if (!isFiniteNumber(cursor)) throw new Error("trimmed search did not return a cursor");
+
+    if (!Array.isArray(firstBody.events)) throw new Error("search_events did not return events");
+
+    const firstIndexes = eventMessages(firstBody.events).map(bulkIndex);
+
+    expect(firstIndexes.length).toBeGreaterThan(0);
+    expect(firstIndexes.length).toBeLessThan(40);
+    expect(firstIndexes).toEqual(
+      Array.from({ length: firstIndexes.length }, (_, index) => 39 - index),
+    );
+
+    const second = await client.callTool("search_events", {
+      q: "bulk",
+      limit: 40,
+      fields: ["message"],
+      cursor,
+    });
+
+    const secondBody = parseToolJson(toolText(second));
+
+    expect(toolFailed(second)).toBe(false);
+
+    if (secondBody === null) throw new Error("search_events did not return an object");
+
+    if (!Array.isArray(secondBody.events)) throw new Error("search_events did not return events");
+
+    const secondIndexes = eventMessages(secondBody.events).map(bulkIndex);
+    const expectedSecondStart = 39 - firstIndexes.length;
+
+    expect(secondIndexes[0]).toBe(expectedSecondStart);
+    expect(secondIndexes).toEqual(
+      Array.from({ length: secondIndexes.length }, (_, index) => expectedSecondStart - index),
+    );
+    expect(firstIndexes.length + secondIndexes.length).toBe(40);
+    expect(new Set([...firstIndexes, ...secondIndexes]).size).toBe(40);
   });
 
   it("counts and groups only the MCP key's project", async () => {
@@ -994,6 +1100,7 @@ describe("MCP stdio contract", () => {
       test.countKey,
       test.alertKey,
       test.eventKey,
+      test.bulkKey,
       test.betaAlertId,
       test.betaMonitorId,
       "beta alert must stay private",
@@ -1006,6 +1113,7 @@ describe("MCP stdio contract", () => {
     expect(test.countClient.stderrLines.join("\n")).not.toContain(test.countKey);
     expect(test.alertClient.stderrLines.join("\n")).not.toContain(test.alertKey);
     expect(test.eventClient.stderrLines.join("\n")).not.toContain(test.eventKey);
+    expect(test.bulkClient.stderrLines.join("\n")).not.toContain(test.bulkKey);
 
     const alertList = parseToolJson(alerts);
     const alertsArray = alertList?.alerts;
@@ -1053,6 +1161,7 @@ describe("MCP stdio contract", () => {
     expect(test.client.stderrLines.join("\n")).not.toContain(test.countKey);
     expect(test.client.stderrLines.join("\n")).not.toContain(test.alertKey);
     expect(test.client.stderrLines.join("\n")).not.toContain(test.eventKey);
+    expect(test.client.stderrLines.join("\n")).not.toContain(test.bulkKey);
     expect(test.countClient.stderrLines.join("\n")).not.toContain(test.writeKey);
     expect(test.countClient.stderrLines.join("\n")).not.toContain(test.countKey);
     expect(test.countClient.stderrLines.join("\n")).not.toContain(test.alertKey);
@@ -1060,6 +1169,8 @@ describe("MCP stdio contract", () => {
     expect(test.alertClient.stderrLines.join("\n")).not.toContain(test.writeKey);
     expect(test.eventClient.stderrLines.join("\n")).not.toContain(test.eventKey);
     expect(test.eventClient.stderrLines.join("\n")).not.toContain(test.writeKey);
+    expect(test.bulkClient.stderrLines.join("\n")).not.toContain(test.bulkKey);
+    expect(test.bulkClient.stderrLines.join("\n")).not.toContain(test.writeKey);
     expect(fs.readdirSync(test.cwd)).toEqual([]);
   });
 });

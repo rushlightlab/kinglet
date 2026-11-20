@@ -211,7 +211,8 @@ Truncated responses set `truncated: true` and `search_events` returns a
 `service`, `env`, `message`, `fields`; max 8, unique) to return only those keys.
 Projection never changes `nextCursor` or the underlying query.
 `get_event_context` takes `before`/`after` (0–20, default 5) and keeps each
-neighbour list chronological.
+neighbour list chronological. If the payload exceeds the 256 KiB cap, retry with
+smaller `before`/`after`.
 `list_alerts` time filters are optional: with `from`/`to` omitted, alert history
 remains all-time and is capped by `limit`. Capabilities are per-key, so a
 `monitors.read`-only key gets the same hidden summary/sample projection as the

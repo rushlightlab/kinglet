@@ -233,9 +233,16 @@ describe("GET /v1/events/:uid/context ordering", () => {
       { bearer: ctx().key },
     );
 
+    const afterFirst = await getContext(
+      ctx().equalFirstUid,
+      { before: 0, after: 1 },
+      { bearer: ctx().key },
+    );
+
     expect(messagesOf(before, "before")).toEqual(["ctx-equal-a"]);
     expect(messagesOf(before, "after")).toEqual(["ctx-equal-c"]);
     expect(messagesOf(after, "before")).toEqual(["ctx-equal-b"]);
+    expect(messagesOf(afterFirst, "after")).toEqual(["ctx-equal-b"]);
   });
 
   it("honors zero and clamps before/after to 20", async () => {

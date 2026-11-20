@@ -36,12 +36,13 @@ pnpm test:e2e
 - `apps/api/test/unit/` - pure unit tests for ingest, filters, auth helpers,
   scheduling, archive formats, backups, and storage accounting.
 - `apps/api/test/integration/` - the app seam from `apps/api/src/app.ts` with
-  real Better Auth, real routes, and a temporary SQLite database.
+  real Better Auth, real routes, a temporary SQLite database, and deterministic
+  event-context ordering/caps.
 - `apps/api/test/helpers/` - temp database, test config, app harness, request
   helpers, deterministic seed data, loopback servers, the SSE reader, and the
   MCP stdio client.
-- `packages/mcp/test/unit/` - MCP config, client error-bound, and result-size
-  unit tests.
+- `packages/mcp/test/unit/` - MCP config, client error-bound, result-size,
+  search field-projection, and cursor-preservation unit tests.
 - `packages/sdk-node/test/unit/` and `packages/sdk-node/test/integration/` -
   batching, retry, headers, and no-secret-leak tests with a fake `fetch` or a
   loopback fake server.
