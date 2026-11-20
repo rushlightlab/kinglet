@@ -480,12 +480,10 @@ describe("MCP stdio contract", () => {
     const tools = await current().client.listTools();
     const names = tools.map((tool) => tool.name);
 
-    expect(names).toHaveLength(15);
+    expect(names).toHaveLength(12);
 
     for (const name of [
       "count_events",
-      "create_monitor",
-      "delete_monitor",
       "get_alert",
       "get_context",
       "get_event",
@@ -497,9 +495,12 @@ describe("MCP stdio contract", () => {
       "list_monitors",
       "list_services",
       "search_events",
-      "update_monitor",
     ]) {
       expect(names).toContain(name);
+    }
+
+    for (const name of ["create_monitor", "update_monitor", "delete_monitor"]) {
+      expect(names).not.toContain(name);
     }
 
     expect(tools.every((tool) => (tool.description ?? "").length > 0)).toBe(true);
@@ -544,6 +545,7 @@ describe("MCP stdio contract", () => {
     expect(isJsonObject(capabilities) ? capabilities["logs.read"] : null).toBe(true);
     expect(isJsonObject(capabilities) ? capabilities["logs.write"] : null).toBe(false);
     expect(isJsonObject(capabilities) ? capabilities["monitors.write"] : null).toBe(true);
+    expect(context.monitorWritesEnabled).toBe(false);
   });
 
   it("searches only the MCP key's project", async () => {
@@ -1022,25 +1024,6 @@ describe("MCP stdio contract", () => {
     } finally {
       await noLogsClient?.close();
     }
-  });
-
-  it("returns the monitor-write gate rejection without creating a monitor", async () => {
-    const test = current();
-
-    const created = await test.client.callTool("create_monitor", {
-      name: "gate-probe",
-      kind: "match",
-      query: "level>=error",
-    });
-
-    expect(toolFailed(created)).toBe(true);
-    expect(toolText(created)).toContain("KINGLET_MCP_ALLOW_MONITOR_WRITES=1");
-
-    const listed = await test.client.callTool("list_monitors");
-    const text = toolText(listed);
-
-    expect(text).toContain("leak-monitor");
-    expect(text).not.toContain("gate-probe");
   });
 
   it("never returns channel URLs, delivery errors, or raw monitor errors", async () => {

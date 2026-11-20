@@ -89,7 +89,11 @@ function hasEdits(patch: MonitorInput): boolean {
   );
 }
 
-export function registerMonitorTools(server: McpServer, client: KingletClient): void {
+export function registerMonitorTools(
+  server: McpServer,
+  client: KingletClient,
+  includeWrites = false,
+): void {
   server.registerTool(
     "list_monitors",
     {
@@ -136,90 +140,92 @@ export function registerMonitorTools(server: McpServer, client: KingletClient): 
       }),
   );
 
-  server.registerTool(
-    "create_monitor",
-    {
-      title: "Create monitor",
-      description:
-        "Create a monitor in this project. Requires the monitors.write scope. Attach existing " +
-        "notification channels by id with channelIds — URLs are never accepted. Enabled channels " +
-        "can make the Kinglet server send notifications to external services when the monitor fires. " +
-        "Writes update the monitor's updatedAt, matching the audit level of a human edit.",
-      inputSchema: {
-        name: z.string().min(1).max(128).describe("Monitor name."),
-        kind: z.enum(["match", "count_above", "count_below"]).describe("Monitor kind."),
-        ...monitorDetails,
+  if (includeWrites) {
+    server.registerTool(
+      "create_monitor",
+      {
+        title: "Create monitor",
+        description:
+          "Create a monitor in this project. Requires the monitors.write scope. Attach existing " +
+          "notification channels by id with channelIds — URLs are never accepted. Enabled channels " +
+          "can make the Kinglet server send notifications to external services when the monitor fires. " +
+          "Writes update the monitor's updatedAt, matching the audit level of a human edit.",
+        inputSchema: {
+          name: z.string().min(1).max(128).describe("Monitor name."),
+          kind: z.enum(["match", "count_above", "count_below"]).describe("Monitor kind."),
+          ...monitorDetails,
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: true,
+        },
       },
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: true,
+      (args) =>
+        runTool("create_monitor", async () => {
+          const monitor = await client.createMonitor(args);
+          const payload: MonitorPayload = { monitor };
+
+          return jsonResult(payload);
+        }),
+    );
+
+    server.registerTool(
+      "update_monitor",
+      {
+        title: "Update monitor",
+        description:
+          "Partially update a monitor by id. Only supplied fields change. Requires the " +
+          "monitors.write scope. Attach channels by id with channelIds — URLs are never accepted.",
+        inputSchema: {
+          id: z.string().min(1).max(64).describe("Monitor id."),
+          ...monitorEdits,
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
       },
-    },
-    (args) =>
-      runTool("create_monitor", async () => {
-        const monitor = await client.createMonitor(args);
-        const payload: MonitorPayload = { monitor };
+      (args) =>
+        runTool("update_monitor", async () => {
+          const { id, ...patch } = args;
 
-        return jsonResult(payload);
-      }),
-  );
+          if (!hasEdits(patch))
+            return { result: errorResult("provide at least one field to update") };
 
-  server.registerTool(
-    "update_monitor",
-    {
-      title: "Update monitor",
-      description:
-        "Partially update a monitor by id. Only supplied fields change. Requires the " +
-        "monitors.write scope. Attach channels by id with channelIds — URLs are never accepted.",
-      inputSchema: {
-        id: z.string().min(1).max(64).describe("Monitor id."),
-        ...monitorEdits,
+          const monitor = await client.updateMonitor(id, patch);
+          const payload: MonitorPayload = { monitor };
+
+          return jsonResult(payload);
+        }),
+    );
+
+    server.registerTool(
+      "delete_monitor",
+      {
+        title: "Delete monitor",
+        description:
+          "Delete a monitor and its alert history by id. Destructive and irreversible; the client " +
+          "should ask the user before calling this. Requires the monitors.write scope.",
+        inputSchema: {
+          id: z.string().min(1).max(64).describe("Monitor id."),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
       },
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    (args) =>
-      runTool("update_monitor", async () => {
-        const { id, ...patch } = args;
+      (args) =>
+        runTool("delete_monitor", async () => {
+          await client.deleteMonitor(args.id);
 
-        if (!hasEdits(patch))
-          return { result: errorResult("provide at least one field to update") };
-
-        const monitor = await client.updateMonitor(id, patch);
-        const payload: MonitorPayload = { monitor };
-
-        return jsonResult(payload);
-      }),
-  );
-
-  server.registerTool(
-    "delete_monitor",
-    {
-      title: "Delete monitor",
-      description:
-        "Delete a monitor and its alert history by id. Destructive and irreversible; the client " +
-        "should ask the user before calling this. Requires the monitors.write scope.",
-      inputSchema: {
-        id: z.string().min(1).max(64).describe("Monitor id."),
-      },
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-    },
-    (args) =>
-      runTool("delete_monitor", async () => {
-        await client.deleteMonitor(args.id);
-
-        return jsonResult({ deleted: true, id: args.id });
-      }),
-  );
+          return jsonResult({ deleted: true, id: args.id });
+        }),
+    );
+  }
 }

@@ -36,8 +36,8 @@ pnpm test:e2e
 - `apps/api/test/unit/` - pure unit tests for ingest, filters, auth helpers,
   scheduling, archive formats, backups, and storage accounting.
 - `apps/api/test/integration/` - the app seam from `apps/api/src/app.ts` with
-  real Better Auth, real routes, a temporary SQLite database, and deterministic
-  event-context ordering/caps.
+  real Better Auth, real routes, a temporary SQLite database, deterministic
+  event-context ordering/caps, and conditional MCP tool registries.
 - `apps/api/test/helpers/` - temp database, test config, app harness, request
   helpers, deterministic seed data, loopback servers, the SSE reader, and the
   MCP stdio client.

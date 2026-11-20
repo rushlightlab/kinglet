@@ -35,6 +35,8 @@ export interface KeyContext {
     scopes: string[];
   };
   capabilities: KeyCapabilities;
+  /** Whether this server allows MCP keys to write monitors at all. */
+  monitorWritesEnabled: boolean;
   server: {
     version: string;
     retentionDays: number;
@@ -45,6 +47,7 @@ export async function buildKeyContext(
   storage: Storage,
   auth: AuthInfo,
   retentionDays: number,
+  monitorWritesEnabled: boolean,
 ): Promise<KeyContext | null> {
   if (auth.kind !== "key") return null;
 
@@ -76,6 +79,7 @@ export async function buildKeyContext(
       "monitors.read": keyCan(auth, "monitors.read"),
       "monitors.write": keyCan(auth, "monitors.write"),
     },
+    monitorWritesEnabled,
     server: {
       version: APP_VERSION,
       retentionDays,

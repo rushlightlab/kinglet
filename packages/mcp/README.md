@@ -207,6 +207,9 @@ Truncated responses set `truncated: true` and `search_events` returns a
 | `delete_monitor`    | `monitors.write`  | destructive | Deletes a monitor and its alert history                                   |
 
 `monitors.write` implies `monitors.read`. MCP keys never have `logs.write`.
+Monitor write tools are registered only when the key has `monitors.write` and
+the server sets `KINGLET_MCP_ALLOW_MONITOR_WRITES=1`; hiding a tool is UX only,
+and every write remains API-authorized.
 `search_events` accepts an optional `fields` list (`id`, `uid`, `ts`, `level`,
 `service`, `env`, `message`, `fields`; max 8, unique) to return only those keys.
 Projection never changes `nextCursor` or the underlying query.

@@ -335,7 +335,12 @@ export function registerRoutes(
 
   // Machine-credential context for MCP and SDK clients. Never reads ?project=.
   app.get("/v1/context", async (c) => {
-    const context = await buildKeyContext(storage, getAuth(c), config.retentionDays);
+    const context = await buildKeyContext(
+      storage,
+      getAuth(c),
+      config.retentionDays,
+      config.mcpAllowMonitorWrites,
+    );
 
     if (!context) return c.json({ error: "API key required" }, 403);
 

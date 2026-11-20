@@ -131,7 +131,10 @@ never opens the database.
 
 Create an **MCP key** (`km_…`) in **Settings → Projects → open project → MCP
 keys**. Keys are project-bound and default to `logs.read` + `monitors.read`;
-enable `monitors.write` only if the AI should create or change monitors.
+enable `monitors.write` only if the AI should create or change monitors. The
+monitor write tools are advertised only when the key has `monitors.write` and
+the server sets `KINGLET_MCP_ALLOW_MONITOR_WRITES=1`; hidden tools are still
+enforced by the API.
 
 ```json
 {
@@ -165,54 +168,54 @@ are exempt. MCP keys can read logs (`logs.read`), read monitors and alerts
 (`monitors.read`), and optionally manage monitors (`monitors.write`). They can
 never ingest, manage keys/users/projects, or change backups and settings.
 
-| Route                                         | What it does                                                                    |
-| --------------------------------------------- | ------------------------------------------------------------------------------- |
-| `/api/auth/*`                                 | Better Auth endpoints (sign-in, sign-out, session, password)                    |
-| `GET /v1/me`                                  | Current user + permissions                                                      |
-| `GET/POST /v1/projects`                       | List assigned projects / create one (admin)                                     |
-| `DELETE /v1/projects/:id`                     | Delete a project and all its data (admin)                                       |
-| `GET/POST /v1/users`                          | List / create users (admin)                                                     |
-| `PATCH/DELETE /v1/users/:id`                  | Change role / delete user (admin)                                               |
-| `GET/POST /v1/projects/:id/keys`              | List / create API keys for a project                                            |
-| `DELETE /v1/keys/:id?project=`                | Revoke an API key                                                               |
-| `GET/POST /v1/projects/:id/members`           | List / assign project members (admin)                                           |
-| `DELETE /v1/projects/:id/members/:userId`     | Remove a project member (admin)                                                 |
-| `POST /v1/events`                             | Ingest a batch (NDJSON or JSON, ≤ 10k events, ≤ 8MB)                            |
-| `GET /v1/events`                              | Query. Params: `q` (filter grammar), `from`, `to` (epoch ms), `limit`, `cursor` |
-| `GET /v1/events/:uid`                         | One event by its UUID v7 uid                                                    |
-| `GET /v1/events/:uid/context`                 | Neighbours. Params: `before`, `after` (0–20, default 5)                         |
-| `GET /v1/histogram`                           | Counts per level per bucket. Params: `from`, `to`, `buckets`                    |
-| `GET /v1/services`                            | Your known services and their event counts                                      |
-| `GET /v1/aggregate`                           | Totals for a filter; optional `groupBy=service\|level\|env`, `limit` ≤ 200      |
-| `GET /v1/stream`                              | SSE live tail. Params: `q` (cookie auth; `?key=` for headerless clients)        |
-| `GET/POST /v1/monitors`                       | List monitors / create one                                                      |
-| `PATCH/DELETE /v1/monitors/:id`               | Update / delete a monitor                                                       |
-| `POST /v1/monitors/:id/test`                  | Send a test notification through every channel                                  |
-| `GET /v1/alerts`                              | Alert history. Params: `limit`, `monitorId`, `state`, `from`, `to`              |
-| `GET /v1/alerts/:id`                          | One alert, project-scoped (same masking rules)                                  |
-| `GET /v1/context`                             | Project, key scopes, capabilities, and version for a `kl_`/`km_` key            |
-| `GET /v1/backups/status`                      | Backup setup, last run, next run, and live progress (admin)                     |
-| `GET /v1/backups`                             | Cached snapshots; `?refresh=1` reconciles the bucket (admin)                    |
-| `POST /v1/backups/run`                        | Start a snapshot now (admin)                                                    |
-| `GET/PUT /v1/backups/settings`                | Schedule, timezone, retention (admin)                                           |
-| `GET /v1/backups/schedule/preview`            | Validate a cron expression and preview the next runs (admin)                    |
-| `POST /v1/backups/test-connection`            | Put/get/delete a probe object in the bucket (admin)                             |
-| `GET /v1/backups/:id/download`                | Short-lived presigned download URL (admin)                                      |
-| `POST /v1/backups/:id/restore`                | Stage a restore; apply at next boot (admin)                                     |
-| `DELETE /v1/backups/:id`                      | Delete a snapshot manifest and object (admin)                                   |
-| `GET/POST /v1/notifications/channels`         | List masked channels / create one (admin)                                       |
-| `PATCH/DELETE /v1/notifications/channels/:id` | Edit or delete a channel (admin)                                                |
-| `POST /v1/notifications/channels/:id/test`    | Send a test notification (admin, once/minute)                                   |
-| `GET /v1/notifications/channels/summary`      | Channel names and health for monitor editors; never URLs                        |
-| `GET /v1/notifications/deliveries`            | Recent delivery log, newest first (admin)                                       |
-| `GET/PUT /v1/archive/settings`                | Global archive schedule and failure policy (admin)                              |
-| `PUT /v1/projects/:id/archive`                | Enable or disable archive for one project (admin)                               |
-| `POST /v1/archive/run`                        | Run archive now (admin)                                                         |
-| `GET /v1/archive/parts`                       | Exported archive parts (admin)                                                  |
-| `POST /v1/archive/import`                     | Re-import archived events for a project and date range (admin)                  |
-| `GET /v1/system/events`                       | SSE backup/restore/archive progress (admin, cookie auth)                        |
-| `GET /v1/system/status`                       | Operational diagnostics (admin)                                                 |
-| `GET /healthz`                                | Minimal health check (no auth)                                                  |
+| Route                                         | What it does                                                                     |
+| --------------------------------------------- | -------------------------------------------------------------------------------- |
+| `/api/auth/*`                                 | Better Auth endpoints (sign-in, sign-out, session, password)                     |
+| `GET /v1/me`                                  | Current user + permissions                                                       |
+| `GET/POST /v1/projects`                       | List assigned projects / create one (admin)                                      |
+| `DELETE /v1/projects/:id`                     | Delete a project and all its data (admin)                                        |
+| `GET/POST /v1/users`                          | List / create users (admin)                                                      |
+| `PATCH/DELETE /v1/users/:id`                  | Change role / delete user (admin)                                                |
+| `GET/POST /v1/projects/:id/keys`              | List / create API keys for a project                                             |
+| `DELETE /v1/keys/:id?project=`                | Revoke an API key                                                                |
+| `GET/POST /v1/projects/:id/members`           | List / assign project members (admin)                                            |
+| `DELETE /v1/projects/:id/members/:userId`     | Remove a project member (admin)                                                  |
+| `POST /v1/events`                             | Ingest a batch (NDJSON or JSON, ≤ 10k events, ≤ 8MB)                             |
+| `GET /v1/events`                              | Query. Params: `q` (filter grammar), `from`, `to` (epoch ms), `limit`, `cursor`  |
+| `GET /v1/events/:uid`                         | One event by its UUID v7 uid                                                     |
+| `GET /v1/events/:uid/context`                 | Neighbours. Params: `before`, `after` (0–20, default 5)                          |
+| `GET /v1/histogram`                           | Counts per level per bucket. Params: `from`, `to`, `buckets`                     |
+| `GET /v1/services`                            | Your known services and their event counts                                       |
+| `GET /v1/aggregate`                           | Totals for a filter; optional `groupBy=service\|level\|env`, `limit` ≤ 200       |
+| `GET /v1/stream`                              | SSE live tail. Params: `q` (cookie auth; `?key=` for headerless clients)         |
+| `GET/POST /v1/monitors`                       | List monitors / create one                                                       |
+| `PATCH/DELETE /v1/monitors/:id`               | Update / delete a monitor                                                        |
+| `POST /v1/monitors/:id/test`                  | Send a test notification through every channel                                   |
+| `GET /v1/alerts`                              | Alert history. Params: `limit`, `monitorId`, `state`, `from`, `to`               |
+| `GET /v1/alerts/:id`                          | One alert, project-scoped (same masking rules)                                   |
+| `GET /v1/context`                             | Project, key scopes, capabilities, write gate, and version for a `kl_`/`km_` key |
+| `GET /v1/backups/status`                      | Backup setup, last run, next run, and live progress (admin)                      |
+| `GET /v1/backups`                             | Cached snapshots; `?refresh=1` reconciles the bucket (admin)                     |
+| `POST /v1/backups/run`                        | Start a snapshot now (admin)                                                     |
+| `GET/PUT /v1/backups/settings`                | Schedule, timezone, retention (admin)                                            |
+| `GET /v1/backups/schedule/preview`            | Validate a cron expression and preview the next runs (admin)                     |
+| `POST /v1/backups/test-connection`            | Put/get/delete a probe object in the bucket (admin)                              |
+| `GET /v1/backups/:id/download`                | Short-lived presigned download URL (admin)                                       |
+| `POST /v1/backups/:id/restore`                | Stage a restore; apply at next boot (admin)                                      |
+| `DELETE /v1/backups/:id`                      | Delete a snapshot manifest and object (admin)                                    |
+| `GET/POST /v1/notifications/channels`         | List masked channels / create one (admin)                                        |
+| `PATCH/DELETE /v1/notifications/channels/:id` | Edit or delete a channel (admin)                                                 |
+| `POST /v1/notifications/channels/:id/test`    | Send a test notification (admin, once/minute)                                    |
+| `GET /v1/notifications/channels/summary`      | Channel names and health for monitor editors; never URLs                         |
+| `GET /v1/notifications/deliveries`            | Recent delivery log, newest first (admin)                                        |
+| `GET/PUT /v1/archive/settings`                | Global archive schedule and failure policy (admin)                               |
+| `PUT /v1/projects/:id/archive`                | Enable or disable archive for one project (admin)                                |
+| `POST /v1/archive/run`                        | Run archive now (admin)                                                          |
+| `GET /v1/archive/parts`                       | Exported archive parts (admin)                                                   |
+| `POST /v1/archive/import`                     | Re-import archived events for a project and date range (admin)                   |
+| `GET /v1/system/events`                       | SSE backup/restore/archive progress (admin, cookie auth)                         |
+| `GET /v1/system/status`                       | Operational diagnostics (admin)                                                  |
+| `GET /healthz`                                | Minimal health check (no auth)                                                   |
 
 Ingest is rate-limited to 600 batches/minute per identity. Filters are capped at
 500 characters / 32 terms, `limit` at 1000, `buckets` at 240, alerts at 500, and

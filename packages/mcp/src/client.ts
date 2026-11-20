@@ -50,6 +50,8 @@ export interface KeyContext {
     scopes: string[];
   };
   capabilities: KeyCapabilities;
+  /** Older servers omit this; false keeps the client read-only. */
+  monitorWritesEnabled: boolean;
   server: {
     version: string;
     retentionDays: number;
@@ -324,6 +326,7 @@ const ContextSchema = z.object({
     scopes: z.array(z.string()),
   }),
   capabilities: KeyCapabilitiesSchema,
+  monitorWritesEnabled: z.boolean().default(false),
   server: z.object({
     version: z.string(),
     retentionDays: z.number(),

@@ -168,6 +168,39 @@ describe("KingletClient alerts", () => {
   });
 });
 
+describe("KingletClient context", () => {
+  it("defaults monitorWritesEnabled to false for an older server", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async (): Promise<Response> =>
+          new Response(
+            JSON.stringify({
+              project: { id: "project-id", name: "Project", slug: "project" },
+              key: { id: "key-id", name: "Key", keyType: "mcp", scopes: ["logs.read"] },
+              capabilities: {
+                "logs.read": true,
+                "logs.write": false,
+                "monitors.read": true,
+                "monitors.write": false,
+              },
+              server: { version: "0.2.0", retentionDays: 14 },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+
+    try {
+      const context = await new KingletClient(TEST_CONFIG).getContext();
+
+      expect(context.monitorWritesEnabled).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("KingletClient error text", () => {
   it("bounds a hostile API error body and strips line breaks", async () => {
     const hostile = `first line\nsecond line\r\n${"x".repeat(5_000)}`;

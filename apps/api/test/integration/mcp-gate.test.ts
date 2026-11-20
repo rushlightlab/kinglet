@@ -241,5 +241,21 @@ describe("machine credential boundaries", () => {
     expect(capabilities["logs.write"]).toBe(false);
     expect(capabilities["monitors.read"]).toBe(true);
     expect(capabilities["monitors.write"]).toBe(true);
+    expect(body.monitorWritesEnabled).toBe(true);
+  });
+
+  it("reports the monitor write gate as a boolean without the raw env value", async () => {
+    const { harness, writeKey } = off();
+
+    const response = await request(harness.app, "/v1/context", {
+      bearer: writeKey.plaintext,
+    });
+
+    expect(response.status).toBe(200);
+
+    const body = await jsonBody(response);
+
+    expect(body.monitorWritesEnabled).toBe(false);
+    expect(JSON.stringify(body)).not.toContain("KINGLET_MCP_ALLOW_MONITOR_WRITES");
   });
 });
