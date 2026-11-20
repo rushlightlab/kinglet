@@ -2,12 +2,18 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMonitorFromRaw } from "../../src/monitors.js";
 import { migrateLegacyMonitorChannels } from "../../src/notifications/migrate.js";
-import { DEFAULT_NOTIFICATION_ACTIONS } from "../../src/notifications/types.js";
 import * as schema from "../../src/storage/schema.js";
 import { createTestHarness } from "../helpers/harness.js";
 import type { TestHarness } from "../helpers/harness.js";
 import { seedProject } from "../helpers/seed.js";
 import type { SeededProject } from "../helpers/seed.js";
+
+const EXPECTED_DEFAULT_ACTIONS = [
+  "backup.failed",
+  "backup.restore_staged",
+  "archive.failed",
+  "system.warning",
+];
 
 interface MigrationContext {
   harness: TestHarness;
@@ -111,9 +117,10 @@ describe("legacy monitor channel migration", () => {
       .from(schema.notificationChannelActions)
       .where(eq(schema.notificationChannelActions.channelId, enabledChannel.id));
 
-    expect(new Set(actions.map((row) => row.action))).toEqual(
-      new Set(DEFAULT_NOTIFICATION_ACTIONS),
-    );
+    const actionSet = new Set(actions.map((row) => row.action));
+
+    expect(actionSet).toEqual(new Set(EXPECTED_DEFAULT_ACTIONS));
+    expect(actionSet.has("backup.succeeded")).toBe(false);
 
     const disabledChannels = await channelRows(disabledUrl);
     expect(disabledChannels).toHaveLength(0);

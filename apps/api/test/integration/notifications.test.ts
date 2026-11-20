@@ -1,12 +1,18 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { JsonObject } from "../../src/json.js";
-import { DEFAULT_NOTIFICATION_ACTIONS } from "../../src/notifications/types.js";
 import * as schema from "../../src/storage/schema.js";
 import { arrayAt, errorOf, jsonBody, objectAt, stringAt } from "../helpers/body.js";
 import { request } from "../helpers/request.js";
 import { createTestSession } from "../helpers/session.js";
 import type { TestSession } from "../helpers/session.js";
+
+const EXPECTED_DEFAULT_ACTIONS = [
+  "backup.failed",
+  "backup.restore_staged",
+  "archive.failed",
+  "system.warning",
+];
 
 let session: TestSession | null = null;
 
@@ -81,9 +87,13 @@ describe("notification channels", () => {
 
       // Admin create/detail/edit responses are the only places the URL appears.
       expect(channel.url).toBe(url);
-      expect(
-        new Set(arrayAt(channel.actions, "actions").map((action) => stringAt(action, "action"))),
-      ).toEqual(new Set(DEFAULT_NOTIFICATION_ACTIONS));
+
+      const createdActions = new Set(
+        arrayAt(channel.actions, "actions").map((action) => stringAt(action, "action")),
+      );
+
+      expect(createdActions).toEqual(new Set(EXPECTED_DEFAULT_ACTIONS));
+      expect(createdActions.has("backup.succeeded")).toBe(false);
 
       const listed = await request(harness.app, "/v1/notifications/channels", {
         cookies: adminJar,
@@ -148,7 +158,7 @@ describe("notification channels", () => {
   });
 
   it("rejects invalid and private destinations before storing them", async () => {
-    const { harness, adminJar } = ctx();
+    const { harness, data, adminJar } = ctx();
 
     const rejected: Array<{ body: JsonObject; status: number; messagePart: string }> = [
       {
@@ -183,19 +193,125 @@ describe("notification channels", () => {
       expect(errorOf(await jsonBody(response))).toContain(testCase.messagePart);
     }
 
-    const privateMonitor = await request(ctx().harness.app, "/v1/monitors", {
-      method: "POST",
-      body: {
-        name: "private-legacy",
-        query: "level>=error",
-        kind: "match",
-        channels: [{ type: "webhook", url: "http://127.0.0.1:9/hook" }],
+    const privateMonitor = await request(
+      harness.app,
+      "/v1/monitors?project=" + data.projects.alpha.id,
+      {
+        method: "POST",
+        body: {
+          name: "private-legacy",
+          query: "level>=error",
+          kind: "match",
+          channels: [{ type: "webhook", url: "http://127.0.0.1:9/hook" }],
+        },
+        cookies: adminJar,
       },
-      cookies: adminJar,
-    });
+    );
 
     expect(privateMonitor.status).toBe(400);
     expect(errorOf(await jsonBody(privateMonitor))).toContain("private/metadata");
+
+    let channelId = "";
+    let monitorId = "";
+
+    try {
+      const createdChannel = await request(harness.app, "/v1/notifications/channels", {
+        method: "POST",
+        body: {
+          name: "patch-validation",
+          type: "webhook",
+          url: "https://example.test/hooks/patch-validation",
+        },
+        cookies: adminJar,
+      });
+
+      expect(createdChannel.status).toBe(201);
+
+      channelId = stringAt(
+        objectAt((await jsonBody(createdChannel)).channel, "channel").id,
+        "channel.id",
+      );
+
+      for (const testCase of [
+        { url: "ftp://example.test/hook", messagePart: "http:// or https://" },
+        { url: "http://127.0.0.1:9/hook", messagePart: "private/metadata" },
+      ]) {
+        const response = await request(harness.app, "/v1/notifications/channels/" + channelId, {
+          method: "PATCH",
+          body: { url: testCase.url },
+          cookies: adminJar,
+        });
+
+        expect(response.status).toBe(400);
+        expect(errorOf(await jsonBody(response))).toContain(testCase.messagePart);
+      }
+
+      const createdMonitor = await request(
+        harness.app,
+        "/v1/monitors?project=" + data.projects.alpha.id,
+        {
+          method: "POST",
+          body: {
+            name: "patch-legacy-validation",
+            query: "level>=error",
+            kind: "match",
+            channels: [{ type: "webhook", url: "https://example.test/hooks/patch-legacy" }],
+          },
+          cookies: adminJar,
+        },
+      );
+
+      expect(createdMonitor.status).toBe(201);
+
+      monitorId = stringAt(
+        objectAt((await jsonBody(createdMonitor)).monitor, "monitor").id,
+        "monitor.id",
+      );
+
+      for (const testCase of [
+        { url: "ftp://example.test/hook", messagePart: "http:// or https://" },
+        { url: "http://127.0.0.1:9/hook", messagePart: "private/metadata" },
+      ]) {
+        const response = await request(
+          harness.app,
+          `/v1/monitors/${monitorId}?project=${data.projects.alpha.id}`,
+          {
+            method: "PATCH",
+            body: { channels: [{ type: "webhook", url: testCase.url }] },
+            cookies: adminJar,
+          },
+        );
+
+        expect(response.status).toBe(400);
+        expect(errorOf(await jsonBody(response))).toContain(testCase.messagePart);
+      }
+    } finally {
+      if (monitorId !== "") {
+        const removedMonitor = await request(
+          harness.app,
+          `/v1/monitors/${monitorId}?project=${data.projects.alpha.id}`,
+          {
+            method: "DELETE",
+            cookies: adminJar,
+          },
+        );
+
+        expect(removedMonitor.status).toBe(200);
+      }
+
+      if (channelId !== "") {
+        const removedChannel = await request(
+          harness.app,
+          "/v1/notifications/channels/" + channelId,
+          {
+            method: "DELETE",
+            cookies: adminJar,
+          },
+        );
+
+        expect(removedChannel.status).toBe(200);
+      }
+    }
   });
 
   it("scrubs legacy URLs and removes links/actions when a channel is deleted", async () => {

@@ -1927,7 +1927,9 @@ export function registerRoutes(
     const limit = clampInt(c.req.query("limit"), 100, 1, 500);
     const alerts = await listAlerts(storage, limit, projectId);
     const authInfo = getAuth(c);
-    const canSeeErrors = authInfo.kind === "user" && can(authInfo, "monitors.write");
+    // Delivery errors can name internal endpoints; only administrators see even
+    // the sanitized text. Monitor writers and machine keys get null.
+    const canSeeErrors = authInfo.kind === "user" && can(authInfo, "users.write");
     const canSeeSamples = canCapability(authInfo, "logs.read");
 
     return c.json({

@@ -127,6 +127,27 @@ describe("alert list projection", () => {
     expect(alert.notifyError).toBe(null);
   });
 
+  it("hides delivery errors from a member that can write monitors", async () => {
+    const { session } = ctx();
+
+    const response = await request(
+      session.harness.app,
+      "/v1/alerts?project=" + session.data.projects.alpha.id,
+      { cookies: session.memberJar },
+    );
+
+    expect(response.status).toBe(200);
+
+    const alert = findAlert(alertList(await jsonBody(response)));
+
+    // Members still have logs.read, so event-derived text stays visible, but
+    // delivery errors are admin-only.
+    expect(alert.summary).toBe(SUMMARY);
+    expect(alert.sampleMessage).toBe(SAMPLE);
+    expect(alert.notifyStatus).toBe("failed");
+    expect(alert.notifyError).toBe(null);
+  });
+
   it("returns log text to an MCP key with logs.read but never delivery errors", async () => {
     const { session } = ctx();
 
@@ -140,6 +161,7 @@ describe("alert list projection", () => {
 
     expect(alert.summary).toBe(SUMMARY);
     expect(alert.sampleMessage).toBe(SAMPLE);
+    expect(alert.notifyStatus).toBe("failed");
     expect(alert.notifyError).toBe(null);
   });
 
@@ -156,6 +178,7 @@ describe("alert list projection", () => {
 
     expect(alert.summary).toBe("log content hidden");
     expect(alert.sampleMessage).toBe(null);
+    expect(alert.notifyStatus).toBe("failed");
     expect(alert.notifyError).toBe(null);
     expect(alert.count).toBe(4);
     expect(alert.monitorName).toBe("alert-source");

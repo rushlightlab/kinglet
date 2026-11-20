@@ -16,6 +16,8 @@ interface MonitorContext {
   channel: NotificationChannel;
 }
 
+const CHANNEL_DELIVERY_ERROR = "channel returned HTTP 500";
+
 let context: MonitorContext | null = null;
 
 function ctx(): MonitorContext {
@@ -26,6 +28,18 @@ function ctx(): MonitorContext {
 
 function monitorList(body: JsonObject): JsonObject[] {
   return arrayAt(body.monitors, "monitors").map((entry) => objectAt(entry, "monitor"));
+}
+
+function channelList(body: JsonObject): JsonObject[] {
+  return arrayAt(body.channels, "channels").map((entry) => objectAt(entry, "channel"));
+}
+
+function findChannel(channels: JsonObject[], id: string): JsonObject {
+  for (const channel of channels) {
+    if (channel.id === id) return channel;
+  }
+
+  throw new Error(`monitors suite: channel ${id} missing from response`);
 }
 
 function findMonitor(monitors: JsonObject[], id: string): JsonObject {
@@ -79,6 +93,17 @@ beforeAll(async () => {
     const channel = await seedNotificationChannel(session.harness.storage, {
       name: "monitor-suite-channel",
       url: "https://example.test/hooks/monitor-suite-secret",
+    });
+
+    await session.harness.storage.db.insert(schema.notificationDeliveries).values({
+      id: uuidv7(),
+      channelId: channel.id,
+      scope: "monitor",
+      event: "monitor.fired",
+      subject: "Alpha errors",
+      status: "failed",
+      error: CHANNEL_DELIVERY_ERROR,
+      createdAt: Date.now(),
     });
 
     context = { session, channel };
@@ -285,7 +310,32 @@ describe("monitor CRUD", () => {
       expect(summary.enabled).toBe(true);
       expect(summary).not.toHaveProperty("url");
       expect(JSON.stringify(summary)).not.toContain(channel.url);
-      expect(objectAt(summary.health, "health").error).toBe(null);
+
+      const memberHealth = objectAt(summary.health, "health");
+
+      expect(memberHealth.status).toBe("failed");
+      expect(memberHealth.error).toBe(null);
+
+      const mcpMonitors = await request(harness.app, "/v1/monitors", {
+        bearer: data.keys.mcp.plaintext,
+      });
+
+      expect(mcpMonitors.status).toBe(200);
+
+      const mcpSummary = objectAt(
+        arrayAt(
+          findMonitor(monitorList(await jsonBody(mcpMonitors)), id).resolvedChannels,
+          "resolvedChannels",
+        )[0],
+        "resolvedChannels[0]",
+      );
+
+      const mcpHealth = objectAt(mcpSummary.health, "health");
+
+      expect(mcpSummary).not.toHaveProperty("url");
+      expect(JSON.stringify(mcpSummary)).not.toContain(channel.url);
+      expect(mcpHealth.status).toBe("failed");
+      expect(mcpHealth.error).toBe(null);
 
       const adminList = await listProjectMonitors(session, data.projects.alpha.id, adminJar);
 
@@ -296,6 +346,66 @@ describe("monitor CRUD", () => {
 
       expect(adminSummary).not.toHaveProperty("url");
       expect(JSON.stringify(adminSummary)).not.toContain(channel.url);
+
+      const adminHealth = objectAt(adminSummary.health, "health");
+
+      expect(adminHealth.status).toBe("failed");
+      expect(adminHealth.error).toBe(CHANNEL_DELIVERY_ERROR);
+
+      const adminSummaryResponse = await request(
+        harness.app,
+        "/v1/notifications/channels/summary",
+        { cookies: adminJar },
+      );
+
+      expect(adminSummaryResponse.status).toBe(200);
+
+      const adminChannelSummary = findChannel(
+        channelList(await jsonBody(adminSummaryResponse)),
+        channel.id,
+      );
+
+      const adminChannelHealth = objectAt(adminChannelSummary.health, "health");
+
+      expect(adminChannelHealth.status).toBe("failed");
+      expect(adminChannelHealth.error).toBe(CHANNEL_DELIVERY_ERROR);
+
+      const memberSummaryResponse = await request(
+        harness.app,
+        "/v1/notifications/channels/summary",
+        { cookies: memberJar },
+      );
+
+      expect(memberSummaryResponse.status).toBe(200);
+      expect(
+        objectAt(
+          findChannel(channelList(await jsonBody(memberSummaryResponse)), channel.id).health,
+          "health",
+        ).error,
+      ).toBe(null);
+
+      const mcpSummaryResponse = await request(harness.app, "/v1/notifications/channels/summary", {
+        bearer: data.keys.mcp.plaintext,
+      });
+
+      expect(mcpSummaryResponse.status).toBe(200);
+      expect(
+        objectAt(
+          findChannel(channelList(await jsonBody(mcpSummaryResponse)), channel.id).health,
+          "health",
+        ).error,
+      ).toBe(null);
+
+      const adminChannels = await request(harness.app, "/v1/notifications/channels", {
+        cookies: adminJar,
+      });
+
+      expect(adminChannels.status).toBe(200);
+
+      const listedChannel = findChannel(channelList(await jsonBody(adminChannels)), channel.id);
+
+      expect(listedChannel.url).not.toBe(channel.url);
+      expect(JSON.stringify(listedChannel)).not.toContain(channel.url);
 
       const memberLegacy = await request(harness.app, "/v1/monitors/" + id, {
         method: "PATCH",
