@@ -135,7 +135,7 @@ directory remains under `%TEMP%`.
 
 ## Fix round 1 — review findings
 
-Status: complete. Base `9d20e3a`; fix commit `ddc6236`.
+Status: complete. Base `9d20e3a`; fixes `ddc6236` and `fd6a871`.
 
 ### Findings addressed
 
@@ -176,6 +176,8 @@ Status: complete. Base `9d20e3a`; fix commit `ddc6236`.
 - Removed the external `KINGLET_E2E_BASE_URL` override. The suite derives
   `http://127.0.0.1:<port>` from `KINGLET_E2E_PORT`, so it cannot target a
   non-loopback base URL.
+- Added `KINGLET_HOST` to Turbo's `globalPassThroughEnv` so `pnpm dev` honors
+  the bind address as well.
 - `e2e/README.md` documents hard-kill residue, state permissions, and the
   Linux CI sequence (`build` → `playwright install --with-deps chromium` →
   `test:e2e`).
