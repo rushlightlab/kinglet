@@ -181,10 +181,6 @@ function gatedDownload(firstFrame: Buffer, secondFrame: Buffer): GatedDownload {
   };
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function archiveErrorOf(action: Promise<unknown>): Promise<ArchiveError> {
   try {
     await action;
@@ -373,9 +369,9 @@ describe("archive import locking", () => {
     try {
       await gated.firstPull;
 
-      // Give the importer time to reach its first insert batch if it were
-      // holding a transaction across the response body.
-      await delay(500);
+      // The first frame is buffered but the part is not verified until the
+      // download finishes, so no rows may exist while the gate is held.
+      expect(await eventCount(projectId)).toBe(0);
 
       const written = await concurrent.insertEvents(
         otherProjectId,

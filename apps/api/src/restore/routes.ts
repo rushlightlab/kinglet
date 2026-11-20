@@ -4,6 +4,7 @@ import { isUuid } from "../auth/ids.js";
 import { requirePermission, requireUser } from "../auth/middleware.js";
 import type { AppEnv } from "../auth/middleware.js";
 import { describeBackupError } from "../backups/s3.js";
+import type { BackupObjectStore } from "../backups/s3.js";
 import { BackupError } from "../backups/types.js";
 import type { Config } from "../env.js";
 import type { Storage } from "../storage/index.js";
@@ -17,7 +18,13 @@ import { stageRestore } from "./stage.js";
  */
 export function registerRestoreRoutes(
   app: Hono<AppEnv>,
-  deps: { storage: Storage; config: Config; onStaged?: () => void },
+  deps: {
+    storage: Storage;
+    config: Config;
+    onStaged?: () => void;
+    /** Test/embedding override; production omits it and staging owns the store. */
+    restoreStore?: BackupObjectStore;
+  },
 ): void {
   app.post("/v1/backups/:id/restore", async (c) => {
     const denied = requirePermission(c, "backups.restore");
@@ -36,6 +43,7 @@ export function registerRestoreRoutes(
         config: deps.config,
         snapshotId: id,
         userId: user.id,
+        store: deps.restoreStore,
       });
 
       try {

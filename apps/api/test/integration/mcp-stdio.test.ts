@@ -220,6 +220,27 @@ async function waitForAudit(
   throw new Error(`timed out waiting for ${minimum} ${tool} audit line(s)`);
 }
 
+/** Wait for a line from a specific tool, not just any line at a count. */
+async function waitForAuditLine(
+  client: McpStdioClient,
+  tool: string,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (client.stderrLines.some((line) => line.includes(`tool=${tool} `))) return;
+
+    try {
+      await client.waitForStderr(client.stderrLines.length + 1, 200);
+    } catch {
+      // Keep polling until the deadline; stderr delivery is asynchronous.
+    }
+  }
+
+  throw new Error(`timed out waiting for a ${tool} audit line`);
+}
+
 describe("MCP stdio contract", () => {
   it("exposes the complete tool list over a real stdio session", async () => {
     const tools = await current().client.listTools();
@@ -336,6 +357,12 @@ describe("MCP stdio contract", () => {
 
   it("keeps stdout protocol-only and audits the later tool calls without the key", async () => {
     const test = current();
+
+    // Drain stderr before taking the baseline. `list_services` is not called
+    // by any earlier test, and stderr is ordered, so its audit line proves
+    // every earlier line has arrived rather than landing in the count below.
+    expect(toolFailed(await test.client.callTool("list_services"))).toBe(false);
+    await waitForAuditLine(test.client, "list_services");
 
     const expectedAudits: Array<[string, number]> = [
       ["search_events", auditCount(test.client, "search_events") + 1],

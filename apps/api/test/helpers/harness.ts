@@ -6,6 +6,7 @@ import type { AppEnv } from "../../src/auth/middleware.js";
 import { createAuth } from "../../src/auth/auth.js";
 import type { KingletAuth } from "../../src/auth/auth.js";
 import { ensureBootstrapAdmin, ensureSchemaExtras } from "../../src/auth/setup.js";
+import type { BackupObjectStore } from "../../src/backups/s3.js";
 import type { Config } from "../../src/env.js";
 import { endMaintenance } from "../../src/restore/state.js";
 import * as schema from "../../src/storage/schema.js";
@@ -36,6 +37,8 @@ export interface TestHarnessOptions {
   engines?: TestEngineOverrides;
   /** Test seam for archive cleanup; receives the harness config. */
   deleteArchivedObjects?: (config: Config, projectId: string) => Promise<number>;
+  /** Test seam for restore staging; production constructs and destroys its own store. */
+  restoreStore?: BackupObjectStore;
 }
 
 /**
@@ -114,6 +117,7 @@ export async function createTestHarness(options: TestHarnessOptions = {}): Promi
       engines,
       staticUi: false,
       deleteArchivedObjects: options.deleteArchivedObjects,
+      restoreStore: options.restoreStore,
     });
 
     return {

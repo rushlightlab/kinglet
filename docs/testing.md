@@ -69,7 +69,10 @@ another without a production need.
   deletion and all-time clear. Production leaves it undefined.
 - `BackupObjectStore` (`apps/api/src/backups/s3.ts`) is the storage interface.
   Restore staging accepts an optional `store` so tests can use an in-memory
-  adapter; production constructs and destroys the S3 adapter.
+  adapter; production constructs and destroys the S3 adapter. `createApp` and
+  `registerRestoreRoutes` accept an optional `restoreStore` that is passed
+  through to staging, so route tests exercise the real handler with an injected
+  store. Production leaves it undefined.
 
 ## Isolation
 
@@ -164,6 +167,40 @@ deleted at teardown, this repository is public, and artifact access is not a
 secret boundary; treat the artifact as sensitive and keep access limited.
 `.e2e/` (storage states and its seed file) is never uploaded.
 
+## Accepted behavior and follow-ups
+
+These behaviors are intentional and covered only at the level stated, not silent
+gaps:
+
+- Archive import commits one part at a time. If a later part fails, parts 1..N-1
+  remain committed. Re-import is idempotent by archive `uid`, so retrying the
+  same range is safe and does not duplicate events. The suite does not exercise a
+  multi-part import where a later part fails; that partial-progress behavior is
+  accepted, not rolled back.
+- `validateSpoolFile` and `insertSpoolFile` parse and re-stringify every line
+  twice, once for verification and once for insertion. That CPU cost is accepted
+  to keep checksum/project verification before any write and inserts bounded.
+- Archive import caps decompressed NDJSON at 1 GiB per part (`MAX_SPOOL_BYTES`)
+  and spools under `<dataDir>/tmp`. It does not enforce the exporter's
+  10,000-event part limit, so a part with many tiny lines can still cause many
+  inserts. It also does not preflight free space with `statfs`; a full data
+  directory fails the spool write with a sanitized 500. The cap test injects a
+  small limit instead of writing a 1 GiB fixture.
+- The SDK omits `service`/`env` when the option is unset, but an empty or
+  whitespace-only string is sent and the server normalizes it to null. Blank
+  values are not rejected client-side.
+- The SDK batches by event count, not bytes (`batchSize` is a count). A batch of
+  very large events can exceed the server body limit; the resulting 413 is
+  re-queued like any other failure, so that batch can retry indefinitely.
+  Byte-based batching remains a product follow-up.
+- Backup-engine end-to-end (a full run against a fake store) and age-encrypted
+  success staging remain follow-ups. Rejection paths, staged database bytes, the
+  restore route's `requestedBy`, and injected-store lifetime are covered.
+  Archive-object deletion is covered with a fake store and app wiring; deleting
+  archived objects against a real bucket is not.
+- The production `readObjectText` cap is unit-tested without AWS. The S3 adapter,
+  presigning, multipart upload, retries, and real bucket errors are not.
+
 ## Known coverage boundaries
 
 These are intentional gaps, not claims of coverage:
@@ -177,20 +214,6 @@ These are intentional gaps, not claims of coverage:
   integration database does run the full migrator, so a broken migration still
   fails the suite; upgrading a populated database with duplicate archive rows is
   not replayed end-to-end.
-- Age-encrypted successful restore staging and a full backup-engine run against
-  a fake store are not covered; the rejection paths are. The production
-  `BackupStore.getObjectText` size cap is not unit-tested.
-- The SDK batches by event count, not bytes (`batchSize` is a count). A batch of
-  very large events can exceed the server body limit and is re-queued on the
-  rejection; byte-based batching is a product follow-up.
-- Archive import caps decompressed NDJSON at 1 GiB per part (`MAX_SPOOL_BYTES`;
-  legitimate parts hold at most 10,000 events, and escaped control characters
-  can push a part past 512 MiB) and spools under `<dataDir>/tmp`. It does not
-  enforce the 10,000-event part limit or preflight free space with `statfs`, so
-  the spool path needs room for the largest part; both remain Task 10
-  follow-ups. The cap test injects a small limit instead of writing a 1 GiB
-  fixture.
 - Test coverage is not measured or enforced. There are no coverage thresholds.
 
-Task 10 and the final suite review track the remaining hardening items; do not
-describe the gaps above as covered.
+Do not describe the accepted behavior or boundaries above as covered.

@@ -21,6 +21,7 @@ import {
   signManifest as signManifestWithKey,
   verifyManifestSignature as verifyManifestSignatureWithKey,
 } from "./manifest-signature.js";
+import { readObjectText } from "./object-text.js";
 import { BackupError } from "./types.js";
 import type { BackupEncryption, BackupManifest } from "./types.js";
 
@@ -284,23 +285,8 @@ export class BackupStore implements BackupObjectStore {
 
   async getObjectText(key: string, maxBytes: number): Promise<string> {
     const stream = await this.getObjectStream(key);
-    const chunks: Buffer[] = [];
-    let total = 0;
 
-    for await (const chunk of stream) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-
-      total += buffer.length;
-
-      if (total > maxBytes) {
-        stream.destroy();
-        throw new BackupError("S3 manifest is too large", 502);
-      }
-
-      chunks.push(buffer);
-    }
-
-    return Buffer.concat(chunks).toString("utf8");
+    return readObjectText(stream, maxBytes);
   }
 
   async headObject(key: string): Promise<HeadObjectCommandOutput> {

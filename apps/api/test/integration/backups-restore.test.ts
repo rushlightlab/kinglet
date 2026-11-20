@@ -1,16 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { zstdCompressSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { uuidv7 } from "../../src/auth/ids.js";
-import {
-  buildManifest,
-  MAX_MANIFEST_BYTES,
-  serializeManifest,
-} from "../../src/backups/manifest.js";
-import type { ManifestInput } from "../../src/backups/manifest.js";
+import { MAX_MANIFEST_BYTES, serializeManifest } from "../../src/backups/manifest.js";
 import { BackupError } from "../../src/backups/types.js";
 import type { BackupManifest } from "../../src/backups/types.js";
 import type { BackupConfig, Config } from "../../src/env.js";
@@ -27,19 +19,18 @@ import { stageLatestRestore, stageRestore } from "../../src/restore/stage.js";
 import { createStorage } from "../../src/storage/index.js";
 import { SCHEMA_VERSION } from "../../src/storage/schema.js";
 import { InMemoryBackupStore } from "../helpers/backup-store.js";
+import { jsonBody } from "../helpers/body.js";
 import { makeTestConfig } from "../helpers/config.js";
+import { request } from "../helpers/request.js";
+import { createTestSession } from "../helpers/session.js";
+import { createSnapshotFixture, manifestFor, seedSnapshot } from "../helpers/snapshot.js";
 import { createTempDatabase } from "../helpers/temp.js";
 import type { TempDatabase } from "../helpers/temp.js";
 
 const SIGNING_KEY = "task-5-manifest-signing-key-not-a-real-secret";
 const PASSPHRASE = "task-5-backup-passphrase";
-const SNAPSHOT_COUNTS = { projects: 1, users: 1, events: 0, monitors: 0 };
-
-interface SnapshotFixture {
-  raw: Buffer;
-  compressed: Buffer;
-  sha256: string;
-}
+const OLDER_SNAPSHOT_ID = "0190f5b2-7c3a-7def-8abc-0123456789ab";
+const NEWER_SNAPSHOT_ID = "0190f5b3-7c3a-7def-8abc-0123456789ab";
 
 let temp: TempDatabase | null = null;
 
@@ -48,14 +39,20 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  // Staging flips a process-global gate; a failed assertion must not leak it.
-  endMaintenance();
-
   const current = temp;
 
   temp = null;
 
-  if (current !== null) await current.cleanup();
+  // Staging flips a process-global gate; a failed assertion must not leak it,
+  // and a maintenance failure must not skip the temporary-directory cleanup.
+  const [maintenance, cleanup] = await Promise.allSettled([
+    Promise.resolve().then(() => endMaintenance()),
+    current === null ? Promise.resolve() : current.cleanup(),
+  ]);
+
+  if (maintenance.status === "rejected") throw maintenance.reason;
+
+  if (cleanup.status === "rejected") throw cleanup.reason;
 });
 
 function currentTemp(): TempDatabase {
@@ -95,55 +92,22 @@ function fixtureConfig(
   });
 }
 
-function createSnapshotFixture(directory: string): SnapshotFixture {
-  const databasePath = path.join(directory, `snapshot-source-${randomUUID()}.db`);
-  const database = new DatabaseSync(databasePath);
+/** Any app-managed staging artifact (staged db, sidecar, part, or download). */
+function stagedArtifacts(directory: string): string[] {
+  const { restoreDir } = restorePaths(directory);
 
-  try {
-    database.exec("PRAGMA journal_mode = DELETE");
-    database.exec("CREATE TABLE app_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)");
-    database
-      .prepare("INSERT INTO app_meta (key, value) VALUES (?, ?)")
-      .run("schema_version", String(SCHEMA_VERSION));
-  } finally {
-    database.close();
-  }
+  if (!fs.existsSync(restoreDir)) return [];
 
-  const raw = fs.readFileSync(databasePath);
-  const compressed = zstdCompressSync(raw);
-
-  return {
-    raw,
-    compressed,
-    sha256: createHash("sha256").update(compressed).digest("hex"),
-  };
-}
-
-function manifestFor(
-  fixture: SnapshotFixture,
-  overrides: Partial<ManifestInput> = {},
-): BackupManifest {
-  return buildManifest({
-    id: uuidv7(),
-    createdAt: Date.now(),
-    appVersion: "0.3.0-test",
-    schemaVersion: SCHEMA_VERSION,
-    sizeBytes: fixture.raw.length,
-    objectBytes: fixture.compressed.length,
-    sha256: fixture.sha256,
-    encryption: "none",
-    counts: SNAPSHOT_COUNTS,
-    ...overrides,
+  return fs.readdirSync(restoreDir).filter((name) => {
+    return name.includes(".db") || name.endsWith(".part") || name.endsWith(".download");
   });
 }
 
-function seedSnapshot(
-  store: InMemoryBackupStore,
-  manifest: BackupManifest,
-  objectBody: Buffer,
-): void {
-  store.putObject(store.objectKey(manifest.id, manifest.encryption), objectBody);
-  store.putManifest(store.manifestKey(manifest.id), serializeManifest(manifest));
+/** Every rejected stage path must leave the process and disk in a clean state. */
+function expectRejectedStage(scratch: TempDatabase, store: InMemoryBackupStore): void {
+  expect(maintenanceState().active).toBe(false);
+  expect(stagedArtifacts(scratch.directory)).toEqual([]);
+  expect(store.destroy).not.toHaveBeenCalled();
 }
 
 async function backupErrorOf(action: Promise<unknown>): Promise<BackupError> {
@@ -169,6 +133,7 @@ describe("restore staging", () => {
     seedSnapshot(store, manifest, fixture.compressed);
 
     const requestedBy = uuidv7();
+    const destroy = vi.spyOn(store, "destroy");
 
     const result = await stageRestore({
       config: fixtureConfig(scratch),
@@ -178,8 +143,16 @@ describe("restore staging", () => {
     });
 
     expect(result).toEqual({ restartRequired: true, snapshotId: id });
-    expect(fs.existsSync(stagedDatabasePath(scratch.directory, id))).toBe(true);
+    expect(destroy).not.toHaveBeenCalled();
     expect(maintenanceState().active).toBe(true);
+
+    const stagedPath = stagedDatabasePath(scratch.directory, id);
+    const staged = fs.readFileSync(stagedPath);
+    const stagedSha256 = createHash("sha256").update(staged).digest("hex");
+
+    expect(staged.length).toBe(fixture.raw.length);
+    expect(stagedSha256).toBe(fixture.rawSha256);
+    expect(stagedArtifacts(scratch.directory)).toEqual([`kinglet-${id}.db`]);
 
     const pending = await readRestoreMarker(restorePaths(scratch.directory).pendingPath);
 
@@ -192,17 +165,57 @@ describe("restore staging", () => {
     expect(pending.marker.requestedBy).toBe(requestedBy);
   });
 
+  it("skips an invalid newer manifest and stages the latest valid snapshot", async () => {
+    const scratch = currentTemp();
+    const fixture = createSnapshotFixture(scratch.directory);
+    const store = new InMemoryBackupStore(SIGNING_KEY);
+    const destroy = vi.spyOn(store, "destroy");
+
+    const olderManifest = store.signManifest(manifestFor(fixture, { id: OLDER_SNAPSHOT_ID }));
+    const newerSigned = store.signManifest(manifestFor(fixture, { id: NEWER_SNAPSHOT_ID }));
+
+    const newerInvalid: BackupManifest = {
+      ...newerSigned,
+      sizeBytes: newerSigned.sizeBytes + 1,
+    };
+
+    seedSnapshot(store, olderManifest, fixture.compressed);
+    seedSnapshot(store, newerInvalid, fixture.compressed);
+
+    const result = await stageLatestRestore({ config: fixtureConfig(scratch), store });
+
+    expect(result).toEqual({ restartRequired: true, snapshotId: OLDER_SNAPSHOT_ID });
+    expect(destroy).not.toHaveBeenCalled();
+    expect(fs.existsSync(stagedDatabasePath(scratch.directory, NEWER_SNAPSHOT_ID))).toBe(false);
+    expect(fs.statSync(stagedDatabasePath(scratch.directory, OLDER_SNAPSHOT_ID)).size).toBe(
+      fixture.raw.length,
+    );
+    expect(stagedArtifacts(scratch.directory)).toEqual([`kinglet-${OLDER_SNAPSHOT_ID}.db`]);
+
+    const pending = await readRestoreMarker(restorePaths(scratch.directory).pendingPath);
+
+    expect(pending.kind).toBe("ok");
+
+    if (pending.kind !== "ok") throw new Error("expected the pending restore marker");
+
+    expect(pending.marker.snapshotId).toBe(OLDER_SNAPSHOT_ID);
+    expect(pending.marker.source).toBe("latest");
+    expect(pending.marker.requestedBy).toBeNull();
+  });
+
   it("stages the latest snapshot and records a null requester for the CLI", async () => {
     const scratch = currentTemp();
     const fixture = createSnapshotFixture(scratch.directory);
     const store = new InMemoryBackupStore(SIGNING_KEY);
     const id = uuidv7();
+    const destroy = vi.spyOn(store, "destroy");
 
     seedSnapshot(store, store.signManifest(manifestFor(fixture, { id })), fixture.compressed);
 
     const result = await stageLatestRestore({ config: fixtureConfig(scratch), store });
 
     expect(result).toEqual({ restartRequired: true, snapshotId: id });
+    expect(destroy).not.toHaveBeenCalled();
     expect(maintenanceState().active).toBe(true);
 
     const pending = await readRestoreMarker(restorePaths(scratch.directory).pendingPath);
@@ -218,6 +231,7 @@ describe("restore staging", () => {
   it("rejects a snapshot id that is not a UUID", async () => {
     const scratch = currentTemp();
     const store = new InMemoryBackupStore(SIGNING_KEY);
+    const destroy = vi.spyOn(store, "destroy");
 
     const error = await backupErrorOf(
       stageRestore({ config: fixtureConfig(scratch), snapshotId: "not-a-uuid", store }),
@@ -225,7 +239,8 @@ describe("restore staging", () => {
 
     expect(error.status).toBe(400);
     expect(error.message).toBe("invalid snapshot id");
-    expect(maintenanceState().active).toBe(false);
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
   });
 
   it("rejects an unsigned manifest", async () => {
@@ -233,6 +248,7 @@ describe("restore staging", () => {
     const fixture = createSnapshotFixture(scratch.directory);
     const store = new InMemoryBackupStore(SIGNING_KEY);
     const id = uuidv7();
+    const destroy = vi.spyOn(store, "destroy");
 
     seedSnapshot(store, manifestFor(fixture, { id }), fixture.compressed);
 
@@ -243,7 +259,8 @@ describe("restore staging", () => {
     expect(error.status).toBe(409);
     expect(error.message).toContain("manifest is not signed");
     expect(fs.existsSync(stagedDatabasePath(scratch.directory, id))).toBe(false);
-    expect(maintenanceState().active).toBe(false);
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
   });
 
   it("rejects a manifest whose signed fields were tampered with", async () => {
@@ -253,6 +270,7 @@ describe("restore staging", () => {
     const id = uuidv7();
     const signed = store.signManifest(manifestFor(fixture, { id }));
     const tampered: BackupManifest = { ...signed, createdAt: signed.createdAt + 1 };
+    const destroy = vi.spyOn(store, "destroy");
 
     seedSnapshot(store, tampered, fixture.compressed);
 
@@ -262,7 +280,8 @@ describe("restore staging", () => {
 
     expect(error.status).toBe(409);
     expect(error.message).toContain("manifest signature is invalid");
-    expect(maintenanceState().active).toBe(false);
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
   });
 
   it("rejects an object whose checksum does not match the manifest", async () => {
@@ -271,6 +290,7 @@ describe("restore staging", () => {
     const store = new InMemoryBackupStore(SIGNING_KEY);
     const id = uuidv7();
     const manifest = store.signManifest(manifestFor(fixture, { id, sha256: "b".repeat(64) }));
+    const destroy = vi.spyOn(store, "destroy");
 
     seedSnapshot(store, manifest, fixture.compressed);
 
@@ -281,6 +301,8 @@ describe("restore staging", () => {
     expect(error.status).toBe(502);
     expect(error.message).toContain("checksum did not match");
     expect(fs.existsSync(stagedDatabasePath(scratch.directory, id))).toBe(false);
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
   });
 
   it("rejects an object whose stored size does not match the manifest", async () => {
@@ -293,6 +315,8 @@ describe("restore staging", () => {
       manifestFor(fixture, { id, objectBytes: fixture.compressed.length + 1 }),
     );
 
+    const destroy = vi.spyOn(store, "destroy");
+
     seedSnapshot(store, manifest, fixture.compressed);
 
     const error = await backupErrorOf(
@@ -301,6 +325,8 @@ describe("restore staging", () => {
 
     expect(error.status).toBe(502);
     expect(error.message).toContain("stored snapshot size did not match");
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
   });
 
   it("rejects a manifest with sizeBytes=0 before downloading", async () => {
@@ -309,6 +335,7 @@ describe("restore staging", () => {
     const store = new InMemoryBackupStore(SIGNING_KEY);
     const id = uuidv7();
     const manifest = store.signManifest(manifestFor(fixture, { id, sizeBytes: 0 }));
+    const destroy = vi.spyOn(store, "destroy");
 
     seedSnapshot(store, manifest, fixture.compressed);
 
@@ -318,6 +345,8 @@ describe("restore staging", () => {
 
     expect(error.status).toBe(502);
     expect(error.message).toBe("snapshot manifest is invalid");
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
   });
 
   it("rejects an oversized manifest", async () => {
@@ -327,6 +356,7 @@ describe("restore staging", () => {
     const id = uuidv7();
     const manifest = store.signManifest(manifestFor(fixture, { id }));
     const padded = `${serializeManifest(manifest)}${" ".repeat(MAX_MANIFEST_BYTES + 1024)}`;
+    const destroy = vi.spyOn(store, "destroy");
 
     store.putManifest(store.manifestKey(id), padded);
 
@@ -337,6 +367,8 @@ describe("restore staging", () => {
     expect(error.status).toBe(502);
     expect(error.message).toContain("manifest could not be read");
     expect(error.message).toContain("too large");
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
   });
 
   it("rejects an object above the configured snapshot cap", async () => {
@@ -348,6 +380,8 @@ describe("restore staging", () => {
     const manifest = store.signManifest(
       manifestFor(fixture, { id, objectBytes: 8192, sizeBytes: 2048 }),
     );
+
+    const destroy = vi.spyOn(store, "destroy");
 
     store.putManifest(store.manifestKey(id), serializeManifest(manifest));
 
@@ -361,6 +395,8 @@ describe("restore staging", () => {
 
     expect(error.status).toBe(409);
     expect(error.message).toBe("snapshot exceeds the configured size limit");
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
   });
 
   it("rejects a database above the configured snapshot cap", async () => {
@@ -372,6 +408,8 @@ describe("restore staging", () => {
     const manifest = store.signManifest(
       manifestFor(fixture, { id, objectBytes: 1024, sizeBytes: 8192 }),
     );
+
+    const destroy = vi.spyOn(store, "destroy");
 
     store.putManifest(store.manifestKey(id), serializeManifest(manifest));
 
@@ -385,6 +423,8 @@ describe("restore staging", () => {
 
     expect(error.status).toBe(409);
     expect(error.message).toBe("snapshot database exceeds the configured size limit");
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
   });
 
   it("rejects a snapshot from a newer schema", async () => {
@@ -397,6 +437,8 @@ describe("restore staging", () => {
       manifestFor(fixture, { id, schemaVersion: SCHEMA_VERSION + 1 }),
     );
 
+    const destroy = vi.spyOn(store, "destroy");
+
     store.putManifest(store.manifestKey(id), serializeManifest(manifest));
 
     const error = await backupErrorOf(
@@ -405,6 +447,8 @@ describe("restore staging", () => {
 
     expect(error.status).toBe(409);
     expect(error.message).toContain("newer than this build");
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
   });
 
   it("rejects an unencrypted snapshot when a passphrase is configured", async () => {
@@ -413,6 +457,7 @@ describe("restore staging", () => {
     const store = new InMemoryBackupStore(SIGNING_KEY);
     const id = uuidv7();
     const manifest = store.signManifest(manifestFor(fixture, { id, encryption: "none" }));
+    const destroy = vi.spyOn(store, "destroy");
 
     seedSnapshot(store, manifest, fixture.compressed);
 
@@ -427,6 +472,8 @@ describe("restore staging", () => {
     expect(error.status).toBe(409);
     expect(error.message).toContain("not age-encrypted");
     expect(fs.existsSync(stagedDatabasePath(scratch.directory, id))).toBe(false);
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
   });
 
   it("rejects an age snapshot when no passphrase is configured", async () => {
@@ -435,6 +482,7 @@ describe("restore staging", () => {
     const store = new InMemoryBackupStore(SIGNING_KEY);
     const id = uuidv7();
     const manifest = store.signManifest(manifestFor(fixture, { id, encryption: "age" }));
+    const destroy = vi.spyOn(store, "destroy");
 
     seedSnapshot(store, manifest, fixture.compressed);
 
@@ -444,11 +492,14 @@ describe("restore staging", () => {
 
     expect(error.status).toBe(409);
     expect(error.message).toContain("KINGLET_BACKUP_PASSPHRASE is not set");
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
   });
 
   it("refuses remote libSQL storage before touching the store", async () => {
     const scratch = currentTemp();
     const store = new InMemoryBackupStore(SIGNING_KEY);
+    const destroy = vi.spyOn(store, "destroy");
 
     const error = await backupErrorOf(
       stageRestore({
@@ -467,6 +518,73 @@ describe("restore staging", () => {
 
     expect(error.status).toBe(409);
     expect(error.message).toContain("remote libSQL/Turso");
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
+  });
+});
+
+describe("restore route", () => {
+  it("records the authenticated admin as requestedBy and keeps the injected store", async () => {
+    const store = new InMemoryBackupStore(SIGNING_KEY);
+
+    const session = await createTestSession({
+      config: { backup: fixtureBackupConfig() },
+      restoreStore: store,
+    });
+
+    try {
+      const fixture = createSnapshotFixture(session.harness.config.dataDir);
+      const id = uuidv7();
+
+      seedSnapshot(store, store.signManifest(manifestFor(fixture, { id })), fixture.compressed);
+
+      const destroy = vi.spyOn(store, "destroy");
+
+      const denied = await request(session.harness.app, `/v1/backups/${id}/restore`, {
+        method: "POST",
+        cookies: session.memberJar,
+      });
+
+      expect(denied.status).toBe(403);
+      expect(destroy).not.toHaveBeenCalled();
+      expect(maintenanceState().active).toBe(false);
+      expect(fs.existsSync(restorePaths(session.harness.config.dataDir).pendingPath)).toBe(false);
+
+      const response = await request(session.harness.app, `/v1/backups/${id}/restore`, {
+        method: "POST",
+        cookies: session.adminJar,
+      });
+
+      expect(response.status).toBe(202);
+      expect(await jsonBody(response)).toEqual({
+        ok: true,
+        staged: true,
+        restartRequired: true,
+        snapshotId: id,
+      });
+      expect(destroy).not.toHaveBeenCalled();
+      expect(maintenanceState().active).toBe(true);
+
+      const pending = await readRestoreMarker(
+        restorePaths(session.harness.config.dataDir).pendingPath,
+      );
+
+      expect(pending.kind).toBe("ok");
+
+      if (pending.kind !== "ok") throw new Error("expected the pending restore marker");
+
+      expect(pending.marker.snapshotId).toBe(id);
+      expect(pending.marker.source).toBe("snapshot");
+      expect(pending.marker.requestedBy).toBe(session.harness.admin.id);
+
+      const staged = fs.readFileSync(stagedDatabasePath(session.harness.config.dataDir, id));
+
+      expect(staged.length).toBe(fixture.raw.length);
+      expect(createHash("sha256").update(staged).digest("hex")).toBe(fixture.rawSha256);
+      expect(stagedArtifacts(session.harness.config.dataDir)).toEqual([`kinglet-${id}.db`]);
+    } finally {
+      await session.close();
+    }
   });
 });
 

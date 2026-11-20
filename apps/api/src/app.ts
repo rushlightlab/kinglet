@@ -14,6 +14,7 @@ import type { ArchiveEngine } from "./archive/engine.js";
 import { registerArchiveRoutes } from "./archive/routes.js";
 import type { BackupEngine } from "./backups/engine.js";
 import { registerBackupRoutes } from "./backups/routes.js";
+import type { BackupObjectStore } from "./backups/s3.js";
 import type { MonitorEngine } from "./monitors.js";
 import type { NotificationEngine } from "./notifications/engine.js";
 import { registerNotificationRoutes } from "./notifications/routes.js";
@@ -55,6 +56,11 @@ export interface CreateAppOptions {
    * all-time clear. Production leaves it undefined.
    */
   deleteArchivedObjects?: (config: Config, projectId: string) => Promise<number>;
+  /**
+   * Test/embedding seam for restore staging. Production leaves it undefined so
+   * staging constructs and destroys its own S3 adapter.
+   */
+  restoreStore?: BackupObjectStore;
 }
 
 /**
@@ -239,6 +245,7 @@ export function createApp(options: CreateAppOptions): Hono<AppEnv> {
     storage,
     config,
     onStaged: options.onRestoreStaged,
+    restoreStore: options.restoreStore,
   });
   registerSystemEventsRoute(app, {
     auth,
