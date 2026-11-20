@@ -423,8 +423,9 @@ pnpm test               # unit, then integration
 Run `pnpm build` before `pnpm test:integration` (the MCP stdio test spawns
 `packages/mcp/dist/cli.js`) and before `pnpm test:e2e` (the fixture serves the
 built API and UI). Install Chromium once with
-`pnpm exec playwright install --with-deps chromium`; local runs use Google Chrome
-when present, and `PLAYWRIGHT_CHANNEL=chromium` forces the bundled browser.
+`pnpm exec playwright install chromium` (`--with-deps chromium` on Linux/CI to
+add the system libraries); local runs use Google Chrome when present, and
+`PLAYWRIGHT_CHANNEL=chromium` forces the bundled browser.
 Integration tests never touch `apps/api/data`, S3, or an external network. See
 [docs/testing.md](./docs/testing.md) for the layout, single-file commands, and
 known coverage boundaries.

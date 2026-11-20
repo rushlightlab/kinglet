@@ -60,6 +60,8 @@ removes `.e2e/` and the temporary database directory.
 
 A hard-killed run (for example, a force-closed terminal) can leave `.e2e/` or
 a `kinglet-e2e-*` directory under the OS temp folder. The next server start
-removes stale `kinglet-e2e-*` runs, and global setup deletes/recreates its state
-files, but you can also delete both manually after an abort. The seed key in a
-stale `.e2e/seed.json` is useless once its temporary database is gone.
+removes the temp directory recorded in `.e2e/server.json` when that record
+points at a stopped run; it does not sweep arbitrary orphaned `kinglet-e2e-*`
+directories. Global setup deletes/recreates its state files, but you can also
+delete both manually after an abort. The seed key in a stale `.e2e/seed.json`
+is useless once its temporary database is gone.

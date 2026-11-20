@@ -93,8 +93,11 @@ another without a production need.
 - E2E login state and the seed key live under `.e2e/` (gitignored, created with
   mode `0700`; files are written with mode `0600` where the platform supports
   it). Global teardown removes `.e2e/` and the temporary database. A hard-killed
-  run may leave a `kinglet-e2e-*` directory or `.e2e/` behind; the next server
-  start removes stale `kinglet-e2e-*` runs, and both can be deleted manually.
+  run may leave a `kinglet-e2e-*` directory or `.e2e/` behind. The next server
+  start removes the temp directory recorded in `.e2e/server.json` when that
+  record points at a stopped run; it does not sweep arbitrary orphaned
+  `kinglet-e2e-*` directories. Delete stale directories and `.e2e/` manually
+  after an abort.
 - Never commit databases, temp directories, `.e2e/`, `test-results/`, or
   `playwright-report/`.
 
@@ -150,12 +153,15 @@ The `build` job runs format check, lint, typecheck, build, `pnpm test:unit`, and
 `pnpm test:integration` (in that order, so the MCP CLI exists). The separate
 `e2e` job runs on pull requests only: frozen-lockfile install, build, Chromium
 install, then `pnpm test:e2e` with `CI=true`. All GitHub Actions are pinned by
-commit SHA.
+full SHA.
 
 On failure the E2E job uploads `test-results/` for seven days. Traces and
 screenshots can contain test-session cookies, request headers, and data
-exchanged with the test server; treat the artifact as sensitive and keep access
-limited. `.e2e/` (storage states and the seed key) is never uploaded.
+exchanged with the test server, including the temporary seed API key sent by
+`e2e/logs.spec.ts` through `page.request`. That key is scoped to a database
+deleted at teardown, this repository is public, and artifact access is not a
+secret boundary; treat the artifact as sensitive and keep access limited.
+`.e2e/` (storage states and its seed file) is never uploaded.
 
 ## Known coverage boundaries
 
