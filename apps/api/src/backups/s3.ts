@@ -37,6 +37,47 @@ export interface BackupObject {
   lastModified: number | null;
 }
 
+export interface BackupUploadInput {
+  key: string;
+  filePath: string;
+  sizeBytes: number;
+  sha256: string;
+  onProgress: (done: number, total: number) => void;
+}
+
+/** The subset of S3 HEAD metadata the engine and restore checks consume. */
+export interface BackupObjectHead {
+  ContentLength?: number;
+  Metadata?: Record<string, string>;
+}
+
+/**
+ * The storage surface used by the backup engine and restore staging. The S3
+ * class is the production adapter; tests and embedders can supply an
+ * in-memory implementation without changing engine or route behavior.
+ */
+export interface BackupObjectStore {
+  readonly prefix: string;
+  readonly manifestPrefix: string;
+  readonly snapshotPrefix: string;
+  manifestKey(id: string): string;
+  objectKey(id: string, encryption: BackupEncryption): string;
+  signManifest(manifest: BackupManifest): BackupManifest;
+  verifyManifestSignature(manifest: BackupManifest): boolean;
+  manifestId(key: string): string | null;
+  objectId(key: string): string | null;
+  listObjects(prefix: string): Promise<BackupObject[]>;
+  getObjectStream(key: string): Promise<Readable>;
+  getObjectText(key: string, maxBytes: number): Promise<string>;
+  headObject(key: string): Promise<BackupObjectHead>;
+  deleteObject(key: string): Promise<void>;
+  putManifest(key: string, body: string): Promise<void>;
+  uploadFile(input: BackupUploadInput): Promise<void>;
+  presignDownload(key: string, filename: string): Promise<{ url: string; expiresAt: number }>;
+  testConnection(): Promise<void>;
+  destroy(): void;
+}
+
 /** Strip empty, dot, and control-character segments from an operator prefix. */
 export function sanitizePrefix(raw: string): string {
   const parts: string[] = [];
@@ -121,7 +162,7 @@ function isNodeError(cause: Error): cause is Error & { code: string } {
   return "code" in cause && isString(cause.code);
 }
 
-export class BackupStore {
+export class BackupStore implements BackupObjectStore {
   readonly prefix: string;
   readonly manifestPrefix: string;
   readonly snapshotPrefix: string;
@@ -283,13 +324,7 @@ export class BackupStore {
     );
   }
 
-  async uploadFile(input: {
-    key: string;
-    filePath: string;
-    sizeBytes: number;
-    sha256: string;
-    onProgress: (done: number, total: number) => void;
-  }): Promise<void> {
+  async uploadFile(input: BackupUploadInput): Promise<void> {
     const body = fs.createReadStream(input.filePath);
 
     try {
@@ -396,7 +431,7 @@ export class BackupStore {
  * what to do with a partial file if the transfer fails.
  */
 export async function downloadToFile(
-  store: BackupStore,
+  store: BackupObjectStore,
   key: string,
   destinationPath: string,
   onProgress?: (bytesWritten: number) => void,

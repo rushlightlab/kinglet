@@ -1,11 +1,13 @@
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { createApp } from "../../src/app.js";
+import type { AppEngines } from "../../src/app.js";
 import type { AppEnv } from "../../src/auth/middleware.js";
 import { createAuth } from "../../src/auth/auth.js";
 import type { KingletAuth } from "../../src/auth/auth.js";
 import { ensureBootstrapAdmin, ensureSchemaExtras } from "../../src/auth/setup.js";
 import type { Config } from "../../src/env.js";
+import { endMaintenance } from "../../src/restore/state.js";
 import * as schema from "../../src/storage/schema.js";
 import { createStorage } from "../../src/storage/index.js";
 import type { Storage } from "../../src/storage/index.js";
@@ -52,6 +54,7 @@ export async function createTestHarness(options: TestHarnessOptions = {}): Promi
   });
 
   let storage: Storage | null = null;
+  let engines: AppEngines | null = null;
   let closed = false;
 
   const close = async (): Promise<void> => {
@@ -59,9 +62,17 @@ export async function createTestHarness(options: TestHarnessOptions = {}): Promi
     closed = true;
 
     try {
-      await storage?.close();
+      stopEngines(engines);
     } finally {
-      await temp.cleanup();
+      // Maintenance is process-global. A restore test that leaves it on would
+      // turn every later mutation in this worker into a 503.
+      endMaintenance();
+
+      try {
+        await storage?.close();
+      } finally {
+        await temp.cleanup();
+      }
     }
   };
 
@@ -92,11 +103,13 @@ export async function createTestHarness(options: TestHarnessOptions = {}): Promi
 
     if (adminId === undefined) throw new Error("test harness: bootstrap administrator missing");
 
+    engines = createNoopEngines(options.engines);
+
     const app = createApp({
       storage,
       config,
       auth,
-      engines: createNoopEngines(options.engines),
+      engines,
       staticUi: false,
     });
 
@@ -116,4 +129,13 @@ export async function createTestHarness(options: TestHarnessOptions = {}): Promi
     await close();
     throw err;
   }
+}
+
+function stopEngines(engines: AppEngines | null): void {
+  if (engines === null) return;
+
+  engines.monitor.stop();
+  engines.notification.stop();
+  engines.backup.stop();
+  engines.archive.stop();
 }

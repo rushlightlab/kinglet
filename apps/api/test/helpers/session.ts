@@ -1,4 +1,4 @@
-import type { TestHarness } from "./harness.js";
+import type { TestHarness, TestHarnessOptions } from "./harness.js";
 import { createTestHarness } from "./harness.js";
 import { signIn } from "./request.js";
 import type { CookieJar } from "./request.js";
@@ -19,8 +19,8 @@ export interface TestSession {
  * Callers that mutate a shared fixture should mint their own users/keys rather
  * than rotate or remove a baseline credential.
  */
-export async function createTestSession(): Promise<TestSession> {
-  const harness = await createTestHarness();
+export async function createTestSession(options: TestHarnessOptions = {}): Promise<TestSession> {
+  const harness = await createTestHarness(options);
 
   try {
     const data = await seedTestData(harness.storage, harness.auth);

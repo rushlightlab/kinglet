@@ -1,5 +1,4 @@
 import { Decrypter } from "age-encryption";
-import type { HeadObjectCommandOutput } from "@aws-sdk/client-s3";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -8,7 +7,7 @@ import { createZstdDecompress } from "node:zlib";
 import { isUuid } from "../auth/ids.js";
 import { MAX_MANIFEST_BYTES, parseManifest } from "../backups/manifest.js";
 import { BackupStore, describeBackupError, downloadToFile } from "../backups/s3.js";
-import type { BackupObject } from "../backups/s3.js";
+import type { BackupObject, BackupObjectHead, BackupObjectStore } from "../backups/s3.js";
 import { BackupError } from "../backups/types.js";
 import type { BackupManifest } from "../backups/types.js";
 import type { Config } from "../env.js";
@@ -45,11 +44,18 @@ export interface StageRestoreOptions {
   config: Config;
   snapshotId: string;
   userId?: string | null;
+  /**
+   * Storage adapter override. Production omits it and staging creates and
+   * destroys a BackupStore; tests can inject an in-memory adapter.
+   */
+  store?: BackupObjectStore;
 }
 
 export interface StageLatestRestoreOptions {
   config: Config;
   userId?: string | null;
+  /** See StageRestoreOptions.store. */
+  store?: BackupObjectStore;
 }
 
 export interface StageRestoreResult {
@@ -60,7 +66,7 @@ export interface StageRestoreResult {
 let staging = false;
 
 export async function stageRestore(options: StageRestoreOptions): Promise<StageRestoreResult> {
-  const store = requireBackupStore(options.config);
+  const store = requireBackupStore(options.config, options.store);
 
   try {
     return await stageSnapshot(
@@ -71,14 +77,14 @@ export async function stageRestore(options: StageRestoreOptions): Promise<StageR
       options.userId,
     );
   } finally {
-    store.destroy();
+    if (options.store === undefined) store.destroy();
   }
 }
 
 export async function stageLatestRestore(
   options: StageLatestRestoreOptions,
 ): Promise<StageRestoreResult> {
-  const store = requireBackupStore(options.config);
+  const store = requireBackupStore(options.config, options.store);
 
   try {
     const snapshotId = await findLatestSnapshotId(
@@ -88,11 +94,11 @@ export async function stageLatestRestore(
 
     return await stageSnapshot(options.config, snapshotId, "latest", store, options.userId);
   } finally {
-    store.destroy();
+    if (options.store === undefined) store.destroy();
   }
 }
 
-function requireBackupStore(config: Config): BackupStore {
+function requireBackupStore(config: Config, injected?: BackupObjectStore): BackupObjectStore {
   if (config.backup === null) {
     const problem =
       config.backupProblem === null
@@ -109,6 +115,8 @@ function requireBackupStore(config: Config): BackupStore {
     );
   }
 
+  if (injected !== undefined) return injected;
+
   try {
     return new BackupStore(config.backup);
   } catch (cause) {
@@ -117,7 +125,7 @@ function requireBackupStore(config: Config): BackupStore {
 }
 
 async function findLatestSnapshotId(
-  store: BackupStore,
+  store: BackupObjectStore,
   allowUnsignedManifests: boolean,
 ): Promise<string> {
   let objects: BackupObject[];
@@ -168,7 +176,7 @@ async function stageSnapshot(
   config: Config,
   snapshotId: string,
   source: RestoreSource,
-  store: BackupStore,
+  store: BackupObjectStore,
   userId?: string | null,
 ): Promise<StageRestoreResult> {
   if (staging) throw new BackupError("a restore is already being staged", 409);
@@ -203,7 +211,7 @@ async function stageSnapshot(
     await removeFile(partPath);
 
     const objectKey = store.objectKey(id, manifest.encryption);
-    let head: HeadObjectCommandOutput;
+    let head: BackupObjectHead;
 
     try {
       head = await store.headObject(objectKey);
@@ -309,7 +317,7 @@ async function stageSnapshot(
 }
 
 async function loadManifest(
-  store: BackupStore,
+  store: BackupObjectStore,
   id: string,
   backup: NonNullable<Config["backup"]>,
 ): Promise<BackupManifest> {
