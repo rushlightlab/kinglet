@@ -240,8 +240,9 @@ beforeAll(async () => {
     });
     await countClient.initialize();
 
-    // Alert-filter calls also get their own key so neither bucket approaches
-    // the 60/min MCP limit during the contract suite.
+    // The alert client exercises a read-only monitors.read + logs.read
+    // fixture, keeping the contract's alert paths on their own least-privilege
+    // key rather than the monitor-write key.
     alertClient = await McpStdioClient.start({
       url: server.url,
       key: alertKey.plaintext,
@@ -648,6 +649,63 @@ describe("MCP stdio contract", () => {
 
     expect(toolFailed(invalidDetail)).toBe(true);
     expect(toolText(invalidDetail)).toContain("Input validation error");
+  });
+
+  it("keeps alert detail project-scoped and respects logs.read masking", async () => {
+    const test = current();
+    const betaDetail = await test.alertClient.callTool("get_alert", { id: test.betaAlertId });
+    const betaText = toolText(betaDetail);
+
+    expect(toolFailed(betaDetail)).toBe(true);
+    expect(betaText).toBe("alert not found");
+    expect(betaText).not.toContain("beta alert must stay private");
+    expect(betaText).not.toContain("beta sample must stay private");
+    expect(betaText).not.toContain(test.betaAlertId);
+    expect(betaText).not.toContain(test.betaMonitorId);
+
+    // A monitors.read-only key still sees the alert, but the API projection
+    // hides the event-derived summary and sample, exactly like the HTTP route.
+    const noLogsKey = await seedApiKey(test.session.harness.storage, {
+      projectId: test.session.data.projects.alpha.id,
+      name: "mcp-contract-alerts-no-logs",
+      keyType: "mcp",
+      scopes: ["monitors.read"],
+    });
+
+    let noLogsClient: McpStdioClient | null = null;
+
+    try {
+      noLogsClient = await McpStdioClient.start({
+        url: test.server.url,
+        key: noLogsKey.plaintext,
+        cwd: test.cwd,
+        cliPath: CLI_PATH,
+      });
+      await noLogsClient.initialize();
+
+      const detail = await noLogsClient.callTool("get_alert", { id: test.alertId });
+      const detailText = toolText(detail);
+      const body = parseToolJson(detailText);
+
+      expect(toolFailed(detail)).toBe(false);
+
+      if (body === null) throw new Error("get_alert did not return an object");
+
+      const alert = body.alert;
+
+      if (!isJsonObject(alert)) throw new Error("get_alert did not return an alert");
+
+      expect(alert.id).toBe(test.alertId);
+      expect(alert.monitorName).toBe("leak-monitor");
+      expect(alert.summary).toBe("log content hidden");
+      expect(alert.sampleMessage).toBe(null);
+      expect(alert.count).toBe(3);
+      expect(detailText).not.toContain("secret sample content");
+      expect(detailText).not.toContain(noLogsKey.plaintext);
+      expect(noLogsClient.stderrLines.join("\n")).not.toContain(noLogsKey.plaintext);
+    } finally {
+      await noLogsClient?.close();
+    }
   });
 
   it("returns the monitor-write gate rejection without creating a monitor", async () => {

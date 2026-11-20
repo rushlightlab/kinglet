@@ -219,8 +219,10 @@ monitors at 100 per project. Aggregate groups default to 50 and cap at 200.
 Per-project event and database caps are configurable (see below).
 
 Alert filters and detail return `notifyError` only to administrators and hide
-event-derived text from callers without `logs.read`. An alert `from`/`to` window
-is clamped to 31 days; `monitorId` must belong to the resolved project.
+event-derived text from callers without `logs.read`. When `from`/`to` are
+supplied, the alert window is clamped to 31 days; without bounds, history
+remains all-time and is capped by `limit`. `monitorId` must belong to the
+resolved project.
 
 `GET /v1/aggregate` returns `{ from, to, total }`. With `groupBy` it adds
 `groups: [{ key, count }]` ordered by count and `truncated: true` when more

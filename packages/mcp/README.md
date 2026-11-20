@@ -206,6 +206,10 @@ Truncated responses set `truncated: true` and `search_events` returns a
 | `delete_monitor` | `monitors.write`  | destructive | Deletes a monitor and its alert history                                   |
 
 `monitors.write` implies `monitors.read`. MCP keys never have `logs.write`.
+`list_alerts` time filters are optional: with `from`/`to` omitted, alert history
+remains all-time and is capped by `limit`. Capabilities are per-key, so a
+`monitors.read`-only key gets the same hidden summary/sample projection as the
+HTTP route.
 
 Deliberately absent: ingest, clear logs, project/user/key management, backups,
 restore, archive, notification-channel administration, settings, arbitrary SQL,
