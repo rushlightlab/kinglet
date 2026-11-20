@@ -172,14 +172,17 @@ secret boundary; treat the artifact as sensitive and keep access limited.
 These behaviors are intentional and covered only at the level stated, not silent
 gaps:
 
-- Archive import commits one part at a time. If a later part fails, parts 1..N-1
-  remain committed. Re-import is idempotent by archive `uid`, so retrying the
-  same range is safe and does not duplicate events. The suite does not exercise a
-  multi-part import where a later part fails; that partial-progress behavior is
-  accepted, not rolled back.
-- `validateSpoolFile` and `insertSpoolFile` parse and re-stringify every line
-  twice, once for verification and once for insertion. That CPU cost is accepted
-  to keep checksum/project verification before any write and inserts bounded.
+- Archive import commits in 500-row chunks within each part. A database failure
+  mid-part, or a failure in a later part, leaves earlier chunks committed.
+  Checksum, project-boundary, and parse failures commit nothing because
+  verification and validation finish before the first insert. Re-import is
+  idempotent by archive `uid`, so retrying the same range is safe and does not
+  duplicate events. The suite does not exercise a multi-part import where a
+  later part fails; that partial-progress behavior is accepted, not rolled back.
+- `validateSpoolFile` and `insertSpoolFile` parse every line twice, once for
+  verification and once for insertion; insertion also re-serializes `fields`.
+  That CPU cost is accepted to keep checksum/project verification before any
+  write and inserts bounded.
 - Archive import caps decompressed NDJSON at 1 GiB per part (`MAX_SPOOL_BYTES`)
   and spools under `<dataDir>/tmp`. It does not enforce the exporter's
   10,000-event part limit, so a part with many tiny lines can still cause many

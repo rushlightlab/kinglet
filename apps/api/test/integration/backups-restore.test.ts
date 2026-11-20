@@ -107,6 +107,7 @@ function stagedArtifacts(directory: string): string[] {
 function expectRejectedStage(scratch: TempDatabase, store: InMemoryBackupStore): void {
   expect(maintenanceState().active).toBe(false);
   expect(stagedArtifacts(scratch.directory)).toEqual([]);
+  expect(fs.existsSync(restorePaths(scratch.directory).pendingPath)).toBe(false);
   expect(store.destroy).not.toHaveBeenCalled();
 }
 
@@ -546,6 +547,7 @@ describe("restore route", () => {
       });
 
       expect(denied.status).toBe(403);
+      expect(await jsonBody(denied)).toEqual({ error: "forbidden" });
       expect(destroy).not.toHaveBeenCalled();
       expect(maintenanceState().active).toBe(false);
       expect(fs.existsSync(restorePaths(session.harness.config.dataDir).pendingPath)).toBe(false);

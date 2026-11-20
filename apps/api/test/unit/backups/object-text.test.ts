@@ -51,4 +51,15 @@ describe("readObjectText", () => {
 
     expect(text).toBe("kinglet-manifest");
   });
+
+  it("decodes a multi-byte character split across chunks", async () => {
+    const body = Buffer.from("a😀b", "utf8");
+
+    const text = await readObjectText(
+      Readable.from([body.subarray(0, 2), body.subarray(2)]),
+      MAX_OBJECT_BYTES,
+    );
+
+    expect(text).toBe("a😀b");
+  });
 });
