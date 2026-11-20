@@ -443,12 +443,17 @@ describe("GET /v1/aggregate filters and limits", () => {
   it("truncates fractional groups and clamps the limit", async () => {
     const bearer = ctx().data.keys.alpha.plaintext;
 
+    const full = await aggregate({}, { bearer });
+    const fullBody = await jsonBody(full);
+
     const limited = await aggregate({ groupBy: "service", limit: 2 }, { bearer });
 
     expect(limited.status).toBe(200);
 
     const limitedBody = await jsonBody(limited);
 
+    expect(numberAt(limitedBody.total, "total")).toBe(numberAt(fullBody.total, "total"));
+    expect(numberAt(limitedBody.total, "total")).toBe(8);
     expect(arrayAt(limitedBody.groups, "groups")).toHaveLength(2);
     expect(limitedBody.truncated).toBe(true);
 

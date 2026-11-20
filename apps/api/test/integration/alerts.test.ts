@@ -329,14 +329,21 @@ describe("alert filters", () => {
     expect(alertIds(oldRange)).toContain(ctx().alertId);
   });
 
+  it("keeps all-time history when no time bounds are supplied", async () => {
+    const alerts = await listFilteredAlerts();
+
+    expect(alertIds(alerts)).toContain(ctx().oldAlertId);
+  });
+
   it("rejects invalid filters and cross-project monitor ids", async () => {
     const { session, betaMonitorId, betaAlertId } = ctx();
+    const now = Date.now();
 
     for (const [query, expected] of [
       ["monitorId=not-a-uuid", "invalid monitor id"],
       ["state=open", "state must be fired or resolved"],
       ["from=abc", "from/to must be epoch milliseconds"],
-      [`from=${Date.now()}&to=${Date.now() - 1}`, "from must be before to"],
+      [`from=${now}&to=${now - 1}`, "from must be before to"],
     ] as const) {
       const response = await request(session.harness.app, `/v1/alerts?${query}`, {
         cookies: session.adminJar,

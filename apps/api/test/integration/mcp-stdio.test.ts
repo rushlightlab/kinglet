@@ -837,6 +837,7 @@ describe("MCP stdio contract", () => {
     if (!Array.isArray(limitedBody.groups)) throw new Error("count_events did not return groups");
 
     expect(limitedBody.groups).toHaveLength(1);
+    expect(limitedBody.total).toBe(4);
     expect(limitedBody.truncated).toBe(true);
 
     const byLevel = await client.callTool("count_events", { groupBy: "level" });
