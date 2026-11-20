@@ -46,7 +46,7 @@ status, and row count.
   "mcpServers": {
     "kinglet": {
       "command": "npx",
-      "args": ["-y", "@kinglet/mcp"],
+      "args": ["-y", "@kinglet/mcp@0.3.0"],
       "env": {
         "KINGLET_URL": "https://logs.example.com",
         "KINGLET_MCP_KEY": "km_..."
@@ -63,7 +63,7 @@ On Windows, wrap the command:
   "mcpServers": {
     "kinglet": {
       "command": "cmd",
-      "args": ["/c", "npx", "-y", "@kinglet/mcp"],
+      "args": ["/c", "npx", "-y", "@kinglet/mcp@0.3.0"],
       "env": {
         "KINGLET_URL": "https://logs.example.com",
         "KINGLET_MCP_KEY": "km_..."
@@ -99,7 +99,7 @@ client supports it, over a literal secret.
   "mcpServers": {
     "kinglet": {
       "command": "npx",
-      "args": ["-y", "@kinglet/mcp"],
+      "args": ["-y", "@kinglet/mcp@0.3.0"],
       "env": {
         "KINGLET_URL": "https://logs.example.com",
         "KINGLET_MCP_KEY": "km_..."
@@ -119,7 +119,7 @@ client supports it, over a literal secret.
     "kinglet": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@kinglet/mcp"],
+      "args": ["-y", "@kinglet/mcp@0.3.0"],
       "env": {
         "KINGLET_URL": "https://logs.example.com",
         "KINGLET_MCP_KEY": "km_..."
@@ -139,11 +139,11 @@ the config is shared.
 ```toml
 [mcp_servers.kinglet]
 command = "npx"
-args = ["-y", "@kinglet/mcp"]
+args = ["-y", "@kinglet/mcp@0.3.0"]
 env = { KINGLET_URL = "https://logs.example.com", KINGLET_MCP_KEY = "km_..." }
 ```
 
-On Windows, use `command = "cmd"` and `args = ["/c", "npx", "-y", "@kinglet/mcp"]`.
+On Windows, use `command = "cmd"` and `args = ["/c", "npx", "-y", "@kinglet/mcp@0.3.0"]`.
 
 ### Generic stdio
 
