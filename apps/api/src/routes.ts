@@ -632,6 +632,20 @@ export function registerRoutes(
     }
 
     if (disabled !== undefined) {
+      if (disabled) {
+        // Disabling is an offboarding event: keys must not come back on unban.
+        // Revoke before the ban so a failed deletion leaves the account active
+        // instead of banned with live keys; a failed ban can then be retried.
+        try {
+          const revoked = await deleteApiKeysByOwner(storage, userId);
+
+          if (revoked > 0)
+            console.log(`[kinglet] revoked ${revoked} API key(s) for disabled user ${userId}`);
+        } catch {
+          return c.json({ error: "could not revoke owned keys; account unchanged" }, 500);
+        }
+      }
+
       try {
         await setManagedUserDisabled(storage, auth, c.req.raw.headers, userId, disabled);
       } catch (err) {
@@ -639,14 +653,6 @@ export function registerRoutes(
           { error: err instanceof Error ? err.message : "could not update user status" },
           400,
         );
-      }
-
-      if (disabled) {
-        // Disabling is an offboarding event: keys must not come back on unban.
-        const revoked = await deleteApiKeysByOwner(storage, userId);
-
-        if (revoked > 0)
-          console.log(`[kinglet] revoked ${revoked} API key(s) for disabled user ${userId}`);
       }
     }
 

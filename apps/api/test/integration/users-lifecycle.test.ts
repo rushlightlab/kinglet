@@ -522,6 +522,90 @@ describe("offboarding side effects", () => {
     expect(keyAfter.status).toBe(200);
   });
 
+  it("leaves a member active with live keys when disable-time revocation fails", async () => {
+    const { harness, data } = ctx();
+
+    const target = await seedUser(harness.auth, harness.storage, {
+      email: "disable-revocation-failure@example.test",
+      role: "member",
+    });
+
+    await addToProject(target.id, data.projects.alpha.id);
+
+    const key = await seedApiKey(harness.storage, {
+      projectId: data.projects.alpha.id,
+      name: "disable-revocation-failure-key",
+      scopes: ["ingest", "query"],
+      createdBy: target.id,
+    });
+
+    expect(await eventCountWithKey(key.plaintext)).toBe(0);
+    expect(await apiKeyRows(harness, key.key.id)).toBe(1);
+
+    const deleteSpy = vi.spyOn(harness.storage.db, "delete");
+
+    deleteSpy.mockImplementationOnce(() => {
+      throw new Error("injected disable-time key deletion failure");
+    });
+
+    try {
+      const response = await adminRequest("/v1/users/" + target.id, {
+        method: "PATCH",
+        body: { disabled: true },
+      });
+
+      expect(response.status).toBe(500);
+      expect(errorOf(await jsonBody(response))).toBe(
+        "could not revoke owned keys; account unchanged",
+      );
+    } finally {
+      deleteSpy.mockRestore();
+    }
+
+    const row = await requireUserRow(target.id);
+
+    expect(row.role).toBe("member");
+    expect(row.disabled).toBe(false);
+    expect(await apiKeyRows(harness, key.key.id)).toBe(1);
+
+    const keyAfterFailure = await request(harness.app, "/v1/events", {
+      bearer: key.plaintext,
+    });
+
+    expect(keyAfterFailure.status).toBe(200);
+
+    // Retry after the injected failure: revocation succeeds, then the ban.
+    const retried = await adminRequest("/v1/users/" + target.id, {
+      method: "PATCH",
+      body: { disabled: true },
+    });
+
+    expect(retried.status).toBe(200);
+    expect(objectAt((await jsonBody(retried)).user, "user").disabled).toBe(true);
+    expect(await apiKeyRows(harness, key.key.id)).toBe(0);
+
+    const keyAfterDisable = await request(harness.app, "/v1/events", {
+      bearer: key.plaintext,
+    });
+
+    expect(keyAfterDisable.status).toBe(401);
+
+    const unbanned = await adminRequest("/v1/users/" + target.id, {
+      method: "PATCH",
+      body: { disabled: false },
+    });
+
+    expect(unbanned.status).toBe(200);
+    expect(objectAt((await jsonBody(unbanned)).user, "user").disabled).toBe(false);
+
+    const keyAfterUnban = await request(harness.app, "/v1/events", {
+      bearer: key.plaintext,
+    });
+
+    expect(keyAfterUnban.status).toBe(401);
+    expect(await apiKeyRows(harness, key.key.id)).toBe(0);
+  });
+
   it("unbanning a member does not restore keys revoked on disable", async () => {
     const { harness, data } = ctx();
 
