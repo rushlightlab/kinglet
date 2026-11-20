@@ -32,6 +32,20 @@ function findKey(keys: JsonValue[], id: string): JsonObject | null {
   return null;
 }
 
+async function addToProject(userId: string, projectId: string): Promise<void> {
+  const { session } = ctx();
+
+  const added = await request(session.harness.app, "/v1/projects/" + projectId + "/members", {
+    method: "POST",
+    body: { userId },
+    cookies: session.adminJar,
+  });
+
+  if (added.status !== 201) {
+    throw new Error(`keys suite: could not add ${userId} to project ${projectId}`);
+  }
+}
+
 async function addMember(email: string): Promise<SeededUser> {
   const { session } = ctx();
   const { data } = session;
@@ -42,19 +56,7 @@ async function addMember(email: string): Promise<SeededUser> {
     role: "member",
   });
 
-  const added = await request(
-    session.harness.app,
-    "/v1/projects/" + data.projects.alpha.id + "/members",
-    {
-      method: "POST",
-      body: { userId: user.id },
-      cookies: session.adminJar,
-    },
-  );
-
-  if (added.status !== 201) {
-    throw new Error(`keys suite: could not add ${email} to alpha (${added.status})`);
-  }
+  await addToProject(user.id, data.projects.alpha.id);
 
   return user;
 }
@@ -394,15 +396,33 @@ describe("API key lifecycle", () => {
     const { harness, data } = session;
     const user = await addMember("removed-member@example.test");
 
-    const key = await seedApiKey(harness.storage, {
+    await addToProject(user.id, data.projects.beta.id);
+
+    const firstAlphaKey = await seedApiKey(harness.storage, {
       projectId: data.projects.alpha.id,
-      name: "removed-member-key",
+      name: "removed-member-key-1",
       scopes: ["ingest", "query"],
       createdBy: user.id,
     });
 
-    const before = await request(harness.app, "/v1/events", { bearer: key.plaintext });
-    expect(before.status).toBe(200);
+    const secondAlphaKey = await seedApiKey(harness.storage, {
+      projectId: data.projects.alpha.id,
+      name: "removed-member-key-2",
+      scopes: ["ingest", "query"],
+      createdBy: user.id,
+    });
+
+    const betaKey = await seedApiKey(harness.storage, {
+      projectId: data.projects.beta.id,
+      name: "removed-member-beta-key",
+      scopes: ["ingest", "query"],
+      createdBy: user.id,
+    });
+
+    for (const key of [firstAlphaKey, secondAlphaKey, betaKey]) {
+      const before = await request(harness.app, "/v1/events", { bearer: key.plaintext });
+      expect(before.status).toBe(200);
+    }
 
     const removed = await request(
       harness.app,
@@ -411,26 +431,45 @@ describe("API key lifecycle", () => {
     );
 
     expect(removed.status).toBe(200);
-    expect((await jsonBody(removed)).revokedKeys).toBe(1);
+    expect((await jsonBody(removed)).revokedKeys).toBe(2);
 
-    const after = await request(harness.app, "/v1/events", { bearer: key.plaintext });
-    expect(after.status).toBe(401);
+    for (const key of [firstAlphaKey, secondAlphaKey]) {
+      const after = await request(harness.app, "/v1/events", { bearer: key.plaintext });
+      expect(after.status).toBe(401);
+    }
+
+    const betaStillWorks = await request(harness.app, "/v1/events", {
+      bearer: betaKey.plaintext,
+    });
+
+    expect(betaStillWorks.status).toBe(200);
   });
 
-  it("revokes owned keys when a member is demoted", async () => {
+  it("revokes owned keys in every project when a member is demoted", async () => {
     const { session } = ctx();
     const { harness, data } = session;
     const user = await addMember("demoted-member@example.test");
 
-    const key = await seedApiKey(harness.storage, {
+    await addToProject(user.id, data.projects.beta.id);
+
+    const alphaKey = await seedApiKey(harness.storage, {
       projectId: data.projects.alpha.id,
-      name: "demoted-member-key",
+      name: "demoted-member-alpha-key",
       scopes: ["ingest", "query"],
       createdBy: user.id,
     });
 
-    const before = await request(harness.app, "/v1/events", { bearer: key.plaintext });
-    expect(before.status).toBe(200);
+    const betaKey = await seedApiKey(harness.storage, {
+      projectId: data.projects.beta.id,
+      name: "demoted-member-beta-key",
+      scopes: ["ingest", "query"],
+      createdBy: user.id,
+    });
+
+    for (const key of [alphaKey, betaKey]) {
+      const before = await request(harness.app, "/v1/events", { bearer: key.plaintext });
+      expect(before.status).toBe(200);
+    }
 
     const demoted = await request(harness.app, "/v1/users/" + user.id, {
       method: "PATCH",
@@ -441,8 +480,10 @@ describe("API key lifecycle", () => {
     expect(demoted.status).toBe(200);
     expect(objectAt((await jsonBody(demoted)).user, "user").role).toBe("viewer");
 
-    const after = await request(harness.app, "/v1/events", { bearer: key.plaintext });
-    expect(after.status).toBe(401);
+    for (const key of [alphaKey, betaKey]) {
+      const after = await request(harness.app, "/v1/events", { bearer: key.plaintext });
+      expect(after.status).toBe(401);
+    }
   });
 
   it("still revokes owned keys when member removal is retried", async () => {
@@ -458,11 +499,18 @@ describe("API key lifecycle", () => {
 
     expect(first.status).toBe(200);
 
-    // A leftover key from the first attempt must not survive a retry, even
+    // Leftover keys from the first attempt must not survive a retry, even
     // though the membership row is already gone (404 for the membership).
-    const leftover = await seedApiKey(harness.storage, {
+    const firstLeftover = await seedApiKey(harness.storage, {
       projectId: data.projects.alpha.id,
-      name: "retry-leftover-key",
+      name: "retry-leftover-key-1",
+      scopes: ["ingest", "query"],
+      createdBy: user.id,
+    });
+
+    const secondLeftover = await seedApiKey(harness.storage, {
+      projectId: data.projects.alpha.id,
+      name: "retry-leftover-key-2",
       scopes: ["ingest", "query"],
       createdBy: user.id,
     });
@@ -475,13 +523,29 @@ describe("API key lifecycle", () => {
     expect(retry.status).toBe(404);
     expect(errorOf(await jsonBody(retry))).toBe("member not found");
 
-    const after = await request(harness.app, "/v1/events", { bearer: leftover.plaintext });
-    expect(after.status).toBe(401);
+    for (const key of [firstLeftover, secondLeftover]) {
+      const after = await request(harness.app, "/v1/events", { bearer: key.plaintext });
+      expect(after.status).toBe(401);
+    }
   });
 
   it("does not let an API key manage project keys", async () => {
     const { session } = ctx();
-    const { harness, data } = session;
+    const { harness, data, memberJar } = session;
+
+    const created = await request(harness.app, "/v1/projects/" + data.projects.alpha.id + "/keys", {
+      method: "POST",
+      body: { name: "key-management-target", scopes: ["ingest", "query"] },
+      cookies: memberJar,
+    });
+
+    expect(created.status).toBe(201);
+
+    const createdBody = await jsonBody(created);
+    const targetId = stringAt(objectAt(createdBody.key, "key").id, "key.id");
+    const targetPlaintext = stringAt(createdBody.plaintext, "plaintext");
+    const keyUri = "/v1/keys/" + targetId + "?project=" + data.projects.alpha.id;
+    const rotateUri = "/v1/keys/" + targetId + "/rotate?project=" + data.projects.alpha.id;
 
     const list = await request(harness.app, "/v1/projects/" + data.projects.alpha.id + "/keys", {
       bearer: data.keys.alpha.plaintext,
@@ -496,5 +560,33 @@ describe("API key lifecycle", () => {
     });
 
     expect(create.status).toBe(403);
+
+    const update = await request(harness.app, keyUri, {
+      method: "PATCH",
+      body: { scopes: ["ingest"] },
+      bearer: data.keys.alpha.plaintext,
+    });
+
+    expect(update.status).toBe(403);
+
+    const rotate = await request(harness.app, rotateUri, {
+      method: "POST",
+      bearer: data.keys.alpha.plaintext,
+    });
+
+    expect(rotate.status).toBe(403);
+
+    const revoke = await request(harness.app, keyUri, {
+      method: "DELETE",
+      bearer: data.keys.alpha.plaintext,
+    });
+
+    expect(revoke.status).toBe(403);
+
+    const targetStillWorks = await request(harness.app, "/v1/events", {
+      bearer: targetPlaintext,
+    });
+
+    expect(targetStillWorks.status).toBe(200);
   });
 });

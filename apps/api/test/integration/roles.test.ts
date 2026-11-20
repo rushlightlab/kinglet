@@ -158,9 +158,11 @@ describe("role permissions", () => {
     for (const jar of [memberJar, viewerJar]) {
       const users = await request(harness.app, "/v1/users", { cookies: jar });
       expect(users.status).toBe(403);
+      expect(errorOf(await jsonBody(users))).toBe("forbidden");
 
       const status = await request(harness.app, "/v1/system/status", { cookies: jar });
       expect(status.status).toBe(403);
+      expect(errorOf(await jsonBody(status))).toBe("forbidden");
     }
   });
 });

@@ -8,7 +8,13 @@ import type { JsonObject, JsonValue } from "../../src/json.js";
  */
 
 export async function jsonBody(response: Response): Promise<JsonObject> {
-  const parsed: unknown = await response.json();
+  let parsed: unknown;
+
+  try {
+    parsed = await response.json();
+  } catch {
+    throw new Error(`expected JSON, received status ${response.status} with a non-JSON body`);
+  }
 
   if (!isJsonObject(parsed)) {
     throw new Error(`expected a JSON object, received status ${response.status}`);

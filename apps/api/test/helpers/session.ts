@@ -52,7 +52,13 @@ export async function createTestSession(): Promise<TestSession> {
       close: harness.close,
     };
   } catch (err) {
-    await harness.close();
+    try {
+      await harness.close();
+    } catch (closeErr) {
+      // Preserve the setup failure; cleanup trouble must not mask it.
+      console.warn("[kinglet-test] session cleanup failed:", closeErr);
+    }
+
     throw err;
   }
 }

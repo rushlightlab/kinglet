@@ -209,19 +209,24 @@ describe("ingest formats", () => {
 
     const badFieldsBody = await jsonBody(badFields);
     expect(badFieldsBody.accepted).toBe(0);
+    expect(badFieldsBody.rejected).toBe(1);
     expect(arrayAt(badFieldsBody.errors, "errors")[0]).toContain("fields must be a JSON object");
 
     const missingMessage = await ingest({ level: "error" }, seeded.keys.alpha.plaintext);
     expect(missingMessage.status).toBe(422);
-    expect(arrayAt((await jsonBody(missingMessage)).errors, "errors")[0]).toContain(
-      "missing message",
-    );
+
+    const missingBody = await jsonBody(missingMessage);
+    expect(missingBody.accepted).toBe(0);
+    expect(missingBody.rejected).toBe(1);
+    expect(arrayAt(missingBody.errors, "errors")[0]).toContain("missing message");
 
     const notAnObject = await ingest([42], seeded.keys.alpha.plaintext);
     expect(notAnObject.status).toBe(422);
-    expect(arrayAt((await jsonBody(notAnObject)).errors, "errors")[0]).toContain(
-      "event must be an object",
-    );
+
+    const notAnObjectBody = await jsonBody(notAnObject);
+    expect(notAnObjectBody.accepted).toBe(0);
+    expect(notAnObjectBody.rejected).toBe(1);
+    expect(arrayAt(notAnObjectBody.errors, "errors")[0]).toContain("event must be an object");
 
     const mixed = await ingest(
       { events: [{ message: "valid sibling" }, { nope: true }] },
@@ -246,8 +251,8 @@ describe("ingest formats", () => {
     expect(response.status).toBe(413);
   });
 
-  it("enforces the per-project byte quota", async () => {
-    const limited = await createTestHarness({ config: { maxProjectBytes: 32 } });
+  it("enforces the per-project byte quota cumulatively", async () => {
+    const limited = await createTestHarness({ config: { maxProjectBytes: 20 } });
 
     try {
       const project = await seedProject(limited.storage, { name: "Quota" });
@@ -258,14 +263,30 @@ describe("ingest formats", () => {
         scopes: ["ingest", "query"],
       });
 
-      const response = await request(limited.app, "/v1/events", {
+      const first = await request(limited.app, "/v1/events", {
         method: "POST",
-        body: { message: "q".repeat(128) },
+        body: { message: "first-ok" },
         bearer: key.plaintext,
       });
 
-      expect(response.status).toBe(507);
-      expect(errorOf(await jsonBody(response))).toContain("project storage limit reached");
+      expect(first.status).toBe(200);
+      expect((await jsonBody(first)).accepted).toBe(1);
+
+      // 8 stored bytes + a 20-byte message crosses the 20-byte cap.
+      const second = await request(limited.app, "/v1/events", {
+        method: "POST",
+        body: { message: "second-event-payload" },
+        bearer: key.plaintext,
+      });
+
+      expect(second.status).toBe(507);
+      expect(errorOf(await jsonBody(second))).toContain("project storage limit reached");
+
+      const stored = await request(limited.app, "/v1/events", { bearer: key.plaintext });
+      const messages = messagesOf(await jsonBody(stored));
+
+      expect(messages).toEqual(["first-ok"]);
+      expect(messages).not.toContain("second-event-payload");
     } finally {
       await limited.close();
     }
@@ -299,6 +320,12 @@ describe("ingest formats", () => {
 
       expect(second.status).toBe(429);
       expect(errorOf(await jsonBody(second))).toContain("project event limit reached");
+
+      const stored = await request(limited.app, "/v1/events", { bearer: key.plaintext });
+      const messages = messagesOf(await jsonBody(stored));
+
+      expect(messages).toEqual(["first event"]);
+      expect(messages).not.toContain("second event");
     } finally {
       await limited.close();
     }
@@ -330,9 +357,17 @@ describe("query filters", () => {
     expect(envMessages).toContain("healthcheck ok");
     expect(envMessages).not.toContain("timeout after 30s");
 
+    const phraseSeed = await ingest(
+      { message: "connection reset by peer", level: "warn", service: "api", env: "prod" },
+      bearer,
+    );
+
+    expect(phraseSeed.status).toBe(200);
+
     const phrase = await request(test.app, queryString('"connection refused"'), { bearer });
     const phraseMessages = messagesOf(await jsonBody(phrase));
     expect(phraseMessages).toContain("Connection refused by upstream");
+    expect(phraseMessages).not.toContain("connection reset by peer");
     expect(phraseMessages).not.toContain("timeout after 30s");
 
     const excluded = await request(test.app, queryString("-healthcheck"), { bearer });
@@ -349,17 +384,40 @@ describe("query filters", () => {
   it("filters by the ingesting API key and stays inside the project", async () => {
     const { harness: test, data: seeded } = ctx();
 
-    const response = await request(
+    const second = await seedApiKey(test.storage, {
+      projectId: seeded.projects.alpha.id,
+      name: "alpha-second",
+      scopes: ["ingest", "query"],
+    });
+
+    const secondIngest = await ingest({ message: "second alpha key event" }, second.plaintext);
+
+    expect(secondIngest.status).toBe(200);
+
+    const alphaFiltered = await request(
       test.app,
       "/v1/events?q=" + encodeURIComponent("key:" + seeded.keys.alpha.key.id),
       { bearer: seeded.keys.alpha.plaintext },
     );
 
-    expect(response.status).toBe(200);
+    expect(alphaFiltered.status).toBe(200);
 
-    const messages = messagesOf(await jsonBody(response));
-    expect(messages).toContain("Connection refused by upstream");
-    expect(messages).not.toContain("beta only event");
+    const alphaMessages = messagesOf(await jsonBody(alphaFiltered));
+    expect(alphaMessages).toContain("Connection refused by upstream");
+    expect(alphaMessages).not.toContain("second alpha key event");
+    expect(alphaMessages).not.toContain("beta only event");
+
+    const secondFiltered = await request(
+      test.app,
+      "/v1/events?q=" + encodeURIComponent("key:" + second.key.id),
+      { bearer: seeded.keys.alpha.plaintext },
+    );
+
+    expect(secondFiltered.status).toBe(200);
+
+    const secondMessages = messagesOf(await jsonBody(secondFiltered));
+    expect(secondMessages).toContain("second alpha key event");
+    expect(secondMessages).not.toContain("Connection refused by upstream");
   });
 
   it("rejects an over-long filter expression", async () => {
