@@ -111,9 +111,10 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
     throw new Error("Playwright config is missing use.baseURL for the E2E server");
   }
 
-  fs.mkdirSync(E2E_DIR, { recursive: true });
+  fs.mkdirSync(E2E_DIR, { recursive: true, mode: 0o700 });
   fs.rmSync(ADMIN_STATE_PATH, { force: true });
   fs.rmSync(MEMBER_STATE_PATH, { force: true });
+  fs.rmSync(SEED_PATH, { force: true });
 
   await waitForHealth(baseURL);
 
@@ -277,7 +278,7 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
       apiKey: createdKey.plaintext,
     };
 
-    fs.writeFileSync(SEED_PATH, JSON.stringify(seed, null, 2));
+    fs.writeFileSync(SEED_PATH, JSON.stringify(seed, null, 2), { mode: 0o600 });
   } finally {
     if (ingest !== null) await ingest.dispose();
 

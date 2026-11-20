@@ -304,6 +304,7 @@ the database, manifests, logs, or API responses.
 | Env var                                      | Default                                       | What it does                                                                          |
 | -------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------- |
 | `KINGLET_PORT`                               | `3000`                                        | HTTP port                                                                             |
+| `KINGLET_HOST`                               | _(all interfaces)_                            | Bind address; set `127.0.0.1` for a loopback-only listener                            |
 | `KINGLET_STORAGE`                            | `auto`                                        | `sqlite`, `libsql`, or `auto` (picks by db path scheme)                               |
 | `KINGLET_DB_PATH`                            | `data/kinglet.db` (image: `/data/kinglet.db`) | Plain path → SQLite; `libsql://`/`https://`/`file:` → libSQL                          |
 | `KINGLET_DB_AUTH_TOKEN`                      | —                                             | Auth token for remote libSQL/Turso databases                                          |

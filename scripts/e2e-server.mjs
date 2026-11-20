@@ -22,7 +22,7 @@ const apiEntry = path.join(repoRoot, "apps", "api", "dist", "index.js");
 const webIndex = path.join(repoRoot, "apps", "web", "dist", "index.html");
 
 const port = Number(process.env.KINGLET_E2E_PORT ?? "3311");
-const baseURL = process.env.KINGLET_E2E_BASE_URL ?? `http://127.0.0.1:${port}`;
+const baseURL = `http://127.0.0.1:${port}`;
 const stateDir = process.env.KINGLET_E2E_STATE_DIR ?? path.join(repoRoot, ".e2e");
 const adminEmail = process.env.KINGLET_E2E_ADMIN_EMAIL;
 const adminPassword = process.env.KINGLET_E2E_ADMIN_PASSWORD;
@@ -48,7 +48,7 @@ if (!adminEmail || !adminPassword) {
   fail("KINGLET_E2E_ADMIN_EMAIL and KINGLET_E2E_ADMIN_PASSWORD must be set.");
 }
 
-fs.mkdirSync(stateDir, { recursive: true });
+fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
 
 const serverStatePath = path.join(stateDir, "server.json");
 
@@ -110,6 +110,7 @@ function apiEnvironment() {
   Object.assign(env, {
     KINGLET_DB_PATH: dbPath,
     KINGLET_PORT: String(port),
+    KINGLET_HOST: "127.0.0.1",
     KINGLET_BASE_URL: baseURL,
     KINGLET_ADMIN_EMAIL: adminEmail,
     KINGLET_ADMIN_PASSWORD: adminPassword,
@@ -259,6 +260,7 @@ fs.writeFileSync(
     null,
     2,
   ),
+  { mode: 0o600 },
 );
 
 console.log(`[e2e] Kinglet API ready at ${baseURL} (database in ${tempDir})`);

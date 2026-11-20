@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
-import { E2E_DIR, SERVER_STATE_PATH } from "./support/state";
+import { E2E_DIR, SEED_PATH, SERVER_STATE_PATH } from "./support/state";
 
 interface ServerState {
   tempDir?: string;
@@ -83,5 +83,6 @@ export default async function globalTeardown(): Promise<void> {
     });
   }
 
+  fs.rmSync(SEED_PATH, { force: true });
   fs.rmSync(E2E_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

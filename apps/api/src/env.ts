@@ -28,6 +28,8 @@ export interface BackupConfig {
 
 export interface Config {
   port: number;
+  /** Bind address for the HTTP listener. Undefined keeps Node's default (all interfaces). */
+  host?: string;
   dbPath: string;
   storageKind: StorageKindSetting;
   dbAuthToken?: string;
@@ -284,6 +286,7 @@ export function loadConfig(): Config {
 
   return {
     port,
+    host: process.env.KINGLET_HOST?.trim() || undefined,
     dbPath,
     storageKind: storageKindEnv(),
     dbAuthToken,

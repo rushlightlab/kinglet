@@ -116,9 +116,26 @@ function describe(m: Monitor): string {
 }
 
 function channelCount(m: Monitor): number {
-  if (m.channelIds !== undefined) return m.channelIds.length;
+  // Linked channels win; otherwise a pre-channel-table monitor still has its
+  // inline destinations, and those count for the card summary.
+  if (m.channelIds !== undefined && m.channelIds.length > 0) return m.channelIds.length;
 
-  return m.channels?.length ?? 0;
+  if ((m.channels?.length ?? 0) > 0) return m.channels?.length ?? 0;
+
+  return 0;
+}
+
+/**
+ * A monitor from before reusable channels has inline destinations and no
+ * linked channel ids. The API always returns `channelIds` as an array, so an
+ * empty array plus inline channels is the legacy shape.
+ */
+function isLegacyMonitor(monitor: Monitor | null): boolean {
+  return (
+    monitor !== null &&
+    (monitor.channels?.length ?? 0) > 0 &&
+    (monitor.channelIds?.length ?? 0) === 0
+  );
 }
 
 function channelHealthText(channel: NotificationChannelSummary): string {
@@ -555,11 +572,9 @@ function MonitorForm({
 }) {
   // A monitor that predates the channel table only has inline `channels`.
   // Keep that editor until the admin moves it to reusable channels.
-  const [legacyMode, setLegacyMode] = useState(
-    initial !== null && initial.channelIds === undefined,
-  );
+  const [legacyMode, setLegacyMode] = useState(isLegacyMonitor(initial));
 
-  const switchedFromLegacy = initial !== null && initial.channelIds === undefined && !legacyMode;
+  const switchedFromLegacy = isLegacyMonitor(initial) && !legacyMode;
 
   const [form, setForm] = useState<FormState>(() => ({
     name: initial?.name ?? "",

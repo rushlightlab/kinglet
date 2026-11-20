@@ -13,7 +13,9 @@ pnpm test:e2e
 `pnpm test:e2e` fails immediately with a build instruction when either the
 built API or the built UI is missing. The suite starts the API itself on
 `127.0.0.1:3311` (override with `KINGLET_E2E_PORT`) and removes its temporary
-database when the run finishes.
+database when the run finishes. The server is explicitly bound to loopback with
+`KINGLET_HOST=127.0.0.1`; there is no base-URL override, so the suite cannot be
+pointed at a non-loopback host.
 
 ## Browser
 
@@ -25,11 +27,14 @@ PLAYWRIGHT_CHANNEL=chromium pnpm test:e2e
 PLAYWRIGHT_CHANNEL=chrome pnpm test:e2e
 ```
 
-CI uses the bundled Chromium and must install it once:
+CI uses the bundled Chromium (`CI=true`) and must install it once:
 
 ```bash
 pnpm exec playwright install --with-deps chromium
 ```
+
+On a Linux runner the full sequence is `pnpm install --frozen-lockfile`,
+`pnpm build`, the browser install above, then `pnpm test:e2e`.
 
 ## Layout
 
@@ -45,3 +50,16 @@ pnpm exec playwright install --with-deps chromium
 Tests run serially against one server fixture. Created monitors, channels,
 and MCP keys use per-run names and are removed by the test that creates them;
 the server fixture discards the rest with the temporary database.
+
+## State and cleanup
+
+`.e2e/` holds the shared session cookies and the test-only seed key. It is
+created with mode `0700`; `seed.json` and the two storage-state files are
+written with mode `0600`, and the directory is gitignored. Global teardown
+removes `.e2e/` and the temporary database directory.
+
+A hard-killed run (for example, a force-closed terminal) can leave `.e2e/` or
+a `kinglet-e2e-*` directory under the OS temp folder. The next server start
+removes stale `kinglet-e2e-*` runs, and global setup deletes/recreates its state
+files, but you can also delete both manually after an abort. The seed key in a
+stale `.e2e/seed.json` is useless once its temporary database is gone.

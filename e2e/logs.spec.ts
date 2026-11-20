@@ -9,6 +9,31 @@ import {
 import { readSeed } from "./support/state";
 import { logRow } from "./support/ui";
 
+/**
+ * Instrument EventSource from the first document so the test can wait for the
+ * real `open` event of /v1/stream instead of guessing with a fixed delay.
+ * `/v1/system/events` (the admin feed) deliberately does not set the flag.
+ */
+const STREAM_READY_INIT = `(() => {
+  const NativeEventSource = window.EventSource;
+  window.__kingletE2eStreamOpen = false;
+  class InstrumentedEventSource extends NativeEventSource {
+    constructor(url, options) {
+      super(url, options);
+      if (String(url).includes("/v1/stream")) {
+        this.addEventListener(
+          "open",
+          () => {
+            window.__kingletE2eStreamOpen = true;
+          },
+          { once: true },
+        );
+      }
+    }
+  }
+  window.EventSource = InstrumentedEventSource;
+})();`;
+
 test("search and filters narrow the log table", async ({ page }) => {
   await page.goto("/");
 
@@ -50,11 +75,11 @@ test("the event drawer shows the message, service, and fields", async ({ page })
 test("the live tail renders a newly ingested event", async ({ page }) => {
   const seed = readSeed();
 
+  await page.addInitScript(STREAM_READY_INIT);
   await page.goto("/");
   await expect(page.getByRole("switch", { name: "live" })).toHaveAttribute("aria-checked", "true");
   await expect(logRow(page, EVENT_NEEDLE)).toBeVisible();
-  // Give the SSE subscription a moment to open before publishing.
-  await page.waitForTimeout(500);
+  await page.waitForFunction("window.__kingletE2eStreamOpen === true");
 
   const message = `e2e live gamma ${seed.runId} ${Date.now()}`;
 

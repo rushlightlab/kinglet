@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { LEGACY_MONITOR_NAME } from "./support/data";
 import { MEMBER_STATE_PATH, readSeed } from "./support/state";
+import { cardWithText } from "./support/ui";
 
 interface MonitorChannel {
   type: string;
@@ -25,6 +26,23 @@ test("a member sees legacy monitor webhooks masked", async ({ page }) => {
   await page.goto("/monitors");
   await expect(page.getByText(LEGACY_MONITOR_NAME)).toBeVisible();
   await expect(page.locator("body")).not.toContainText("legacy-e2e-secret");
+
+  const card = cardWithText(page, LEGACY_MONITOR_NAME);
+
+  await expect(card.getByText("paused", { exact: true })).toBeVisible();
+  await expect(card).toContainText("1 channel");
+  await expect(card).not.toContainText("no channels");
+
+  await card.getByRole("button", { name: "edit" }).click();
+
+  const dialog = page.getByRole("dialog");
+
+  await expect(dialog.getByText(/predates reusable channels/)).toBeVisible();
+  await expect(dialog.getByText(/URLs stay hidden/)).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "choose reusable channels" })).toBeVisible();
+  await expect(dialog).not.toContainText("legacy-e2e-secret");
+
+  await dialog.getByRole("button", { name: "Cancel" }).click();
 
   const response = await page.request.get(`/v1/monitors?project=${seed.projects.defaultId}`);
 

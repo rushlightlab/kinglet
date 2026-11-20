@@ -103,7 +103,7 @@ async function main(): Promise<void> {
     },
   });
 
-  const server = serve({ fetch: app.fetch, port: config.port }, () =>
+  const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, () =>
     printBanner(config, storage, bootstrap),
   );
 

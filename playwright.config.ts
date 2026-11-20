@@ -17,7 +17,7 @@ import { ADMIN_STATE_PATH, E2E_DIR } from "./e2e/support/state";
  */
 
 const port = Number(process.env.KINGLET_E2E_PORT ?? "3311");
-const baseURL = process.env.KINGLET_E2E_BASE_URL ?? `http://127.0.0.1:${port}`;
+const baseURL = `http://127.0.0.1:${port}`;
 
 function installedChrome(): string | undefined {
   const override = process.env.PLAYWRIGHT_CHANNEL?.trim();
@@ -92,7 +92,6 @@ export default defineConfig({
     stderr: "pipe",
     env: {
       KINGLET_E2E_PORT: String(port),
-      KINGLET_E2E_BASE_URL: baseURL,
       KINGLET_E2E_STATE_DIR: E2E_DIR,
       KINGLET_E2E_ADMIN_EMAIL: ADMIN_EMAIL,
       KINGLET_E2E_ADMIN_PASSWORD: ADMIN_PASSWORD,
