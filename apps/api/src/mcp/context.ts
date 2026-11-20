@@ -7,8 +7,9 @@
  * projects from `/v1/projects` instead.
  *
  * The response is intentionally tiny: project identity, the key's own public
- * metadata, derived capabilities, and server version/retention. It never
- * includes other projects, URLs, secrets, or server configuration.
+ * metadata, derived capabilities, a configuration-derived write-gate flag, and
+ * server version/retention. It never includes other projects, URLs, secrets, or
+ * unrelated server configuration.
  */
 
 import { eq } from "drizzle-orm";

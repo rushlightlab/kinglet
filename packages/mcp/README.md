@@ -209,7 +209,9 @@ Truncated responses set `truncated: true` and `search_events` returns a
 `monitors.write` implies `monitors.read`. MCP keys never have `logs.write`.
 Monitor write tools are registered only when the key has `monitors.write` and
 the server sets `KINGLET_MCP_ALLOW_MONITOR_WRITES=1`; hiding a tool is UX only,
-and every write remains API-authorized.
+and every write remains API-authorized. A newer MCP package against an older
+server without `monitorWritesEnabled` stays read-only until the server is
+upgraded; restart the MCP client after a transient context failure.
 `search_events` accepts an optional `fields` list (`id`, `uid`, `ts`, `level`,
 `service`, `env`, `message`, `fields`; max 8, unique) to return only those keys.
 Projection never changes `nextCursor` or the underlying query.

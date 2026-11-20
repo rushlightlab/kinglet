@@ -152,7 +152,8 @@ afterAll(async () => {
 describe("MCP conditional monitor write tools", () => {
   it("advertises all 15 tools only to a monitors.write key when the gate is on", async () => {
     const test = current();
-    const writeTools = toolNames(await test.writeClient.listTools());
+    const writeToolDefs = await test.writeClient.listTools();
+    const writeTools = toolNames(writeToolDefs);
     const readTools = toolNames(await test.readClient.listTools());
 
     expect(writeTools).toHaveLength(15);
@@ -162,6 +163,23 @@ describe("MCP conditional monitor write tools", () => {
     expect(readTools).toHaveLength(12);
 
     for (const name of WRITE_TOOLS) expect(readTools).not.toContain(name);
+
+    const missingWriteTool = await test.readClient.callTool("create_monitor", {
+      name: "must-not-exist",
+      kind: "match",
+      query: "level>=error",
+    });
+
+    expect(toolFailed(missingWriteTool)).toBe(true);
+    expect(toolText(missingWriteTool)).toContain("Tool create_monitor not found");
+
+    const createTool = writeToolDefs.find((tool) => tool.name === "create_monitor");
+    const updateTool = writeToolDefs.find((tool) => tool.name === "update_monitor");
+    const deleteTool = writeToolDefs.find((tool) => tool.name === "delete_monitor");
+
+    expect(createTool?.annotations?.readOnlyHint).toBe(false);
+    expect(updateTool?.annotations?.readOnlyHint).toBe(false);
+    expect(deleteTool?.annotations?.destructiveHint).toBe(true);
 
     const readContext = parseToolJson(toolText(await test.readClient.callTool("get_context")));
     const writeContext = parseToolJson(toolText(await test.writeClient.callTool("get_context")));
@@ -219,12 +237,13 @@ describe("MCP conditional monitor write tools", () => {
   it("starts read-only when the startup context request fails", async () => {
     const port = await reserveClosedLoopbackPort();
     const key = "km_task15_context_failure_not_a_real_secret";
+    const apiUrl = `http://127.0.0.1:${port}`;
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "kinglet-mcp-fallback-cwd-"));
     let client: McpStdioClient | null = null;
 
     try {
       client = await McpStdioClient.start({
-        url: `http://127.0.0.1:${port}`,
+        url: apiUrl,
         key,
         cwd,
         cliPath: CLI_PATH,
@@ -240,8 +259,10 @@ describe("MCP conditional monitor write tools", () => {
       for (const name of WRITE_TOOLS) expect(names).not.toContain(name);
 
       expect(names).toContain("get_context");
+      expect(client.stderrLines).toHaveLength(1);
       expect(stderr).toContain("context request failed; starting with read-only tools");
       expect(stderr).not.toContain(key);
+      expect(stderr).not.toContain(apiUrl);
       expect(client.stdoutGarbage).toEqual([]);
     } finally {
       await client?.close();
