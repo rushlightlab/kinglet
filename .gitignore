@@ -3,6 +3,10 @@ dist/
 .turbo/
 data/
 coverage/
+.e2e/
+test-results/
+playwright-report/
+blob-report/
 *.db
 *.db-shm
 *.db-wal
