@@ -56,6 +56,9 @@ stdio MCP server.
 - Web: React 19, TanStack Router/Virtual, Vite 8, Tailwind 4, shadcn/Radix.
 - Tooling: pnpm 12, Turbo, oxlint, oxfmt, anti-slop lint rules.
 - Versions in each `package.json` are authoritative; do not guess upgrades.
+- Node TypeScript packages (`apps/api`, `packages/mcp`, `packages/sdk-node`)
+  use `.ts` relative import specifiers; `tsc` rewrites them to `.js` in `dist`.
+  The web app and Playwright E2E keep bundler-style extensionless imports.
 
 ## Local development
 
