@@ -1,8 +1,11 @@
 import { Decrypter } from "age-encryption";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { createInterface } from "node:readline";
 import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { createZstdDecompress } from "node:zlib";
 import { isUuid } from "../auth/ids.js";
 import { describeBackupError } from "../backups/s3.js";
@@ -13,10 +16,7 @@ import type { Storage } from "../storage/index.js";
 import * as schema from "../storage/schema.js";
 import { archiveLevelIndex, parseArchiveLine } from "./ndjson.js";
 import { ArchiveError, isArchiveDate } from "./types.js";
-import type { ArchiveImportResult } from "./types.js";
-
-/** Transaction executor with the same query surface as the database. */
-type ImportDb = Parameters<Parameters<KingletDb["transaction"]>[0]>[0];
+import type { ArchiveImportResult, ArchiveLine } from "./types.js";
 
 /**
  * Streamed archive import.
@@ -42,7 +42,7 @@ export interface ImportArchiveOptions {
   /** Inclusive UTC date bounds, `YYYY-MM-DD`. */
   from?: string;
   to?: string;
-  /** Kept for CLI parity; streaming import does not need local temp files. */
+  /** Scratch directory for the verified spool file. */
   dataDir: string;
   passphrase?: string;
   s3: BackupObjectStore;
@@ -201,106 +201,177 @@ async function importPart(
   });
 
   const decompressed = source.pipe(createZstdDecompress()).pipe(hasher);
-  const lines = createInterface({ input: decompressed, crlfDelay: Infinity });
+  let tempDir: string | null = null;
 
   try {
-    // Verify before the transaction commits. A digest mismatch, a cross-project
-    // row, or any parse failure rolls back every event inserted from this part.
-    return await storage.db.transaction(async (tx) => {
-      let imported = 0;
-      let skipped = 0;
-      let batch: ImportRow[] = [];
+    // Spool while downloading so the SQLite write lock is never held across a
+    // network read. Nothing is inserted until the digest is verified.
+    const tempRoot = path.join(options.dataDir, "tmp");
 
-      for await (const raw of lines) {
-        if (raw.trim() === "") continue;
+    await fs.promises.mkdir(tempRoot, { recursive: true, mode: 0o700 });
+    tempDir = await fs.promises.mkdtemp(path.join(tempRoot, "archive-import-"));
 
-        const line = parseArchiveLine(raw);
+    const spoolPath = path.join(tempDir, "part.ndjson");
 
-        if (line === null) {
-          skipped++;
-          continue;
-        }
+    await pipeline(decompressed, fs.createWriteStream(spoolPath, { mode: 0o600 }));
 
-        if (
-          line.uid.length > 128 ||
-          line.message.length > MAX_IMPORT_MESSAGE ||
-          (line.fields !== null && JSON.stringify(line.fields).length > MAX_IMPORT_FIELDS) ||
-          (line.service?.length ?? 0) > 128 ||
-          (line.env?.length ?? 0) > 64 ||
-          line.ts > Date.now() + MAX_IMPORT_FUTURE_SKEW_MS
-        ) {
-          skipped++;
-          continue;
-        }
+    await verifyPartDigest(storage.db, ref.key, filename, digest.digest("hex"));
 
-        if (line.projectId.toLowerCase() !== projectId) {
-          throw new ArchiveError("archive object contains events for another project", 400);
-        }
+    const importNow = Date.now();
+    const skipped = await validateSpoolFile(spoolPath, projectId, importNow);
+    const inserted = await insertSpoolFile(storage, spoolPath, projectId, importNow);
 
-        const level = archiveLevelIndex(line.level);
-
-        if (level < 0) {
-          skipped++;
-          continue;
-        }
-
-        const fields = line.fields === null ? null : JSON.stringify(line.fields);
-
-        batch.push({
-          uid: line.uid,
-          projectId,
-          apiKeyId: null,
-          ts: line.ts,
-          level,
-          service: line.service,
-          env: line.env,
-          message: line.message,
-          fields,
-          sizeBytes: eventSizeBytes({
-            ts: line.ts,
-            level,
-            service: line.service,
-            env: line.env,
-            message: line.message,
-            fields,
-          }),
-        });
-
-        if (batch.length >= INSERT_CHUNK) {
-          const flushed = await flushBatch(tx, batch);
-
-          imported += flushed.imported;
-          skipped += flushed.skipped;
-          batch = [];
-        }
-      }
-
-      if (batch.length > 0) {
-        const flushed = await flushBatch(tx, batch);
-
-        imported += flushed.imported;
-        skipped += flushed.skipped;
-      }
-
-      await verifyPartDigest(tx, ref.key, filename, digest.digest("hex"));
-
-      return { imported, skipped };
-    });
+    return { imported: inserted.imported, skipped: skipped + inserted.skipped };
   } catch (cause) {
     if (cause instanceof ArchiveError) throw cause;
 
     console.warn(`[kinglet] archive import failed for ${ref.key}:`, describeBackupError(cause));
     throw new ArchiveError("archive import failed", 500);
   } finally {
-    lines.close();
     decompressed.destroy();
     source.destroy();
     downloaded.destroy();
+
+    if (tempDir !== null) {
+      try {
+        await fs.promises.rm(tempDir, { recursive: true, force: true });
+      } catch {
+        // Best effort; the original import result is more useful.
+      }
+    }
   }
 }
 
+/**
+ * First pass over the spooled file: reject a cross-project part before any
+ * insert and count rows that will be skipped. The fixed `importNow` keeps the
+ * future-timestamp decision identical to the insert pass.
+ */
+async function validateSpoolFile(
+  filePath: string,
+  projectId: string,
+  importNow: number,
+): Promise<number> {
+  const lines = createInterface({ input: fs.createReadStream(filePath), crlfDelay: Infinity });
+  let skipped = 0;
+
+  try {
+    for await (const raw of lines) {
+      if (raw.trim() === "") continue;
+
+      if (parseImportLine(raw, projectId, importNow) === null) skipped++;
+    }
+  } finally {
+    lines.close();
+  }
+
+  return skipped;
+}
+
+/** Second pass: insert validated rows in bounded chunks, never a whole part. */
+async function insertSpoolFile(
+  storage: Storage,
+  filePath: string,
+  projectId: string,
+  importNow: number,
+): Promise<ArchiveImportResult> {
+  const lines = createInterface({ input: fs.createReadStream(filePath), crlfDelay: Infinity });
+  let imported = 0;
+  let skipped = 0;
+  let batch: ImportRow[] = [];
+
+  try {
+    for await (const raw of lines) {
+      if (raw.trim() === "") continue;
+
+      const parsed = parseImportLine(raw, projectId, importNow);
+
+      if (parsed === null) continue;
+
+      const { line, level } = parsed;
+      const fields = line.fields === null ? null : JSON.stringify(line.fields);
+
+      batch.push({
+        uid: line.uid,
+        projectId,
+        apiKeyId: null,
+        ts: line.ts,
+        level,
+        service: line.service,
+        env: line.env,
+        message: line.message,
+        fields,
+        sizeBytes: eventSizeBytes({
+          ts: line.ts,
+          level,
+          service: line.service,
+          env: line.env,
+          message: line.message,
+          fields,
+        }),
+      });
+
+      if (batch.length >= INSERT_CHUNK) {
+        const flushed = await flushBatch(storage.db, batch);
+
+        imported += flushed.imported;
+        skipped += flushed.skipped;
+        batch = [];
+      }
+    }
+
+    if (batch.length > 0) {
+      const flushed = await flushBatch(storage.db, batch);
+
+      imported += flushed.imported;
+      skipped += flushed.skipped;
+    }
+
+    return { imported, skipped };
+  } finally {
+    lines.close();
+  }
+}
+
+interface ParsedImportLine {
+  line: ArchiveLine;
+  level: number;
+}
+
+/** Parse, cap, and project-check one archive line. Null means skip. */
+function parseImportLine(
+  raw: string,
+  projectId: string,
+  importNow: number,
+): ParsedImportLine | null {
+  const line = parseArchiveLine(raw);
+
+  if (line === null) return null;
+
+  if (
+    line.uid.length > 128 ||
+    line.message.length > MAX_IMPORT_MESSAGE ||
+    (line.fields !== null && JSON.stringify(line.fields).length > MAX_IMPORT_FIELDS) ||
+    (line.service?.length ?? 0) > 128 ||
+    (line.env?.length ?? 0) > 64 ||
+    line.ts > importNow + MAX_IMPORT_FUTURE_SKEW_MS
+  ) {
+    return null;
+  }
+
+  if (line.projectId.toLowerCase() !== projectId) {
+    throw new ArchiveError("archive object contains events for another project", 400);
+  }
+
+  const level = archiveLevelIndex(line.level);
+
+  if (level < 0) return null;
+
+  return { line, level };
+}
+
 async function verifyPartDigest(
-  db: ImportDb,
+  db: KingletDb,
   objectKey: string,
   filename: string,
   actual: string,
@@ -330,7 +401,7 @@ async function verifyPartDigest(
   }
 }
 
-async function flushBatch(db: ImportDb, batch: ImportRow[]): Promise<ArchiveImportResult> {
+async function flushBatch(db: KingletDb, batch: ImportRow[]): Promise<ArchiveImportResult> {
   if (batch.length === 0) return { imported: 0, skipped: 0 };
 
   const inserted = await db

@@ -195,33 +195,32 @@ function current(): McpFixture {
   return fixture;
 }
 
-describe("MCP stdio contract", () => {
-  it("keeps stdout protocol-only, stderr audit-only, and creates no files in its cwd", async () => {
-    const test = current();
-    const before = test.client.stderrLines.length;
+function auditCount(client: McpStdioClient, tool: string): number {
+  return client.stderrLines.filter((line) => line.includes(`tool=${tool} `)).length;
+}
 
-    await test.client.callTool("get_context");
-    await test.client.callTool("list_channels");
-    await test.client.waitForStderr(before + 2);
+async function waitForAudit(
+  client: McpStdioClient,
+  tool: string,
+  minimum: number,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
 
-    const after = test.client.stderrLines.length;
-    const newLines = test.client.stderrLines.slice(before);
+  while (Date.now() < deadline) {
+    if (auditCount(client, tool) >= minimum) return;
 
-    expect(after).toBeGreaterThanOrEqual(before + 2);
-    expect(after).toBeGreaterThan(before);
-    expect(newLines.some((line) => line.includes("tool=get_context"))).toBe(true);
-    expect(newLines.some((line) => line.includes("tool=list_channels"))).toBe(true);
-    expect(test.client.stdoutGarbage).toEqual([]);
-    expect(test.client.stderrLines.length).toBeGreaterThan(0);
-
-    for (const line of test.client.stderrLines) {
-      expect(line).toMatch(/^kinglet-mcp tool=\S+ duration=\d+ms status=(ok|error) rows=\d+$/);
+    try {
+      await client.waitForStderr(client.stderrLines.length + 1, 200);
+    } catch {
+      // Keep polling until the deadline; later lines may still be in flight.
     }
+  }
 
-    expect(test.client.stderrLines.join("\n")).not.toContain(test.writeKey);
-    expect(fs.readdirSync(test.cwd)).toEqual([]);
-  });
+  throw new Error(`timed out waiting for ${minimum} ${tool} audit line(s)`);
+}
 
+describe("MCP stdio contract", () => {
   it("exposes the complete tool list over a real stdio session", async () => {
     const tools = await current().client.listTools();
     const names = tools.map((tool) => tool.name);
@@ -333,5 +332,35 @@ describe("MCP stdio contract", () => {
     }
 
     expect(alertsArray[0]).not.toHaveProperty("notifyError");
+  });
+
+  it("keeps stdout protocol-only and audits the later tool calls without the key", async () => {
+    const test = current();
+
+    const expectedAudits: Array<[string, number]> = [
+      ["search_events", auditCount(test.client, "search_events") + 1],
+      ["list_monitors", auditCount(test.client, "list_monitors") + 1],
+      ["list_alerts", auditCount(test.client, "list_alerts") + 1],
+      ["list_channels", auditCount(test.client, "list_channels") + 1],
+    ];
+
+    await test.client.callTool("search_events", { limit: 1 });
+    await test.client.callTool("list_monitors");
+    await test.client.callTool("list_alerts", { limit: 1 });
+    await test.client.callTool("list_channels");
+
+    for (const [tool, minimum] of expectedAudits) {
+      await waitForAudit(test.client, tool, minimum);
+    }
+
+    expect(test.client.stdoutGarbage).toEqual([]);
+    expect(test.client.stderrLines.length).toBeGreaterThan(0);
+
+    for (const line of test.client.stderrLines) {
+      expect(line).toMatch(/^kinglet-mcp tool=\S+ duration=\d+ms status=(ok|error) rows=\d+$/);
+    }
+
+    expect(test.client.stderrLines.join("\n")).not.toContain(test.writeKey);
+    expect(fs.readdirSync(test.cwd)).toEqual([]);
   });
 });

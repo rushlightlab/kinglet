@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -6,6 +8,7 @@ import { importArchive } from "../../src/archive/import.js";
 import { ArchiveError } from "../../src/archive/types.js";
 import type { ArchiveLine } from "../../src/archive/types.js";
 import { uuidv7 } from "../../src/auth/ids.js";
+import { createStorage } from "../../src/storage/index.js";
 import * as schema from "../../src/storage/schema.js";
 import { InMemoryBackupStore } from "../helpers/backup-store.js";
 import { arrayAt, jsonBody, objectAt, stringAt } from "../helpers/body.js";
@@ -108,6 +111,80 @@ async function signedUrl(store: InMemoryBackupStore, key: string): Promise<strin
   return (await store.presignDownload(key, filename)).url;
 }
 
+interface FramedPart {
+  key: string;
+  firstFrame: Buffer;
+  secondFrame: Buffer;
+}
+
+/** Two zstd frames so a test can pause halfway through the download. */
+function storeFramedPart(
+  store: InMemoryBackupStore,
+  projectId: string,
+  firstLines: readonly string[],
+  secondLines: readonly string[],
+): FramedPart {
+  const firstNdjson = `${firstLines.join("\n")}\n`;
+  const secondNdjson = `${secondLines.join("\n")}\n`;
+  const digest = sha256(firstNdjson + secondNdjson);
+  const firstFrame = zstdCompressSync(Buffer.from(firstNdjson, "utf8"));
+  const secondFrame = zstdCompressSync(Buffer.from(secondNdjson, "utf8"));
+  const key = partKey(projectId, store.prefix, digest.slice(0, 12));
+
+  store.putObject(key, Buffer.concat([firstFrame, secondFrame]));
+
+  return { key, firstFrame, secondFrame };
+}
+
+interface GatedDownload {
+  response: Response;
+  firstPull: Promise<void>;
+  release(): void;
+}
+
+/** A streaming response that sends one frame, pauses, then sends the rest. */
+function gatedDownload(firstFrame: Buffer, secondFrame: Buffer): GatedDownload {
+  let releaseGate: (() => void) | null = null;
+
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+
+  let signalFirstPull: (() => void) | null = null;
+
+  const firstPull = new Promise<void>((resolve) => {
+    signalFirstPull = resolve;
+  });
+
+  let step = 0;
+
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (step === 0) {
+        step = 1;
+        controller.enqueue(new Uint8Array(firstFrame));
+        signalFirstPull?.();
+        await gate;
+        controller.enqueue(new Uint8Array(secondFrame));
+
+        return;
+      }
+
+      controller.close();
+    },
+  });
+
+  return {
+    response: new Response(stream, { status: 200 }),
+    firstPull,
+    release: () => releaseGate?.(),
+  };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function archiveErrorOf(action: Promise<unknown>): Promise<ArchiveError> {
   try {
     await action;
@@ -191,6 +268,83 @@ describe("archive import integrity", () => {
     expect(error.status).toBe(502);
     expect(error.message).toBe("archive object checksum did not match its key");
     expect(await eventCount(projectId)).toBe(0);
+  });
+});
+
+describe("archive import locking", () => {
+  it("does not hold a write transaction while the download is pending", async () => {
+    const { config, storage } = current();
+    const projectId = await newProject("download-lock");
+    const otherProjectId = await newProject("download-lock-other");
+    const store = new InMemoryBackupStore();
+
+    const firstLines = Array.from({ length: 1_000 }, (_, index) =>
+      makeLine(projectId, { sourceId: index + 1, message: `first-frame-${index}` }),
+    );
+
+    const part = storeFramedPart(store, projectId, firstLines, [
+      makeLine(projectId, { message: "second-frame" }),
+    ]);
+
+    const gated = gatedDownload(part.firstFrame, part.secondFrame);
+    const fetchMock = vi.fn(async (): Promise<Response> => gated.response);
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const concurrent = await createStorage({ kind: "sqlite", dbPath: config.dbPath });
+
+    // A second connection must not block behind an import-held SQLite lock.
+    await concurrent.client.execute("PRAGMA busy_timeout = 0");
+
+    const importPromise = importArchive(storage, {
+      projectId,
+      dataDir: config.dataDir,
+      s3: store,
+    });
+
+    try {
+      await gated.firstPull;
+
+      // Give the importer time to reach its first insert batch if it were
+      // holding a transaction across the response body.
+      await delay(500);
+
+      const written = await concurrent.insertEvents(
+        otherProjectId,
+        [
+          {
+            ts: Date.now() - 1_000,
+            level: 2,
+            service: null,
+            env: null,
+            message: "concurrent-write",
+            fields: null,
+          },
+        ],
+        null,
+      );
+
+      expect(written).toHaveLength(1);
+
+      gated.release();
+
+      const result = await importPromise;
+
+      expect(result).toEqual({ imported: 1_001, skipped: 0 });
+      expect(await eventCount(projectId)).toBe(1_001);
+
+      const otherRows = await concurrent.db
+        .select({ id: schema.events.id })
+        .from(schema.events)
+        .where(eq(schema.events.projectId, otherProjectId));
+
+      expect(otherRows).toHaveLength(1);
+      expect(fs.readdirSync(path.join(config.dataDir, "tmp"))).toEqual([]);
+    } finally {
+      gated.release();
+      await importPromise.catch(() => {});
+      await concurrent.close();
+    }
   });
 });
 
