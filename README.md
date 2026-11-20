@@ -400,9 +400,9 @@ implement the same `Storage` interface, so the API and UI stay untouched.
 
 ## Self-hosting notes
 
-- **Resources**: ~150–250MB RAM; designed for a 2 vCPU / 2GB VPS. Throughput
-  and disk depend on event size, fields, and retention (roughly a few hundred MB
-  per million retained events).
+- **Resources**: ~200 MB idle; ~400 MB under sustained batch ingest. Designed
+  for a 2 vCPU / 2 GB VPS. Throughput and disk depend on event size, fields, and
+  retention (roughly 0.5–1 GB per million small events).
 - **Backups**: the store is one SQLite database (`kinglet.db` plus `-wal`/`-shm`
   while running). Use [Litestream](https://litestream.io/) or `sqlite3 .backup`;
   don't copy only the `.db` from a live WAL store.

@@ -31,6 +31,25 @@ pnpm test:integration
 pnpm test:e2e
 ```
 
+## Benchmarking
+
+`pnpm bench` is a zero-dependency ingest/query load script for a disposable
+local instance. It creates an ingest/query key, writes `bench-*` events, and
+reports batch limits, throughput, and latency percentiles. It refuses
+non-loopback URLs unless `KINGLET_BENCH_ALLOW_REMOTE=1` is set explicitly.
+
+```bash
+KINGLET_BENCH_URL=http://localhost:8080 \
+KINGLET_BENCH_EMAIL=admin@kinglet.local \
+KINGLET_BENCH_PASSWORD=... \
+pnpm bench
+```
+
+It writes real events and creates a real key. Point it at a temporary database
+or container, never a production instance. For deeper HTTP load, `autocannon`,
+`k6`, or `oha` work well; use `docker stats` for memory and
+`docker exec kinglet du -sb /data` for storage growth.
+
 ## Layout
 
 - `apps/api/test/unit/` - pure unit tests for ingest, filters, auth helpers,
