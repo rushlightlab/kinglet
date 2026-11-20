@@ -2,6 +2,7 @@
   "$schema": "https://turbo.build/schema.json",
   "globalPassThroughEnv": [
     "KINGLET_PORT",
+    "KINGLET_HOST",
     "KINGLET_API_URL",
     "KINGLET_DB_PATH",
     "KINGLET_DB_AUTH_TOKEN",
