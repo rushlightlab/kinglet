@@ -412,7 +412,7 @@ with force-pushes and deletion blocked. Do not modify or bypass the ruleset.
    the `release` environment, then publishes multi-arch GHCR images
    (`X.Y.Z`, `X.Y`, `latest`). Main pushes never publish images.
 6. A published GitHub Release feeds the docs changelog and landing version badge.
-   The docs repo is promoted separately (`docs/pre-release` -> `main`).
+   The docs repo is promoted separately (its own `next` -> `main`).
 
 Release tags are protected by the `Release Tags` ruleset; release immutability is
 enabled. Never create/move/delete tags or modify release settings without
