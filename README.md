@@ -409,11 +409,13 @@ implement the same `Storage` interface, so the API and UI stay untouched.
 
 ## Self-hosting notes
 
-- **Resources**: measured in a 2-vCPU Docker VM with ~200-byte events: ~180 MB
-  idle, ~400 MB peak while ingesting ~7,000 events/s in 1,000-event batches, and
-  ~0.55 GB of disk per million events (~0.42 GB with `KINGLET_SEARCH=words`).
-  Designed for a 2 vCPU / 2 GB VPS; payload size, fields, and retention move
-  these numbers.
+- **Resources**: measured in Docker with ~200-byte events, 1 vCPU / 512 MB
+  sustains 3,000 events/s with five dashboard users active (6,000 with
+  `KINGLET_SEARCH=words`; 4,000 on 2 vCPU / 2 GB), peaking at ~300–410 MB.
+  Disk is ~0.55 GB per million events (~0.42 GB with `words`); at the default
+  14-day retention, raise `KINGLET_MAX_EVENTS_PER_PROJECT` for projects
+  averaging more than ~0.8 events/s. See the
+  [capacity planning guide](https://kinglet.rushlightlab.com/capacity/).
 - **Backups**: the store is one SQLite database (`kinglet.db` plus `-wal`/`-shm`
   while running). Use [Litestream](https://litestream.io/) or `sqlite3 .backup`;
   don't copy only the `.db` from a live WAL store.
