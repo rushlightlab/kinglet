@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, next]
   pull_request:
 
 permissions:
@@ -11,6 +11,32 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run format:check
+      - run: pnpm run lint
+      - run: pnpm run typecheck
+      - run: pnpm run build
+      # Build first: the integration suite spawns packages/mcp/dist/cli.js.
+      - run: pnpm test:unit
+      - run: pnpm test:integration
+
+  e2e:
+    # Playwright serves the built API/UI with a temporary database on loopback.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: "true"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -22,7 +48,21 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
-      - run: pnpm run typecheck
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - name: Upload Playwright failure traces
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-test-results
+          # Only test-results/, never .e2e/ (storage states and seed key).
+          # Traces can still contain test-session cookies, request headers, and
+          # the temporary seed API key sent by e2e/logs.spec.ts. That key is
+          # scoped to a database deleted at teardown and this repo is public, so
+          # artifact access is not a secret boundary. Keep retention short.
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
 
   docker:
     # Catch Dockerfile/context breakage before merge (build only, never push).

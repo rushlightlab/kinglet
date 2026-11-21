@@ -1,8 +1,9 @@
 import { betterAuth } from "better-auth/minimal";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { admin } from "better-auth/plugins";
-import type { KingletDb } from "../storage/db.js";
-import * as schema from "../storage/schema.js";
+import { PASSWORD_MIN_LENGTH } from "./password.ts";
+import type { KingletDb } from "../storage/db.ts";
+import * as schema from "../storage/schema.ts";
 
 /**
  * Better Auth, tuned per the official performance guide:
@@ -31,11 +32,12 @@ export function createAuth(
     secret: string;
     trustedProxies?: string[];
     sessionDays?: number;
-  }
+  },
 ) {
   const rawBase = opts.baseUrl ?? `http://localhost:${opts.port}`;
   let baseOrigin = rawBase;
   let baseHost = "";
+
   try {
     const parsed = new URL(rawBase);
     baseOrigin = parsed.origin;
@@ -43,14 +45,16 @@ export function createAuth(
   } catch {
     // keep the raw value if it isn't a URL
   }
+
   // Local origins are only trusted for local base URLs (dev + local Docker),
   // never on a production deployment with a real hostname.
   const localOrigins =
     baseHost === "localhost" || baseHost === "127.0.0.1"
       ? ["localhost", "127.0.0.1"].flatMap((host) =>
-          [3000, 5173, 8080].map((port) => `http://${host}:${port}`)
+          [3000, 5173, 8080].map((port) => `http://${host}:${port}`),
         )
       : [];
+
   const trustedProxies = opts.trustedProxies ?? [];
   const sessionDays = opts.sessionDays ?? 30;
 
@@ -69,7 +73,7 @@ export function createAuth(
     }),
     emailAndPassword: {
       enabled: true,
-      minPasswordLength: 8,
+      minPasswordLength: PASSWORD_MIN_LENGTH,
     },
     session: {
       expiresIn: sessionDays * 86_400,
@@ -104,11 +108,10 @@ export function createAuth(
         "/sign-in/email": { window: 60, max: 20 },
       },
     },
-    advanced: {
-      ...(trustedProxies.length > 0
+    advanced:
+      trustedProxies.length > 0
         ? { ipAddress: { trustedProxies } }
-        : { ipAddress: { ipAddressHeaders: ["x-kinglet-client-ip"] } }),
-    },
+        : { ipAddress: { ipAddressHeaders: ["x-kinglet-client-ip"] } },
   });
 }
 

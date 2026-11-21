@@ -1,13 +1,18 @@
 import path from "node:path";
-import { openDatabase, toLibsqlUrl } from "./db.js";
-import * as eventsRepo from "./events.js";
-import { resolveStorageKind } from "./types.js";
-import type { Storage, StorageSettings } from "./types.js";
+import { openDatabase, toLibsqlUrl } from "./db.ts";
+import * as eventsRepo from "./events.ts";
+import { resolveStorageKind } from "./types.ts";
+import type { Storage, StorageSettings } from "./types.ts";
 
 export async function createStorage(settings: StorageSettings): Promise<Storage> {
   const kind = resolveStorageKind(settings);
   const url = toLibsqlUrl(settings.dbPath);
-  const { db, client } = await openDatabase({ url, authToken: settings.authToken });
+
+  const { db, client, searchMode, engine } = await openDatabase({
+    url,
+    authToken: settings.authToken,
+    search: settings.search,
+  });
 
   const description =
     kind === "libsql"
@@ -18,12 +23,25 @@ export async function createStorage(settings: StorageSettings): Promise<Storage>
     kind,
     description,
     db,
-    insertEvents: (projectId, events) => eventsRepo.insertEvents(db, projectId, events),
+    client,
+    searchMode,
+    engine,
+    insertEvents: (projectId, events, apiKeyId) =>
+      eventsRepo.insertEvents(client, projectId, events, apiKeyId),
     queryEvents: (opts) => eventsRepo.queryEvents(db, opts),
+    getEventByUid: (projectId, uid) => eventsRepo.getEventByUid(db, projectId, uid),
+    getEventContext: (projectId, uid, before, after) =>
+      eventsRepo.getEventContext(db, projectId, uid, before, after),
+    countEvents: (filter) => eventsRepo.countEvents(db, filter),
+    groupEventCounts: (filter, groupBy, limit) =>
+      eventsRepo.groupEventCounts(db, filter, groupBy, limit),
     histogramPoints: (projectId, from, to, bucketMs) =>
-      eventsRepo.histogramPoints(db, projectId, from, to, bucketMs),
+      eventsRepo.histogramPoints(db, engine, projectId, from, to, bucketMs),
     listServices: (projectId) => eventsRepo.listServices(db, projectId),
-    deleteOlderThan: (ts) => eventsRepo.deleteOlderThan(db, ts),
+    deleteOlderThan: (ts, excludeProjectIds) =>
+      eventsRepo.deleteOlderThan(db, ts, excludeProjectIds),
+    deleteAlertsOlderThan: (ts) => eventsRepo.deleteAlertsOlderThan(db, ts),
+    deleteByProject: (projectId, range) => eventsRepo.deleteByProject(db, projectId, range),
     runMaintenance: async () => {
       // Local WAL files grow; SQLite reuses pages automatically. A full
       // VACUUM on a live log store costs more than it frees — skip.
@@ -34,4 +52,4 @@ export async function createStorage(settings: StorageSettings): Promise<Storage>
   };
 }
 
-export type { Storage, StorageKind } from "./types.js";
+export type { Storage, StorageKind } from "./types.ts";

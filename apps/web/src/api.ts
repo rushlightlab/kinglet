@@ -1,17 +1,28 @@
+import { isJsonObject, isString } from "./json";
 import type {
   AlertRecord,
   ApiKeyInfo,
   AppUser,
+  ArchiveSettings,
+  BackupSchedulePreview,
+  BackupSettings,
+  BackupSettingsInput,
+  BackupSnapshot,
+  BackupStatus,
   ChannelTestResult,
   EventPage,
   Histogram,
-  KingletEvent,
+  KeyType,
   Monitor,
+  NotificationChannel,
+  NotificationChannelInput,
+  NotificationChannelSummary,
+  NotificationDelivery,
+  NotifyChannel,
   Project,
   ProjectMember,
   Service,
 } from "./types";
-import { LEVEL_NAMES } from "./types";
 import { createAuthClient } from "better-auth/react";
 
 export class UnauthorizedError extends Error {}
@@ -20,55 +31,71 @@ const authClient = createAuthClient({
   baseURL: typeof window === "undefined" ? "" : window.location.origin,
 });
 
-function withProject(path: string, projectId: number): string {
+function withProject(path: string, projectId: string): string {
   const separator = path.includes("?") ? "&" : "?";
+
   return `${path}${separator}project=${projectId}`;
 }
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
+async function api<T>(path: string, init?: RequestInit, timeoutMs = 15_000): Promise<T> {
   let res: Response;
   // The marker header is required by the server's CSRF guard for
   // cookie-authenticated mutations; cross-site forms cannot set it.
   const headers = new Headers(init?.headers);
   headers.set("x-kinglet-request", "1");
+
   if (init?.body !== undefined) headers.set("content-type", "application/json");
+
   try {
     res = await fetch(path, {
       ...init,
       credentials: "same-origin",
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(timeoutMs),
       headers,
     });
   } catch (err) {
     throw new Error("Cannot reach the Kinglet API — is the server running?", { cause: err });
   }
+
   if (res.status === 401) {
     if (path !== "/v1/me") {
       window.dispatchEvent(new CustomEvent("kinglet:unauthorized"));
     }
+
     throw new UnauthorizedError("unauthorized");
   }
+
   if (!res.ok) {
     const contentType = res.headers.get("content-type") ?? "";
     let message = `request failed: HTTP ${res.status}`;
     let requestId: string | null = null;
+
     if (contentType.includes("application/json")) {
       try {
-        const body = (await res.json()) as { error?: string; requestId?: string };
-        if (body.error) message = body.error;
-        if (body.requestId) requestId = body.requestId;
+        const body: unknown = await res.json();
+
+        if (isJsonObject(body)) {
+          if (isString(body.error)) message = body.error;
+
+          if (isString(body.requestId)) requestId = body.requestId;
+        }
       } catch {
-        // body wasn't valid JSON — keep the status message
+        // body wasn't valid JSON - keep the status message
       }
     } else if (res.status >= 500) {
       message =
         "the Kinglet API returned an internal error — the server likely crashed or hit a bug. Check its terminal output";
     }
+
     throw new Error(requestId ? `${message} (request ${requestId})` : message);
   }
+
   if (!(res.headers.get("content-type") ?? "").includes("application/json")) {
     throw new Error("the Kinglet API returned a non-JSON response (likely a proxy error page)");
   }
+
+  // SAFETY: the Kinglet server owns this response contract; `T` is the
+  // caller's declaration of the endpoint payload and the API version is pinned.
   return (await res.json()) as T;
 }
 
@@ -76,11 +103,13 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function login(email: string, password: string): Promise<void> {
   const { error } = await authClient.signIn.email({ email, password });
+
   if (error) throw new Error(error.message ?? "invalid email or password");
 }
 
 export async function logout(): Promise<void> {
   const { error } = await authClient.signOut();
+
   if (error) throw new Error(error.message ?? "could not sign out");
 }
 
@@ -94,6 +123,7 @@ export async function changePassword(currentPassword: string, newPassword: strin
     newPassword,
     revokeOtherSessions: true,
   });
+
   if (error) throw new Error(error.message ?? "could not change password");
 }
 
@@ -110,34 +140,44 @@ export function createProject(name: string): Promise<{ project: Project }> {
   });
 }
 
-export function deleteProject(id: number): Promise<{ ok: true }> {
+export function deleteProject(id: string): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/projects/${id}`, { method: "DELETE" });
+}
+
+export function renameProject(id: string, name: string): Promise<{ project: Project }> {
+  return api<{ project: Project }>(`/v1/projects/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
 }
 
 // ---------- project members (admin) ----------
 
-export function fetchProjectMembers(
-  projectId: number
-): Promise<{ members: ProjectMember[] }> {
+export function fetchProjectMembers(projectId: string): Promise<{ members: ProjectMember[] }> {
   return api<{ members: ProjectMember[] }>(`/v1/projects/${projectId}/members`);
 }
 
-export function addProjectMember(
-  projectId: number,
-  userId: string
-): Promise<{ ok: true }> {
+export function addProjectMember(projectId: string, userId: string): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/projects/${projectId}/members`, {
     method: "POST",
     body: JSON.stringify({ userId }),
   });
 }
 
-export function removeProjectMember(
-  projectId: number,
-  userId: string
-): Promise<{ ok: true }> {
+export function removeProjectMember(projectId: string, userId: string): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/projects/${projectId}/members/${userId}`, {
     method: "DELETE",
+  });
+}
+
+export function updateProjectMember(
+  projectId: string,
+  userId: string,
+  body: { canClearLogs: boolean },
+): Promise<{ ok: true; canClearLogs: boolean }> {
+  return api<{ ok: true; canClearLogs: boolean }>(`/v1/projects/${projectId}/members/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
   });
 }
 
@@ -161,12 +201,16 @@ export function createUser(input: {
 
 export function updateUser(
   id: string,
-  patch: { name?: string; role?: string; password?: string }
+  patch: { name?: string; role?: string; disabled?: boolean },
 ): Promise<{ user: AppUser }> {
   return api<{ user: AppUser }>(`/v1/users/${id}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
   });
+}
+
+export function resetUserPassword(id: string): Promise<{ password: string }> {
+  return api<{ password: string }>(`/v1/users/${id}/reset-password`, { method: "POST" });
 }
 
 export function deleteUser(id: string): Promise<{ ok: true }> {
@@ -175,13 +219,13 @@ export function deleteUser(id: string): Promise<{ ok: true }> {
 
 // ---------- API keys ----------
 
-export function fetchKeys(projectId: number): Promise<{ keys: ApiKeyInfo[] }> {
+export function fetchKeys(projectId: string): Promise<{ keys: ApiKeyInfo[] }> {
   return api<{ keys: ApiKeyInfo[] }>(`/v1/projects/${projectId}/keys`);
 }
 
 export function createKey(
-  projectId: number,
-  input: { name: string; scopes: string[] }
+  projectId: string,
+  input: { name: string; scopes: string[]; keyType?: KeyType },
 ): Promise<{ key: ApiKeyInfo; plaintext: string }> {
   return api<{ key: ApiKeyInfo; plaintext: string }>(`/v1/projects/${projectId}/keys`, {
     method: "POST",
@@ -189,56 +233,106 @@ export function createKey(
   });
 }
 
-export function deleteKey(id: number, projectId: number): Promise<{ ok: true }> {
+export function deleteKey(id: string, projectId: string): Promise<{ ok: true }> {
   return api<{ ok: true }>(`/v1/keys/${id}?project=${projectId}`, { method: "DELETE" });
+}
+
+export function updateKeyScopes(
+  id: string,
+  projectId: string,
+  scopes: string[],
+): Promise<{ ok: true; scopes: string[] }> {
+  return api<{ ok: true; scopes: string[] }>(`/v1/keys/${id}?project=${projectId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ scopes }),
+  });
+}
+
+export function rotateKey(
+  id: string,
+  projectId: string,
+): Promise<{ plaintext: string; prefix: string }> {
+  return api<{ plaintext: string; prefix: string }>(`/v1/keys/${id}/rotate?project=${projectId}`, {
+    method: "POST",
+  });
 }
 
 // ---------- events ----------
 
 export function fetchEvents(opts: {
-  projectId: number;
+  projectId: string;
   q?: string;
   from?: number;
   to?: number;
   limit?: number;
 }): Promise<EventPage> {
   const params = new URLSearchParams();
+
   if (opts.q) params.set("q", opts.q);
+
   if (opts.from) params.set("from", String(opts.from));
+
   if (opts.to) params.set("to", String(opts.to));
+
   if (opts.limit) params.set("limit", String(opts.limit));
+
   return api<EventPage>(withProject(`/v1/events?${params.toString()}`, opts.projectId));
 }
 
+/** Deletes events in the project, optionally within an epoch-ms range. */
+export function clearProjectLogs(
+  projectId: string,
+  range?: { from: number; to: number },
+): Promise<{ deleted: number; projectId: string; from?: number; to?: number }> {
+  const params = new URLSearchParams({ project: String(projectId) });
+
+  if (range) {
+    params.set("from", String(range.from));
+    params.set("to", String(range.to));
+  }
+
+  return api<{ deleted: number; projectId: string; from?: number; to?: number }>(
+    `/v1/events?${params.toString()}`,
+    { method: "DELETE" },
+  );
+}
+
 export function fetchHistogram(opts: {
-  projectId: number;
+  projectId: string;
   from: number;
   to: number;
   buckets?: number;
 }): Promise<Histogram> {
   const params = new URLSearchParams({ from: String(opts.from), to: String(opts.to) });
+
   if (opts.buckets) params.set("buckets", String(opts.buckets));
+
   return api<Histogram>(withProject(`/v1/histogram?${params.toString()}`, opts.projectId));
 }
 
-export function fetchServices(projectId: number): Promise<{ services: Service[] }> {
+export function fetchServices(projectId: string): Promise<{ services: Service[] }> {
   return api<{ services: Service[] }>(withProject("/v1/services", projectId));
 }
 
 /** SSE live tail — session cookie auth, so no token in the URL. */
-export function openStream(projectId: number, q: string): EventSource {
+export function openStream(projectId: string, q: string): EventSource {
   const params = new URLSearchParams({ project: String(projectId) });
+
   if (q) params.set("q", q);
+
   return new EventSource(`/v1/stream?${params.toString()}`);
 }
 
 // ---------- monitors & alerts ----------
 
-export function fetchMonitors(projectId: number): Promise<{ monitors: Monitor[] }> {
+export function fetchMonitors(projectId: string): Promise<{ monitors: Monitor[] }> {
   return api<{ monitors: Monitor[] }>(withProject("/v1/monitors", projectId));
 }
 
-export function createMonitor(projectId: number, input: Partial<Monitor>): Promise<{ monitor: Monitor }> {
+export function createMonitor(
+  projectId: string,
+  input: Partial<Monitor>,
+): Promise<{ monitor: Monitor }> {
   return api<{ monitor: Monitor }>(withProject("/v1/monitors", projectId), {
     method: "POST",
     body: JSON.stringify(input),
@@ -246,9 +340,9 @@ export function createMonitor(projectId: number, input: Partial<Monitor>): Promi
 }
 
 export function updateMonitor(
-  projectId: number,
-  id: number,
-  input: Partial<Monitor>
+  projectId: string,
+  id: string,
+  input: Partial<Monitor>,
 ): Promise<{ monitor: Monitor }> {
   return api<{ monitor: Monitor }>(withProject(`/v1/monitors/${id}`, projectId), {
     method: "PATCH",
@@ -256,71 +350,181 @@ export function updateMonitor(
   });
 }
 
-export function deleteMonitor(projectId: number, id: number): Promise<{ ok: true }> {
+export function deleteMonitor(projectId: string, id: string): Promise<{ ok: true }> {
   return api<{ ok: true }>(withProject(`/v1/monitors/${id}`, projectId), { method: "DELETE" });
 }
 
-export function testMonitor(projectId: number, id: number): Promise<{ results: ChannelTestResult[] }> {
+export function testMonitor(
+  projectId: string,
+  id: string,
+): Promise<{ results: ChannelTestResult[] }> {
   return api<{ results: ChannelTestResult[] }>(withProject(`/v1/monitors/${id}/test`, projectId), {
     method: "POST",
   });
 }
 
-export function fetchAlerts(projectId: number, limit = 100): Promise<{ alerts: AlertRecord[] }> {
+/** Test an unsaved channel from the monitor form. */
+export function testChannel(projectId: string, channel: NotifyChannel): Promise<{ ok: true }> {
+  return api<{ ok: true }>(withProject("/v1/monitors/test-channel", projectId), {
+    method: "POST",
+    body: JSON.stringify(channel),
+  });
+}
+
+export function fetchAlerts(projectId: string, limit = 100): Promise<{ alerts: AlertRecord[] }> {
   return api<{ alerts: AlertRecord[] }>(withProject(`/v1/alerts?limit=${limit}`, projectId));
 }
 
-// ---------- demo traffic ----------
+// ---------- system events (SSE) ----------
 
-const DEMO_TEMPLATES: { level: number; message: string }[] = [
-  { level: 2, message: "user signed in" },
-  { level: 2, message: "request served in 42ms" },
-  { level: 2, message: "health check ok" },
-  { level: 1, message: "cache miss for user:2049" },
-  { level: 1, message: "connection pool resized to 12" },
-  { level: 3, message: "slow query detected (812ms)" },
-  { level: 3, message: "retrying background job in 2s" },
-  { level: 3, message: "queue depth above target: 312 jobs" },
-  { level: 4, message: "payment failed: card_declined" },
-  { level: 4, message: "connection refused by upstream" },
-  { level: 4, message: "rate limit exceeded for key 84f2" },
-  { level: 5, message: "queue depth critical: 4096 jobs waiting" },
-];
+/**
+ * Admin SSE feed for backup, restore, and archive work. Cookie auth, so no
+ * token in the URL. Listeners must use addEventListener(eventName), the
+ * server sends named events rather than the default `message`.
+ */
+export function openSystemEvents(): EventSource {
+  return new EventSource("/v1/system/events");
+}
 
-/** Generates some noisy demo traffic, spread over the last hour. */
-export async function sprayDemoEvents(projectId: number, count = 80): Promise<void> {
-  const services = ["api", "web", "worker", "billing"];
-  const now = Date.now();
-  const lines: string[] = [];
-  for (let i = 0; i < count; i++) {
-    const template = DEMO_TEMPLATES[Math.floor(Math.random() * DEMO_TEMPLATES.length)] ?? DEMO_TEMPLATES[0]!;
-    lines.push(
-      JSON.stringify({
-        level: LEVEL_NAMES[template.level],
-        message: template.message,
-        service: services[Math.floor(Math.random() * services.length)] ?? "api",
-        env: "demo",
-        ts: now - Math.floor(Math.random() * 55 * 60_000),
-        fields: {
-          request_id: crypto.randomUUID(),
-          region: Math.random() > 0.5 ? "eu-1" : "us-1",
-          ms: Math.floor(Math.random() * 900),
-        },
-      })
-    );
-  }
-  const res = await fetch(withProject("/v1/events", projectId), {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "content-type": "application/x-ndjson", "x-kinglet-request": "1" },
-    body: lines.join("\n"),
+// ---------- backups ----------
+
+export function fetchBackupStatus(): Promise<{ status: BackupStatus }> {
+  return api<{ status: BackupStatus }>("/v1/backups/status");
+}
+
+export function fetchBackups(refresh = false): Promise<{
+  snapshots: BackupSnapshot[];
+  warning?: string;
+}> {
+  return api<{ snapshots: BackupSnapshot[]; warning?: string }>(
+    refresh ? "/v1/backups?refresh=1" : "/v1/backups",
+  );
+}
+
+export function fetchBackupSettings(): Promise<{ settings: BackupSettings }> {
+  return api<{ settings: BackupSettings }>("/v1/backups/settings");
+}
+
+export function updateBackupSettings(
+  input: BackupSettingsInput,
+): Promise<{ settings: BackupSettings; nextRuns: number[] }> {
+  return api<{ settings: BackupSettings; nextRuns: number[] }>("/v1/backups/settings", {
+    method: "PUT",
+    body: JSON.stringify(input),
   });
-  if (res.status === 401) throw new UnauthorizedError("unauthorized");
-  if (!res.ok) {
-    throw new Error(
-      res.status >= 500
-        ? "the Kinglet API returned an internal error — check the server terminal"
-        : `spray failed: HTTP ${res.status}`
-    );
-  }
+}
+
+export function previewBackupSchedule(
+  cron: string,
+  timezone: string,
+): Promise<BackupSchedulePreview> {
+  const params = new URLSearchParams({ cron, timezone });
+
+  return api<BackupSchedulePreview>(`/v1/backups/schedule/preview?${params.toString()}`);
+}
+
+export function runBackup(): Promise<{ runId: string }> {
+  return api<{ runId: string }>("/v1/backups/run", { method: "POST" });
+}
+
+/** A bucket round trip can outlive the default request timeout. */
+export function testBackupConnection(): Promise<{ ok: true }> {
+  return api<{ ok: true }>("/v1/backups/test-connection", { method: "POST" }, 30_000);
+}
+
+export function downloadBackup(
+  id: string,
+): Promise<{ url: string; filename: string; expiresAt: number }> {
+  return api<{ url: string; filename: string; expiresAt: number }>(`/v1/backups/${id}/download`);
+}
+
+/** Stages a restore; the server applies it at the next boot. */
+export function restoreBackup(
+  id: string,
+): Promise<{ ok: true; id?: string; restartRequired?: boolean }> {
+  return api<{ ok: true; id?: string; restartRequired?: boolean }>(
+    `/v1/backups/${id}/restore`,
+    { method: "POST" },
+    60_000,
+  );
+}
+
+export function deleteBackup(id: string): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/v1/backups/${id}`, { method: "DELETE" });
+}
+
+// ---------- archive ----------
+
+export function fetchArchiveSettings(): Promise<{ settings: ArchiveSettings }> {
+  return api<{ settings: ArchiveSettings }>("/v1/archive/settings");
+}
+
+export function updateArchiveSettings(
+  input: Partial<ArchiveSettings>,
+): Promise<{ settings: ArchiveSettings }> {
+  return api<{ settings: ArchiveSettings }>("/v1/archive/settings", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function setProjectArchive(
+  projectId: string,
+  enabled: boolean,
+): Promise<{ ok: true; enabled: boolean }> {
+  return api<{ ok: true; enabled: boolean }>(`/v1/projects/${projectId}/archive`, {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+// ---------- notification channels ----------
+
+export function fetchNotificationChannels(): Promise<{ channels: NotificationChannel[] }> {
+  return api<{ channels: NotificationChannel[] }>("/v1/notifications/channels");
+}
+
+/** Admin-only read that returns the unmasked URL for the edit dialog. */
+export function fetchNotificationChannel(id: string): Promise<{ channel: NotificationChannel }> {
+  return api<{ channel: NotificationChannel }>(`/v1/notifications/channels/${id}`);
+}
+
+export function createNotificationChannel(
+  input: NotificationChannelInput,
+): Promise<{ channel: NotificationChannel }> {
+  return api<{ channel: NotificationChannel }>("/v1/notifications/channels", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateNotificationChannel(
+  id: string,
+  patch: Partial<NotificationChannelInput>,
+): Promise<{ channel: NotificationChannel }> {
+  return api<{ channel: NotificationChannel }>(`/v1/notifications/channels/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteNotificationChannel(id: string): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/v1/notifications/channels/${id}`, { method: "DELETE" });
+}
+
+export function testNotificationChannel(id: string): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/v1/notifications/channels/${id}/test`, { method: "POST" }, 30_000);
+}
+
+/** Monitor editors use this: id, name, type, enabled, and health only. */
+export function fetchNotificationChannelSummary(): Promise<{
+  channels: NotificationChannelSummary[];
+}> {
+  return api<{ channels: NotificationChannelSummary[] }>("/v1/notifications/channels/summary");
+}
+
+export function fetchNotificationDeliveries(
+  limit = 100,
+): Promise<{ deliveries: NotificationDelivery[] }> {
+  return api<{ deliveries: NotificationDelivery[] }>(`/v1/notifications/deliveries?limit=${limit}`);
 }

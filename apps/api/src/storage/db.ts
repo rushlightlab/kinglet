@@ -1,14 +1,32 @@
 import { createClient } from "@libsql/client";
-import type { Client } from "@libsql/client";
+import type { Client, TransactionMode } from "@libsql/client";
 import { drizzle } from "drizzle-orm/libsql";
 import type { LibSQLDatabase } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as schema from "./schema.js";
+import { uuidv7 } from "../auth/ids.ts";
+import type { SearchMode } from "../types.ts";
+import * as schema from "./schema.ts";
+import type { SqlEngine } from "./types.ts";
+import {
+  currentSearchMode,
+  ensureSearchTriggers,
+  isVirtualTableUnsupported,
+  reconcileSearchIndex,
+  withoutSearchIndex,
+} from "./search.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+export interface OpenedDatabase {
+  db: KingletDb;
+  client: Client;
+  searchMode: SearchMode;
+  engine: SqlEngine;
+}
 
 /** The typed Drizzle database shared by every module. */
 export type KingletDb = LibSQLDatabase<typeof schema>;
@@ -18,6 +36,7 @@ const MIGRATIONS_FOLDER = path.resolve(__dirname, "../../drizzle");
 /** Plain paths and file: URLs are local SQLite files; everything else is remote. */
 export function toLibsqlUrl(dbPath: string): string {
   const lower = dbPath.toLowerCase();
+
   if (
     lower.startsWith("file:") ||
     lower.startsWith("libsql:") ||
@@ -26,8 +45,47 @@ export function toLibsqlUrl(dbPath: string): string {
   ) {
     return dbPath;
   }
+
   if (dbPath === ":memory:" || dbPath.startsWith(":memory:")) return dbPath;
+
   return `file:${dbPath}`;
+}
+
+/**
+ * Per-connection settings. `journal_mode = WAL` is persistent and set once;
+ * these reset to SQLite defaults (FULL sync, no busy wait) on every new
+ * connection.
+ */
+async function applyConnectionPragmas(client: Client): Promise<void> {
+  await client.execute("PRAGMA synchronous = NORMAL");
+  await client.execute("PRAGMA busy_timeout = 5000");
+}
+
+/**
+ * The local libSQL client hands its open connection to each interactive
+ * transaction and lazily opens a fresh one for everything after it. Without
+ * this, the first `db.transaction()` silently drops the pragmas above and
+ * every later commit pays a full fsync. Hot paths use `batch()`, which stays
+ * on the current connection; this keeps the rarer transactions from
+ * degrading it.
+ */
+function preservePragmasAcrossTransactions(client: Client): void {
+  const begin = client.transaction.bind(client);
+
+  client.transaction = async (mode?: TransactionMode) => {
+    const tx = await begin(mode);
+
+    try {
+      await applyConnectionPragmas(client);
+    } catch (err) {
+      console.warn(
+        "[kinglet] could not re-apply SQLite pragmas:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    return tx;
+  };
 }
 
 /**
@@ -42,40 +100,62 @@ export function toLibsqlUrl(dbPath: string): string {
 export async function openDatabase(opts: {
   url: string;
   authToken?: string;
-}): Promise<{ db: KingletDb; client: Client }> {
+  search?: SearchMode;
+}): Promise<OpenedDatabase> {
   const isFile = opts.url.toLowerCase().startsWith("file:");
+
   if (isFile) {
     const local = opts.url.slice(5);
+
     if (local !== ":memory:" || local.length > 8) {
       fs.mkdirSync(path.dirname(path.resolve(local)), { recursive: true, mode: 0o700 });
     }
   }
 
-  const client = createClient({
-    url: opts.url,
-    ...(opts.authToken ? { authToken: opts.authToken } : {}),
-  });
+  const client = createClient(
+    opts.authToken ? { url: opts.url, authToken: opts.authToken } : { url: opts.url },
+  );
 
   if (isFile) {
     try {
       await client.execute("PRAGMA journal_mode = WAL");
-      await client.execute("PRAGMA synchronous = NORMAL");
-      await client.execute("PRAGMA busy_timeout = 5000");
+      await applyConnectionPragmas(client);
     } catch (err) {
-      console.warn("[kinglet] could not apply SQLite pragmas:", err instanceof Error ? err.message : err);
+      console.warn(
+        "[kinglet] could not apply SQLite pragmas:",
+        err instanceof Error ? err.message : err,
+      );
     }
+
+    preservePragmasAcrossTransactions(client);
   }
 
   const db = drizzle(client, { schema });
   await ensureProjectIdCompat(client);
+  await prepareUuidIdMigration(client);
+
   try {
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+
+    if (isVirtualTableUnsupported(message)) {
+      console.warn(
+        "[kinglet] this database does not support virtual tables (for example Turso's MVCC engine); " +
+          "running without a full-text index, so text filters scan the time window.",
+      );
+      await migrateWithoutSearchIndex(db);
+
+      return finishOpen(db, client, opts.search);
+    }
+
     // Some hosted libSQL builds lack the FTS5 trigram tokenizer. Only fall
     // back for that specific failure — everything else must surface.
     if (!/trigram|tokenizer/i.test(message)) throw err;
-    console.warn("[kinglet] FTS5 trigram unavailable; using word-prefix search (unicode61):", message);
+    console.warn(
+      "[kinglet] FTS5 trigram unavailable; using word-prefix search (unicode61):",
+      message,
+    );
     await client.execute("DROP TABLE IF EXISTS events_fts");
     await client.executeMultiple(`
       CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5 (
@@ -91,7 +171,76 @@ export async function openDatabase(opts: {
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
     await client.execute("INSERT INTO events_fts(events_fts) VALUES('rebuild')");
   }
-  return { db, client };
+
+  return finishOpen(db, client, opts.search);
+}
+
+async function finishOpen(
+  db: KingletDb,
+  client: Client,
+  search: SearchMode | undefined,
+): Promise<OpenedDatabase> {
+  await backfillEventUids(client);
+  await ensureSearchTriggers(client);
+
+  const searchMode = search
+    ? await reconcileSearchIndex(client, search)
+    : await currentSearchMode(client);
+
+  return { db, client, searchMode, engine: await detectEngine(client) };
+}
+
+/** Turso's MVCC engine keeps its own bookkeeping table in the schema. */
+async function detectEngine(client: Client): Promise<SqlEngine> {
+  const result = await client.execute(
+    "SELECT 1 FROM sqlite_master WHERE name = '__turso_internal_mvcc_meta' LIMIT 1",
+  );
+
+  return result.rows.length > 0 ? "turso-mvcc" : "sqlite";
+}
+
+/**
+ * Apply the shipped migrations minus the statements that create or maintain
+ * the search index. The migrator tracks applied migrations by timestamp, so
+ * later boots see them as done and never replay the stripped statements.
+ */
+async function migrateWithoutSearchIndex(db: KingletDb): Promise<void> {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "kinglet-migrations-"));
+
+  try {
+    fs.cpSync(MIGRATIONS_FOLDER, folder, { recursive: true });
+
+    for (const file of fs.readdirSync(folder)) {
+      if (!file.endsWith(".sql")) continue;
+      const target = path.join(folder, file);
+
+      fs.writeFileSync(target, withoutSearchIndex(fs.readFileSync(target, "utf8")));
+    }
+
+    await migrate(db, { migrationsFolder: folder });
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
+}
+
+/** Give existing events a UUID v7 once; new rows get one at insert time. */
+async function backfillEventUids(client: Client): Promise<void> {
+  for (;;) {
+    const rows = await client.execute(
+      "SELECT id FROM events WHERE uid IS NULL ORDER BY id LIMIT 1000",
+    );
+
+    if (rows.rows.length === 0) return;
+    await client.batch(
+      rows.rows.map((row) => ({
+        sql: "UPDATE events SET uid = ? WHERE id = ?",
+        args: [uuidv7(), Number(row.id)],
+      })),
+      "write",
+    );
+
+    if (rows.rows.length < 1000) return;
+  }
 }
 
 /** Adds project_id columns to databases that predate multi-project support. */
@@ -101,19 +250,85 @@ async function ensureProjectIdCompat(client: Client): Promise<void> {
       sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
       args: [name],
     });
+
     return result.rows.length > 0;
   };
+
   if (!(await hasTable("events"))) return; // fresh database — migrations do everything
 
   const columns = async (table: string): Promise<string[]> => {
     const result = await client.execute(`PRAGMA table_info(${table})`);
+
     return result.rows.map((row) => String(row.name));
   };
 
-  if (!(await columns("events")).includes("project_id")) {
+  const eventColumns = await columns("events");
+
+  // Migration 0011 replaced project_id with project_key; only a pre-v0.1
+  // table has neither.
+  if (!eventColumns.includes("project_id") && !eventColumns.includes("project_key")) {
     await client.execute("ALTER TABLE events ADD COLUMN project_id INTEGER NOT NULL DEFAULT 1");
   }
+
   if (!(await columns("monitors")).includes("project_id")) {
     await client.execute("ALTER TABLE monitors ADD COLUMN project_id INTEGER NOT NULL DEFAULT 1");
+  }
+}
+
+/**
+ * Before 0006 converts integer IDs to UUID v7 text IDs, build a mapping for
+ * every existing row so references can be rewritten consistently. Fresh
+ * databases get empty maps because 0006 still expects them to exist.
+ */
+async function prepareUuidIdMigration(client: Client): Promise<void> {
+  const hasTable = async (name: string): Promise<boolean> => {
+    const result = await client.execute({
+      sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      args: [name],
+    });
+
+    return result.rows.length > 0;
+  };
+
+  const idType = async (table: string): Promise<string | null> => {
+    if (!(await hasTable(table))) return null;
+    const result = await client.execute(`PRAGMA table_info(${table})`);
+    const id = result.rows.find((row) => String(row.name) === "id");
+
+    return id ? String(id.type ?? "").toUpperCase() : null;
+  };
+
+  const type = await idType("projects");
+
+  // Already migrated to UUID text IDs, or no projects table but this is not a
+  // fresh boot. A fresh database has no projects table and needs empty maps.
+  if (type !== null && !type.includes("INT")) return;
+
+  const maps = [
+    ["projects", "__uuid_projects"],
+    ["api_keys", "__uuid_api_keys"],
+    ["monitors", "__uuid_monitors"],
+    ["alerts", "__uuid_alerts"],
+    ["project_members", "__uuid_project_members"],
+  ] as const;
+
+  for (const [, map] of maps) {
+    await client.execute(
+      `CREATE TABLE IF NOT EXISTS ${map} (old_id INTEGER PRIMARY KEY, new_id TEXT NOT NULL)`,
+    );
+  }
+
+  for (const [table, map] of maps) {
+    if (!(await hasTable(table))) continue;
+    const rows = await client.execute(`SELECT id FROM ${table}`);
+
+    if (rows.rows.length === 0) continue;
+    await client.batch(
+      rows.rows.map((row) => ({
+        sql: `INSERT OR IGNORE INTO ${map} (old_id, new_id) VALUES (?, ?)`,
+        args: [Number(row.id), uuidv7()],
+      })),
+      "write",
+    );
   }
 }

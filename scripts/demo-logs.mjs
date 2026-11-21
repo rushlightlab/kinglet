@@ -13,10 +13,11 @@
  */
 function resolveKey(explicit) {
   if (explicit) return explicit;
+
   if (process.env.KINGLET_KEY) return process.env.KINGLET_KEY;
   console.error(
     "No API key. Create a project API key with the ingest scope in the UI, " +
-      "then pass it as an argument or set KINGLET_KEY."
+      "then pass it as an argument or set KINGLET_KEY.",
   );
   process.exit(1);
 }
@@ -29,6 +30,7 @@ const endpoint = url.replace(/\/+$/, "") + "/v1/events";
 
 const SERVICES = ["api", "web", "worker", "billing"];
 const LEVELS = ["debug", "info", "info", "info", "info", "warn", "warn", "error", "fatal"];
+
 const MESSAGES = [
   "user signed in",
   "request served in 42ms",
@@ -70,23 +72,28 @@ async function send(lines) {
     headers: { authorization: `Bearer ${key}`, "content-type": "application/x-ndjson" },
     body: lines.join("\n"),
   });
+
   if (!res.ok) throw new Error(`ingest failed: HTTP ${res.status} ${await res.text()}`);
 }
 
 // Backfill ~40 events over the last hour so the histogram has real shape.
 const now = Date.now();
 const burst = Array.from({ length: 40 }, (_, i) => event(now - Math.floor((i / 40) * 55 * 60_000)));
+
 await send(burst);
+
 console.log(`→ ${endpoint} · backfilled 40 events over the last hour`);
 
 if (once) process.exit(0);
 
 // Continuous stream: one event every ~1.5s.
 let count = 0;
+
 setInterval(async () => {
   try {
     await send([event()]);
     count++;
+
     if (count % 10 === 0) console.log(`→ sent ${count} events (Ctrl+C to stop)`);
   } catch (err) {
     console.error(String(err));

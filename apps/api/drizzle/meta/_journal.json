@@ -22,6 +22,69 @@
       "when": 1794994824975,
       "tag": "0002_mushy_venus",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1795071221151,
+      "tag": "0003_premium_slyde",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1795074439390,
+      "tag": "0004_high_northstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1795075763622,
+      "tag": "0005_deep_jubilee",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1795076053357,
+      "tag": "0006_nervous_bromley",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1795125151984,
+      "tag": "0007_project_usage",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1795149606116,
+      "tag": "0008_chunky_maximus",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1795156862307,
+      "tag": "0009_young_the_spike",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1795220766527,
+      "tag": "0010_event_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1795223062962,
+      "tag": "0011_project_keys",
+      "breakpoints": true
     }
   ]
 }

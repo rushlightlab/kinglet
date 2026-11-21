@@ -1,0 +1,14 @@
+{
+  "extends": "./packages/config/tsconfig.node.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": false,
+    "noEmit": true,
+    "declaration": false,
+    "rootDir": ".",
+    "types": ["node"],
+    "typeRoots": ["./apps/api/node_modules/@types"]
+  },
+  "include": ["e2e/**/*.ts", "playwright.config.ts"]
+}

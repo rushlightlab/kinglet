@@ -1,28 +1,38 @@
 # syntax=docker/dockerfile:1
 
 # ---- build: install workspace + build api & web ----
-FROM node:26-bookworm-slim AS build
+FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS build
 WORKDIR /app
-RUN npm install -g pnpm@10.15.0
+RUN npm install -g pnpm@12.21.0
+
+# Dependency layer: copy only manifests so source edits do not invalidate install.
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/config/package.json packages/config/package.json
+COPY packages/sdk-node/package.json packages/sdk-node/package.json
+COPY packages/mcp/package.json packages/mcp/package.json
+RUN --mount=type=cache,id=kinglet-pnpm-store,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
+
 COPY apps ./apps
 COPY packages ./packages
-RUN pnpm install --frozen-lockfile
-RUN pnpm exec turbo run build --filter=@kinglet/api --filter=@kinglet/web
-# Never let local data/secrets or turbo cache reach the deploy output.
-RUN rm -rf apps/api/data apps/api/.turbo
+RUN --mount=type=cache,id=kinglet-turbo-cache,target=/app/.turbo \
+    pnpm exec turbo run build --filter=@kinglet/api --filter=@kinglet/web
+
 # Production-only tree: dist + drizzle + prod dependencies (no TS, tsx,
 # drizzle-kit, sources, or test files).
-RUN pnpm --filter @kinglet/api --prod deploy /out/api --legacy
+RUN --mount=type=cache,id=kinglet-pnpm-store,target=/root/.local/share/pnpm/store \
+    pnpm --filter @kinglet/api --prod deploy /out/api --legacy
 
 # ---- runtime: one process, one image, non-root ----
-FROM node:26-bookworm-slim
+FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1
 ENV NODE_ENV=production
 ENV KINGLET_DB_PATH=/data/kinglet.db
 WORKDIR /app
-COPY --from=build /out/api ./apps/api
-COPY --from=build /app/apps/web/dist ./apps/web/dist
-RUN mkdir -p /data && chown -R node:node /data /app
+RUN mkdir -p /data && chown node:node /data
+COPY --from=build --chown=node:node /out/api ./apps/api
+COPY --from=build --chown=node:node /app/apps/web/dist ./apps/web/dist
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s \

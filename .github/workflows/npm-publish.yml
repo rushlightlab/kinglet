@@ -1,0 +1,89 @@
+name: npm
+
+# Manual package publishing. The first publish of each package is done locally
+# with 2FA; after that, configure npm trusted publishing for this workflow on
+# the package settings page (repo rushlightlab/kinglet, environment release).
+#
+# Fallback auth: set NPM_TOKEN as a release-environment secret (granular token
+# scoped to @kinglet with read/write). Never commit a token or .npmrc secret.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package to publish
+        required: true
+        type: choice
+        options:
+          - "@kinglet/mcp"
+          - "@kinglet/sdk-node"
+      tag:
+        description: npm dist-tag (use next for prereleases)
+        required: false
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Only a protected release ref may publish. A workflow_dispatch from an
+    # arbitrary feature branch must not be able to build unreviewed code under
+    # the official package names.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm run typecheck
+
+      - name: Validate release inputs
+        env:
+          TAG: ${{ inputs.tag }}
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,63}$'; then
+            echo "invalid dist-tag: $TAG" >&2
+            exit 1
+          fi
+          case "$PACKAGE" in
+            "@kinglet/mcp") PKG=packages/mcp ;;
+            "@kinglet/sdk-node") PKG=packages/sdk-node ;;
+            *) echo "invalid package: $PACKAGE" >&2; exit 1 ;;
+          esac
+          VERSION=$(node -p "require('./$PKG/package.json').version")
+          if [ "$TAG" = "latest" ] && printf '%s' "$VERSION" | grep -q '-'; then
+            echo "latest cannot publish prerelease version $VERSION" >&2
+            exit 1
+          fi
+
+      - name: Publish
+        env:
+          TAG: ${{ inputs.tag }}
+          PACKAGE: ${{ inputs.package }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: >
+          pnpm --filter "$PACKAGE" publish
+          --access public
+          --tag "$TAG"
+          --provenance
+          --no-git-checks
