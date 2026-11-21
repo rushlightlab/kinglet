@@ -361,3 +361,129 @@ describe("createLogger shutdown and secrets", () => {
     await logger.close();
   });
 });
+
+/** Responses that stay pending until the test releases them, in order. */
+interface DeferredResponses {
+  release(): void;
+}
+
+function deferredResponses(): DeferredResponses {
+  const pending: (() => void)[] = [];
+
+  responder = () =>
+    new Promise((resolve) => {
+      pending.push(() => resolve(new Response("ok", { status: 200 })));
+    });
+
+  return {
+    release() {
+      pending.shift()?.();
+    },
+  };
+}
+
+describe("createLogger backlog handling", () => {
+  it("defaults to 1000-event batches", async () => {
+    const logger = createLogger({ url: TEST_URL, token: TEST_TOKEN, flushMs: 60_000 });
+
+    for (let i = 0; i < 999; i++) logger.info(`event ${i}`);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    logger.info("event 999");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(bodyLines(requests[0]?.init)).toHaveLength(1_000);
+
+    await logger.close();
+  });
+
+  it("sends a batch that filled up during an in-flight request once it succeeds", async () => {
+    const responses = deferredResponses();
+    const logger = makeLogger({ batchSize: 2 });
+
+    logger.info("a");
+    logger.info("b");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    logger.info("c");
+    logger.info("d");
+    logger.info("e");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    responses.release();
+    await settle();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(bodyLines(requests[1]?.init).map((line) => JSON.parse(line).message)).toEqual([
+      "c",
+      "d",
+      "e",
+    ]);
+
+    responses.release();
+    await logger.close();
+  });
+
+  it("caps a single request at 5000 events and drains the rest on close", async () => {
+    const responses = deferredResponses();
+    const logger = makeLogger({ batchSize: 1_000 });
+
+    for (let i = 0; i < 1_000; i++) logger.info(`first ${i}`);
+
+    for (let i = 0; i < 7_000; i++) logger.info(`queued ${i}`);
+
+    responses.release();
+    await settle();
+    expect(bodyLines(requests[1]?.init)).toHaveLength(5_000);
+
+    const closed = logger.close();
+
+    responses.release();
+    await settle();
+    responses.release();
+    await closed;
+
+    expect(requests.map((request) => bodyLines(request.init).length)).toEqual([
+      1_000, 5_000, 2_000,
+    ]);
+  });
+
+  it("waits for an in-flight request before close resolves", async () => {
+    const responses = deferredResponses();
+    const logger = makeLogger({ batchSize: 1 });
+    let closed = false;
+
+    logger.info("in flight");
+
+    const closing = (async () => {
+      await logger.close();
+      closed = true;
+    })();
+
+    await settle();
+    expect(closed).toBe(false);
+
+    responses.release();
+    await closing;
+    expect(closed).toBe(true);
+  });
+
+  it("bounds the buffer while the server is unreachable, keeping the newest events", async () => {
+    responder = () => Promise.reject(new Error("connection refused"));
+    const logger = makeLogger({ batchSize: 10, onError: () => undefined });
+
+    logger.info("first");
+    await logger.flush();
+
+    for (let i = 0; i < 500; i++) logger.info(`event ${i}`);
+
+    responder = () => Promise.resolve(new Response("ok", { status: 200 }));
+    await logger.close();
+
+    const delivered = requests
+      .slice(1)
+      .flatMap((request) => bodyLines(request.init).map((line) => JSON.parse(line).message));
+
+    expect(delivered.length).toBeLessThanOrEqual(110);
+    expect(delivered.at(-1)).toBe("event 499");
+  });
+});
