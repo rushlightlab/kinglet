@@ -89,13 +89,9 @@ Each line (or each item in a JSON `{"events":[...]}` array) is one event:
 
 ### Node.js
 
-> **Not on npm yet.** `@kinglet/sdk-node` lives in this repo
-> (`packages/sdk-node`). Until it is published, use the HTTP examples above or
-> build it from a checkout:
->
-> ```bash
-> pnpm --filter @kinglet/sdk-node build
-> ```
+```bash
+npm install @kinglet/sdk-node
+```
 
 The package exposes a zero-dependency batching client:
 
@@ -124,10 +120,6 @@ your app never blocks on logging.
 `@kinglet/mcp` is a local stdio MCP server for Claude Desktop, Claude Code,
 Cursor, VS Code, Codex, and other MCP clients. It calls the normal HTTP API; it
 never opens the database.
-
-> **Prepared for npm, not published yet.** Until it is on npm, build it from a
-> checkout with `pnpm --filter @kinglet/mcp build`, then point clients at
-> `node packages/mcp/dist/cli.js`.
 
 Create an **MCP key** (`km_…`) in **Settings → Projects → open project → MCP
 keys**. Keys are project-bound and default to `logs.read` + `monitors.read`;

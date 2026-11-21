@@ -2,9 +2,9 @@
 
 Batching log client for Kinglet. Zero dependencies, Node 26+.
 
-> **Not published to npm yet.** The package lives in `packages/sdk-node` in the
-> Kinglet repo. Build it with `pnpm --filter @kinglet/sdk-node build` and use a
-> workspace/file dependency until the npm release.
+```bash
+npm install @kinglet/sdk-node
+```
 
 ```ts
 import { createLogger } from "@kinglet/sdk-node";

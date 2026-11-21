@@ -4,10 +4,8 @@ MCP (Model Context Protocol) server for [Kinglet](https://kinglet.rushlightlab.c
 It lets AI clients search logs and manage monitors in one Kinglet project over a
 local stdio connection.
 
-> **Not published to npm yet.** The package lives in `packages/mcp` in the
-> Kinglet repo. Build it with `pnpm --filter @kinglet/mcp build`, then point your
-> MCP client at `packages/mcp/dist/cli.js` (see below). Once published, pin the
-> version you reviewed, for example `npx -y @kinglet/mcp@0.3.0`.
+Run it with `npx -y @kinglet/mcp`, and pin the version you reviewed in
+production, for example `npx -y @kinglet/mcp@0.3.0`.
 
 ## Requirements
 
@@ -156,7 +154,9 @@ env:     KINGLET_URL=https://logs.example.com
          KINGLET_MCP_KEY=km_...
 ```
 
-### Local checkout before the npm release
+### Run from a checkout
+
+To try unreleased changes, build it from a Kinglet checkout:
 
 ```bash
 pnpm --filter @kinglet/mcp build
