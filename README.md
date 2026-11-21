@@ -394,9 +394,10 @@ word-prefix search with a console warning.
 
 `KINGLET_SEARCH` trades search for ingest speed and disk. `substring` (default)
 matches any 3+ character fragment; `words` matches whole words and word
-prefixes (`time` finds `timeout`, `out` does not) and ingests about 45% faster
-with about 25% less disk; `off` drops the index (about 2× ingest, about 30% less
-disk) and text filters scan the selected time window instead. Changing it
+prefixes (`time` finds `timeout`, `out` does not) and ingests about 20% faster
+with about 22% less disk and half the peak memory; `off` drops the index (about
+30% faster ingest and 30% less disk) and text filters scan the selected time
+window instead. Changing it
 rebuilds or drops the index once at boot. Schema edits:
 
 ```bash
@@ -408,9 +409,11 @@ implement the same `Storage` interface, so the API and UI stay untouched.
 
 ## Self-hosting notes
 
-- **Resources**: ~200 MB idle; ~200–600 MB under load. Designed for a 2 vCPU /
-  2 GB VPS. Throughput and disk depend on event size, fields, and retention
-  (roughly 0.8–1 GB per million small events).
+- **Resources**: measured in a 2-vCPU Docker VM with ~200-byte events: ~180 MB
+  idle, ~400 MB peak while ingesting ~7,000 events/s in 1,000-event batches, and
+  ~0.55 GB of disk per million events (~0.42 GB with `KINGLET_SEARCH=words`).
+  Designed for a 2 vCPU / 2 GB VPS; payload size, fields, and retention move
+  these numbers.
 - **Backups**: the store is one SQLite database (`kinglet.db` plus `-wal`/`-shm`
   while running). Use [Litestream](https://litestream.io/) or `sqlite3 .backup`;
   don't copy only the `.db` from a live WAL store.
