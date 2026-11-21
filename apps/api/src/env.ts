@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { SEARCH_MODES } from "./types.ts";
+import type { SearchMode } from "./types.ts";
 
 export type StorageKindSetting = "auto" | "sqlite" | "libsql";
 
@@ -32,6 +34,8 @@ export interface Config {
   host?: string;
   dbPath: string;
   storageKind: StorageKindSetting;
+  /** Full-text index for message search: substring (default), words, or off. */
+  searchMode: SearchMode;
   dbAuthToken?: string;
   /** Public URL, used in alert notification links and Better Auth origin checks. */
   baseUrl?: string;
@@ -84,6 +88,20 @@ function nonNegativeIntEnv(name: string, fallback: number): number {
   const n = Number.parseInt(raw, 10);
 
   return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+function searchModeEnv(): SearchMode {
+  const raw = process.env.KINGLET_SEARCH?.trim().toLowerCase();
+
+  if (raw === undefined || raw === "") return "substring";
+
+  const mode = SEARCH_MODES.find((candidate) => candidate === raw);
+
+  if (mode === undefined) {
+    throw new Error(`KINGLET_SEARCH must be one of: ${SEARCH_MODES.join(", ")}`);
+  }
+
+  return mode;
 }
 
 function storageKindEnv(): StorageKindSetting {
@@ -289,6 +307,7 @@ export function loadConfig(): Config {
     host: process.env.KINGLET_HOST?.trim() || undefined,
     dbPath,
     storageKind: storageKindEnv(),
+    searchMode: searchModeEnv(),
     dbAuthToken,
     baseUrl,
     allowPrivateWebhooks: ["1", "true", "yes"].includes(

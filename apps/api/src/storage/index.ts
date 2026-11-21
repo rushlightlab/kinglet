@@ -7,7 +7,12 @@ import type { Storage, StorageSettings } from "./types.ts";
 export async function createStorage(settings: StorageSettings): Promise<Storage> {
   const kind = resolveStorageKind(settings);
   const url = toLibsqlUrl(settings.dbPath);
-  const { db, client } = await openDatabase({ url, authToken: settings.authToken });
+
+  const { db, client, searchMode } = await openDatabase({
+    url,
+    authToken: settings.authToken,
+    search: settings.search,
+  });
 
   const description =
     kind === "libsql"
@@ -19,6 +24,7 @@ export async function createStorage(settings: StorageSettings): Promise<Storage>
     description,
     db,
     client,
+    searchMode,
     insertEvents: (projectId, events, apiKeyId) =>
       eventsRepo.insertEvents(client, projectId, events, apiKeyId),
     queryEvents: (opts) => eventsRepo.queryEvents(db, opts),

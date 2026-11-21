@@ -1,6 +1,11 @@
 import { isJsonObject } from "./json.ts";
 import type { JsonObject } from "./json.ts";
 
+/** How free-text filters are indexed; see storage/search.ts. */
+export type SearchMode = "substring" | "words" | "off";
+
+export const SEARCH_MODES: readonly SearchMode[] = ["substring", "words", "off"];
+
 export const LEVEL_NAMES = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
 
 /** Row shape as stored in a Kinglet store (fields is a JSON string). */

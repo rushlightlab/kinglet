@@ -9,6 +9,7 @@ import { ArchiveError } from "../../src/archive/types.ts";
 import type { ArchiveLine } from "../../src/archive/types.ts";
 import { uuidv7 } from "../../src/auth/ids.ts";
 import { createStorage } from "../../src/storage/index.ts";
+import { projectKeyOf } from "../../src/storage/project-keys.ts";
 import * as schema from "../../src/storage/schema.ts";
 import { InMemoryBackupStore } from "../helpers/backup-store.ts";
 import { arrayAt, jsonBody, objectAt, stringAt } from "../helpers/body.ts";
@@ -203,7 +204,7 @@ async function eventCount(projectId: string): Promise<number> {
   const rows = await current()
     .storage.db.select({ id: schema.events.id })
     .from(schema.events)
-    .where(eq(schema.events.projectId, projectId));
+    .where(eq(schema.events.projectKey, projectKeyOf(projectId)));
 
   return rows.length;
 }
@@ -400,7 +401,7 @@ describe("archive import locking", () => {
       const otherRows = await concurrent.db
         .select({ id: schema.events.id })
         .from(schema.events)
-        .where(eq(schema.events.projectId, otherProjectId));
+        .where(eq(schema.events.projectKey, projectKeyOf(otherProjectId)));
 
       expect(otherRows).toHaveLength(1);
       expect(fs.readdirSync(path.join(config.dataDir, "tmp"))).toEqual([]);
@@ -438,7 +439,7 @@ describe("archive import validation", () => {
     const rows = await storage.db
       .select({ uid: schema.events.uid, message: schema.events.message })
       .from(schema.events)
-      .where(eq(schema.events.projectId, projectId));
+      .where(eq(schema.events.projectKey, projectKeyOf(projectId)));
 
     expect(rows).toEqual([{ uid: validUid, message: "kept" }]);
   });

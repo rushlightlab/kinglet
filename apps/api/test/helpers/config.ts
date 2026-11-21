@@ -16,6 +16,7 @@ export function makeTestConfig(overrides: Partial<Config> = {}): Config {
     port: 3000,
     dbPath: ":memory:",
     storageKind: "sqlite",
+    searchMode: "substring",
     baseUrl: "http://localhost:3000",
     allowPrivateWebhooks: false,
     mcpAllowMonitorWrites: false,

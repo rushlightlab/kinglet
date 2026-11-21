@@ -1,10 +1,11 @@
-import { and, asc, count, desc, eq, gt, isNotNull, lt, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, isNotNull, lt, or, sql } from "drizzle-orm";
 import type { Client, InStatement, InValue } from "@libsql/client";
 import type { SQL } from "drizzle-orm";
 import type { Normalized } from "../ingest.ts";
 import { uuidv7 } from "../auth/ids.ts";
 import type { StoredEvent } from "../types.ts";
 import type { KingletDb } from "./db.ts";
+import { ensureProjectKey, projectKeyOf, projectKeysOf } from "./project-keys.ts";
 import * as schema from "./schema.ts";
 import type {
   AggregateGroupBy,
@@ -23,11 +24,11 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-function mapEventRow(row: typeof schema.events.$inferSelect): StoredEvent {
+function mapEventRow(row: typeof schema.events.$inferSelect, projectId: string): StoredEvent {
   return {
     id: Number(row.id),
     uid: row.uid ?? null,
-    projectId: row.projectId,
+    projectId,
     apiKeyId: row.apiKeyId ?? null,
     ts: Number(row.ts),
     level: Number(row.level),
@@ -48,7 +49,7 @@ export function eventSizeBytes(event: Normalized): number {
 }
 
 const EVENT_COLUMNS =
-  "uid, project_id, api_key_id, ts, level, service, env, message, fields, size_bytes";
+  "uid, project_key, api_key_id, ts, level, service, env, message, fields, size_bytes";
 
 const EVENT_PLACEHOLDERS = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
@@ -73,6 +74,7 @@ export async function insertEvents(
   apiKeyId: string | null,
 ): Promise<StoredEvent[]> {
   if (events.length === 0) return [];
+  const projectKey = await ensureProjectKey(client, projectId);
   const chunks: StoredEvent[][] = [];
   const statements: InStatement[] = [];
 
@@ -97,7 +99,7 @@ export async function insertEvents(
       });
       args.push(
         uid,
-        projectId,
+        projectKey,
         apiKeyId,
         event.ts,
         event.level,
@@ -133,7 +135,7 @@ export async function insertEvents(
 
 /**
  * Newest-first by event time, ties broken by id, so SQLite walks the
- * `(project_id, ts)` index and stops at the LIMIT instead of sorting the whole
+ * `(project_key, ts)` index and stops at the LIMIT instead of sorting the whole
  * window. The public cursor stays the numeric id of the last row; its
  * timestamp is looked up inside the same project-scoped filter to seek the
  * next page. A cursor row that no longer matches (deleted by retention) falls
@@ -165,7 +167,7 @@ export async function queryEvents(db: KingletDb, opts: QueryOptions): Promise<St
     .orderBy(desc(schema.events.ts), desc(schema.events.id))
     .limit(opts.limit);
 
-  return rows.map(mapEventRow);
+  return rows.map((row) => mapEventRow(row, opts.projectId));
 }
 
 /** Total rows matching a project-scoped condition built by buildWhere(). */
@@ -235,12 +237,12 @@ export async function getEventByUid(
   const rows = await db
     .select()
     .from(schema.events)
-    .where(and(eq(schema.events.projectId, projectId), eq(schema.events.uid, uid)))
+    .where(and(eq(schema.events.projectKey, projectKeyOf(projectId)), eq(schema.events.uid, uid)))
     .limit(1);
 
   const row = rows[0];
 
-  return row ? mapEventRow(row) : null;
+  return row ? mapEventRow(row, projectId) : null;
 }
 
 /**
@@ -270,7 +272,7 @@ export async function getEventContext(
           .from(schema.events)
           .where(
             and(
-              eq(schema.events.projectId, projectId),
+              eq(schema.events.projectKey, projectKeyOf(projectId)),
               or(
                 lt(schema.events.ts, event.ts),
                 and(eq(schema.events.ts, event.ts), lt(schema.events.id, event.id)),
@@ -288,7 +290,7 @@ export async function getEventContext(
           .from(schema.events)
           .where(
             and(
-              eq(schema.events.projectId, projectId),
+              eq(schema.events.projectKey, projectKeyOf(projectId)),
               or(
                 gt(schema.events.ts, event.ts),
                 and(eq(schema.events.ts, event.ts), gt(schema.events.id, event.id)),
@@ -303,13 +305,13 @@ export async function getEventContext(
   for (let i = beforeRows.length - 1; i >= 0; i--) {
     const row = beforeRows[i];
 
-    if (row) beforeEvents.push(mapEventRow(row));
+    if (row) beforeEvents.push(mapEventRow(row, projectId));
   }
 
   return {
     event,
     before: beforeEvents,
-    after: afterRows.map(mapEventRow),
+    after: afterRows.map((row) => mapEventRow(row, projectId)),
   };
 }
 
@@ -319,7 +321,7 @@ const HISTOGRAM_MAX_POINTS = 500;
  * Per-bucket, per-level counts. Grouping by a computed bucket makes SQLite
  * sort every row in the window; instead, generate the bucket starts and count
  * each (level, bucket) slice as an index-only range on
- * `(project_id, level, ts)`. Same totals, roughly 6x faster on a busy day.
+ * `(project_key, level, ts)`. Same totals, roughly 6x faster on a busy day.
  */
 export async function histogramPoints(
   db: KingletDb,
@@ -331,7 +333,7 @@ export async function histogramPoints(
   const start = Math.floor(from / bucketMs) * bucketMs;
 
   const levelCount = (level: number): SQL =>
-    sql`(SELECT count(*) FROM events e WHERE e.project_id = ${projectId} AND e.level = ${level} AND e.ts >= max(buckets.s, ${from}) AND e.ts < buckets.s + ${bucketMs} AND e.ts <= ${to})`;
+    sql`(SELECT count(*) FROM events e WHERE e.project_key = ${projectKeyOf(projectId)} AND e.level = ${level} AND e.ts >= max(buckets.s, ${from}) AND e.ts < buckets.s + ${bucketMs} AND e.ts <= ${to})`;
 
   const rows = await db.all<{
     s: number;
@@ -377,7 +379,9 @@ export async function listServices(db: KingletDb, projectId: string): Promise<Se
   const rows = await db
     .select({ name: schema.events.service, n: count() })
     .from(schema.events)
-    .where(and(eq(schema.events.projectId, projectId), isNotNull(schema.events.service)))
+    .where(
+      and(eq(schema.events.projectKey, projectKeyOf(projectId)), isNotNull(schema.events.service)),
+    )
     .groupBy(schema.events.service)
     .orderBy(desc(count()))
     .limit(200);
@@ -398,7 +402,7 @@ export async function deleteOlderThan(
 
   const exclusion =
     excludeProjectIds.length > 0
-      ? notInArray(schema.events.projectId, [...excludeProjectIds])
+      ? sql`${schema.events.projectKey} NOT IN ${projectKeysOf(excludeProjectIds)}`
       : undefined;
 
   for (;;) {
@@ -426,7 +430,7 @@ export async function deleteByProject(
     const rangeClause = range ? sql` AND ts >= ${range.from} AND ts <= ${range.to}` : sql``;
 
     const result = await db.run(
-      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE project_id = ${projectId}${rangeClause} ORDER BY id LIMIT 10000)`,
+      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE project_key = ${projectKeyOf(projectId)}${rangeClause} ORDER BY id LIMIT 10000)`,
     );
 
     const changed = Number(result.rowsAffected ?? 0);

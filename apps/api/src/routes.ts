@@ -70,6 +70,7 @@ import { isBoolean, isJsonObject, isString } from "./json.ts";
 import type { JsonObject, JsonValue } from "./json.ts";
 import { validateQueryString } from "./query-validation.ts";
 import { eventSizeBytes } from "./storage/events.ts";
+import { projectKeyOf } from "./storage/project-keys.ts";
 import type { Monitor, MonitorEngine } from "./monitors.ts";
 import {
   createMonitorFromRaw,
@@ -522,7 +523,7 @@ export function registerRoutes(
         .delete(schema.monitorChannels)
         .where(inArray(schema.monitorChannels.monitorId, monitorIds));
       await tx.delete(schema.monitors).where(eq(schema.monitors.projectId, id));
-      await tx.delete(schema.events).where(eq(schema.events.projectId, id));
+      await tx.delete(schema.events).where(eq(schema.events.projectKey, projectKeyOf(id)));
       await tx.delete(schema.projectUsage).where(eq(schema.projectUsage.projectId, id));
       await tx.delete(schema.apiKeys).where(eq(schema.apiKeys.projectId, id));
       await tx.delete(schema.projectMembers).where(eq(schema.projectMembers.projectId, id));
@@ -1386,8 +1387,8 @@ export function registerRoutes(
     const limit = clampInt(c.req.query("limit"), 200, 1, 1000);
     const cursorRaw = Number(c.req.query("cursor"));
     const cursor = Number.isFinite(cursorRaw) && cursorRaw > 0 ? cursorRaw : null;
-    const filter = buildWhere(parseFilters(q), { from, to }, projectId);
-    const rows = await storage.queryEvents({ filter, limit, cursor });
+    const filter = buildWhere(parseFilters(q), { from, to }, projectId, storage.searchMode);
+    const rows = await storage.queryEvents({ projectId, filter, limit, cursor });
 
     return c.json({
       events: rows.map(toClientEvent),
@@ -1506,7 +1507,7 @@ export function registerRoutes(
 
     if (range instanceof Response) return range;
     const { from, to } = range;
-    const filter = buildWhere(parseFilters(q), { from, to }, projectId);
+    const filter = buildWhere(parseFilters(q), { from, to }, projectId, storage.searchMode);
 
     // Total and grouped counts are intentionally separate reads. A concurrent
     // ingest can make `total` differ from the sum of `groups` transiently.

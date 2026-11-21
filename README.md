@@ -115,8 +115,8 @@ log.error("payment failed", { orderId: 1234, code: "card_declined" });
 await log.close(); // best-effort flush on shutdown
 ```
 
-Events buffer in-process and ship as one NDJSON batch (200 events or every
-1000ms by default). Failed batches are re-queued and reported via `onError` —
+Events buffer in-process and ship as one NDJSON batch (1000 events or every
+1000ms by default; at most 5000 per request). Failed batches are re-queued and reported via `onError` —
 your app never blocks on logging.
 
 ### AI clients (MCP)
@@ -325,6 +325,7 @@ the database, manifests, logs, or API responses.
 | `KINGLET_PORT`                               | `3000`                                        | HTTP port                                                                             |
 | `KINGLET_HOST`                               | _(all interfaces)_                            | Bind address; set `127.0.0.1` for a loopback-only listener                            |
 | `KINGLET_STORAGE`                            | `auto`                                        | `sqlite`, `libsql`, or `auto` (picks by db path scheme)                               |
+| `KINGLET_SEARCH`                             | `substring`                                   | Message search index: `substring` (trigram), `words` (word prefix), or `off`          |
 | `KINGLET_DB_PATH`                            | `data/kinglet.db` (image: `/data/kinglet.db`) | Plain path → SQLite; `libsql://`/`https://`/`file:` → libSQL                          |
 | `KINGLET_DB_AUTH_TOKEN`                      | —                                             | Auth token for remote libSQL/Turso databases                                          |
 | `KINGLET_ADMIN_EMAIL`                        | `admin@kinglet.local`                         | Bootstrap administrator email (when no administrator exists)                          |
@@ -389,7 +390,14 @@ With `KINGLET_STORAGE=auto` (the default), the driver is picked from the db
 path scheme: plain paths use the local file; `libsql://`, `https://`, `wss://`,
 and `file:` URLs use the libSQL transport. One caveat: some hosted libSQL
 builds lack the FTS5 trigram tokenizer — Kinglet detects that and falls back to
-word-prefix search with a console warning. Schema edits:
+word-prefix search with a console warning.
+
+`KINGLET_SEARCH` trades search for ingest speed and disk. `substring` (default)
+matches any 3+ character fragment; `words` matches whole words and word
+prefixes (`time` finds `timeout`, `out` does not) and ingests about 45% faster
+with about 25% less disk; `off` drops the index (about 2× ingest, about 30% less
+disk) and text filters scan the selected time window instead. Changing it
+rebuilds or drops the index once at boot. Schema edits:
 
 ```bash
 pnpm --filter @kinglet/api db:generate   # drizzle-kit migration from schema.ts

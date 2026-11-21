@@ -13,6 +13,7 @@ import type { BackupObjectStore } from "../backups/s3.ts";
 import { eventSizeBytes } from "../storage/events.ts";
 import type { KingletDb } from "../storage/db.ts";
 import type { Storage } from "../storage/index.ts";
+import { ensureProjectKey } from "../storage/project-keys.ts";
 import * as schema from "../storage/schema.ts";
 import { archiveLevelIndex, parseArchiveLine } from "./ndjson.ts";
 import { resolveMaxSpoolBytes } from "./spool.ts";
@@ -65,7 +66,7 @@ interface ArchiveObjectRef {
 
 interface ImportRow {
   uid: string;
-  projectId: string;
+  projectKey: number;
   apiKeyId: null;
   ts: number;
   level: number;
@@ -298,6 +299,7 @@ async function insertSpoolFile(
   projectId: string,
   importNow: number,
 ): Promise<ArchiveImportResult> {
+  const projectKey = await ensureProjectKey(storage.client, projectId);
   const stream = fs.createReadStream(filePath);
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   let imported = 0;
@@ -317,7 +319,7 @@ async function insertSpoolFile(
 
       batch.push({
         uid: line.uid,
-        projectId,
+        projectKey,
         apiKeyId: null,
         ts: line.ts,
         level,

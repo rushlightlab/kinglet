@@ -14,6 +14,7 @@ import { isFiniteNumber } from "../json.ts";
 import { createCronScheduler, validateCron } from "../schedule.ts";
 import type { CronScheduler } from "../schedule.ts";
 import type { Storage } from "../storage/index.ts";
+import { projectKeyOf } from "../storage/project-keys.ts";
 import * as schema from "../storage/schema.ts";
 import { publishSystemEvent } from "../system-events.ts";
 import { importArchive } from "./import.ts";
@@ -472,7 +473,9 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
         fields: schema.events.fields,
       })
       .from(schema.events)
-      .where(and(eq(schema.events.projectId, projectId), lt(schema.events.ts, cutoff)))
+      .where(
+        and(eq(schema.events.projectKey, projectKeyOf(projectId)), lt(schema.events.ts, cutoff)),
+      )
       .orderBy(asc(schema.events.id))
       .limit(MAX_PART_EVENTS);
 
@@ -657,7 +660,7 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
       // rowids after a concurrent clear/project wipe, and the archive boundary
       // must not depend on a separate read.
       const result = await storage.db.run(
-        sql`DELETE FROM events WHERE ${eq(schema.events.projectId, projectId)} AND ${inArray(
+        sql`DELETE FROM events WHERE ${eq(schema.events.projectKey, projectKeyOf(projectId))} AND ${inArray(
           schema.events.id,
           chunk,
         )}`,

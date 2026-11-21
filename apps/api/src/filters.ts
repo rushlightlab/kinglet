@@ -1,6 +1,8 @@
 import { sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
+import { projectKeyOf } from "./storage/project-keys.ts";
 import { LEVEL_NAMES } from "./types.ts";
+import type { SearchMode } from "./types.ts";
 
 /**
  * The filter grammar:
@@ -141,15 +143,22 @@ export function parseFilters(q: string): ParsedFilters {
 }
 
 /**
- * Free-text terms: >= 3 chars go through FTS5 trigram phrase search
- * (substring semantics), shorter ones fall back to LIKE with escaped
- * wildcards.
+ * Free-text terms, by search index:
+ *  - substring (trigram): >= 3 chars use an FTS5 phrase, i.e. substring match.
+ *  - words (unicode61): an FTS5 phrase whose last word is a prefix, so `time`
+ *    finds `timeout` and `conn ref` finds `conn refused`.
+ *  - off, short trigram terms, or terms with no word characters: LIKE with
+ *    escaped wildcards over the project/time window.
  */
-function textClause(term: string): SQL {
-  if (term.length >= 3) {
-    const phrase = `"${term.replace(/"/g, '""')}"`;
+function textClause(term: string, search: SearchMode): SQL {
+  const phrase = `"${term.replace(/"/g, '""')}"`;
 
+  if (search === "substring" && term.length >= 3) {
     return sql`id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ${phrase})`;
+  }
+
+  if (search === "words" && /[\p{L}\p{N}]/u.test(term)) {
+    return sql`id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ${`${phrase}*`})`;
   }
 
   const escaped = term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
@@ -157,9 +166,14 @@ function textClause(term: string): SQL {
   return sql`message LIKE ${`%${escaped}%`} ESCAPE '\\'`;
 }
 
-export function buildWhere(f: ParsedFilters, range: EventRange, projectId: string): SQL {
+export function buildWhere(
+  f: ParsedFilters,
+  range: EventRange,
+  projectId: string,
+  search: SearchMode,
+): SQL {
   const parts: SQL[] = [
-    sql`project_id = ${projectId}`,
+    sql`project_key = ${projectKeyOf(projectId)}`,
     sql`ts >= ${range.from}`,
     sql`ts <= ${range.to}`,
   ];
@@ -175,9 +189,9 @@ export function buildWhere(f: ParsedFilters, range: EventRange, projectId: strin
 
   if (f.apiKeyId !== null) parts.push(sql`api_key_id = ${f.apiKeyId}`);
 
-  for (const term of f.includes) parts.push(textClause(term));
+  for (const term of f.includes) parts.push(textClause(term, search));
 
-  for (const term of f.excludes) parts.push(sql`NOT (${textClause(term)})`);
+  for (const term of f.excludes) parts.push(sql`NOT (${textClause(term, search)})`);
 
   return sql.join(parts, sql` AND `);
 }

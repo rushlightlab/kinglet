@@ -1,12 +1,14 @@
 import type { Client } from "@libsql/client";
 import type { SQL } from "drizzle-orm";
 import type { Normalized } from "../ingest.ts";
-import type { StoredEvent } from "../types.ts";
+import type { SearchMode, StoredEvent } from "../types.ts";
 import type { KingletDb } from "./db.ts";
 
 export type StorageKind = "sqlite" | "libsql";
 
 export interface QueryOptions {
+  /** Project the filter is scoped to; stamped on the returned rows. */
+  projectId: string;
   /** Drizzle condition from buildWhere() — includes the project filter. */
   filter: SQL;
   limit: number;
@@ -58,6 +60,8 @@ export interface Storage {
   readonly db: KingletDb;
   /** Raw libSQL client, needed for `VACUUM INTO` and pragmas. */
   readonly client: Client;
+  /** Full-text index in effect (may differ from the setting on fallback). */
+  readonly searchMode: SearchMode;
   insertEvents(
     projectId: string,
     events: Normalized[],
@@ -106,6 +110,11 @@ export interface StorageSettings {
   dbPath: string;
   /** Auth token for remote libSQL / Turso. */
   authToken?: string;
+  /**
+   * Wanted full-text index. The server sets it; one-off tools omit it and
+   * use whatever index the database already has.
+   */
+  search?: SearchMode;
 }
 
 export function resolveStorageKind(settings: StorageSettings): StorageKind {

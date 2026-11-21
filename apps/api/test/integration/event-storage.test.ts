@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildWhere, parseFilters } from "../../src/filters.ts";
 import type { Normalized } from "../../src/ingest.ts";
+import type { SearchMode } from "../../src/types.ts";
 import { createStorage } from "../../src/storage/index.ts";
 import type { Storage } from "../../src/storage/index.ts";
 import { createTempDatabase } from "../helpers/temp.ts";
@@ -95,13 +96,18 @@ describe("queryEvents", () => {
     );
     await store().insertEvents(OTHER_PROJECT, [event("other", BASE + 4 * MINUTE)], null);
 
-    const filter = buildWhere(parseFilters(""), { from: BASE, to: BASE + 10 * MINUTE }, PROJECT);
+    const filter = buildWhere(
+      parseFilters(""),
+      { from: BASE, to: BASE + 10 * MINUTE },
+      PROJECT,
+      "substring",
+    );
 
     const pages: string[][] = [];
     let cursor: number | null = null;
 
     for (let page = 0; page < 4; page++) {
-      const rows = await store().queryEvents({ filter, limit: 2, cursor });
+      const rows = await store().queryEvents({ projectId: PROJECT, filter, limit: 2, cursor });
 
       if (rows.length === 0) break;
       pages.push(rows.map((row) => row.message));
@@ -118,10 +124,21 @@ describe("queryEvents", () => {
       null,
     );
 
-    const filter = buildWhere(parseFilters(""), { from: BASE, to: BASE + 10 * MINUTE }, PROJECT);
+    const filter = buildWhere(
+      parseFilters(""),
+      { from: BASE, to: BASE + 10 * MINUTE },
+      PROJECT,
+      "substring",
+    );
 
     const missingCursor = (rows[2]?.id ?? 0) + 1_000;
-    const page = await store().queryEvents({ filter, limit: 10, cursor: missingCursor });
+
+    const page = await store().queryEvents({
+      projectId: PROJECT,
+      filter,
+      limit: 10,
+      cursor: missingCursor,
+    });
 
     expect(page.map((row) => row.message)).toEqual(["c", "b", "a"]);
   });
@@ -135,11 +152,17 @@ describe("queryEvents", () => {
       parseFilters(""),
       { from: BASE - MINUTE, to: BASE + 10 * MINUTE },
       PROJECT,
+      "substring",
     );
 
     // With the foreign row's timestamp as an anchor, "mine" (later) would be
     // hidden. Scoped to the project, the anchor is absent and id order applies.
-    const page = await store().queryEvents({ filter, limit: 10, cursor: foreign?.id ?? 0 });
+    const page = await store().queryEvents({
+      projectId: PROJECT,
+      filter,
+      limit: 10,
+      cursor: foreign?.id ?? 0,
+    });
 
     expect(page.map((row) => row.message)).toEqual(["mine"]);
   });
@@ -186,5 +209,99 @@ describe("histogramPoints", () => {
       [BASE + MINUTE, 1],
       [BASE + 2 * MINUTE, 0],
     ]);
+  });
+});
+
+async function search(mode: SearchMode, q: string): Promise<string[]> {
+  const filter = buildWhere(
+    parseFilters(q),
+    { from: BASE - MINUTE, to: BASE + 10 * MINUTE },
+    PROJECT,
+    mode,
+  );
+
+  const rows = await store().queryEvents({ projectId: PROJECT, filter, limit: 50, cursor: null });
+
+  // Newest first by event time.
+  return rows.map((row) => row.message);
+}
+
+async function reopen(mode: SearchMode): Promise<void> {
+  await store().close();
+  storage = await createStorage({ kind: "sqlite", dbPath: temp?.dbPath ?? "", search: mode });
+}
+
+describe("search modes", () => {
+  const corpus = [
+    "connection refused by upstream",
+    "request timeout after 30s",
+    "user signed in",
+    "cache hit ratio=0.93",
+  ];
+
+  beforeEach(async () => {
+    await store().insertEvents(
+      PROJECT,
+      corpus.map((message, i) => event(message, BASE + i)),
+      null,
+    );
+  });
+
+  it("matches inner substrings with the trigram index", async () => {
+    await reopen("substring");
+
+    expect(store().searchMode).toBe("substring");
+    expect(await search("substring", "fused")).toEqual(["connection refused by upstream"]);
+    expect(await search("substring", "ratio=0.9")).toEqual(["cache hit ratio=0.93"]);
+  });
+
+  it("switches to word-prefix search and back, rebuilding existing rows", async () => {
+    await reopen("words");
+
+    expect(store().searchMode).toBe("words");
+    expect(await search("words", "time")).toEqual(["request timeout after 30s"]);
+    expect(await search("words", '"connection ref"')).toEqual(["connection refused by upstream"]);
+    expect(await search("words", "fused")).toEqual([]);
+    expect(await search("words", "-user")).toHaveLength(3);
+
+    // New rows are indexed by the recreated triggers.
+    await store().insertEvents(PROJECT, [event("timeline rendered", BASE + 9)], null);
+    expect(await search("words", "time")).toEqual([
+      "timeline rendered",
+      "request timeout after 30s",
+    ]);
+
+    await reopen("substring");
+
+    expect(store().searchMode).toBe("substring");
+    expect(await search("substring", "fused")).toEqual(["connection refused by upstream"]);
+  });
+
+  it("drops the index when search is off and still filters by substring", async () => {
+    await reopen("off");
+
+    expect(store().searchMode).toBe("off");
+
+    const fts = await store().client.execute(
+      "SELECT count(*) AS n FROM sqlite_master WHERE name = 'events_fts'",
+    );
+
+    expect(Number(fts.rows[0]?.n)).toBe(0);
+
+    // Inserts and deletes keep working without the triggers.
+    await store().insertEvents(PROJECT, [event("refused again", BASE + 9)], null);
+    expect(await search("off", "fused")).toEqual([
+      "refused again",
+      "connection refused by upstream",
+    ]);
+    expect(await store().deleteByProject(PROJECT)).toBe(5);
+  });
+
+  it("keeps the current index when no mode is requested", async () => {
+    await reopen("words");
+    await store().close();
+    storage = await createStorage({ kind: "sqlite", dbPath: temp?.dbPath ?? "" });
+
+    expect(store().searchMode).toBe("words");
   });
 });

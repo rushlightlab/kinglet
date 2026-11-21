@@ -44,6 +44,7 @@ async function main(): Promise<void> {
     kind: config.storageKind,
     dbPath: config.dbPath,
     authToken: config.dbAuthToken,
+    search: config.searchMode,
   });
 
   await ensureSchemaExtras(storage, config.timezone);

@@ -959,6 +959,7 @@ export function startMonitorEngine(
         parsed(m.query),
         { from: now - m.windowMs, to: now },
         m.projectId,
+        storage.searchMode,
       );
 
       const rows = await storage.db.select({ n: count() }).from(schema.events).where(where);

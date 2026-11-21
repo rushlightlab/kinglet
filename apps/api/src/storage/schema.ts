@@ -8,7 +8,7 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 /** Bump when a migration changes the on-disk contract (restore uses this). */
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 /**
  * Kinglet's schema in Drizzle.
@@ -58,7 +58,13 @@ export const events = sqliteTable(
     // Public, time-sortable identifier for single-event lookups. The integer
     // id stays the rowid so FTS5 external content and pagination keep working.
     uid: text("uid"),
-    projectId: text("project_id").notNull(),
+    /**
+     * Compact per-database project number from `project_keys`, not the
+     * project UUID: it is repeated in the row and every secondary index, and
+     * a 1-2 byte integer instead of 36 text bytes saves about a quarter of the
+     * event storage.
+     */
+    projectKey: integer("project_key").notNull(),
     apiKeyId: text("api_key_id"),
     ts: integer("ts").notNull(),
     level: integer("level").notNull(),
@@ -69,21 +75,31 @@ export const events = sqliteTable(
     /** UTF-8 bytes of the stored payload; maintained on insert. */
     sizeBytes: integer("size_bytes").notNull().default(0),
   },
-  // Every read is project-scoped, so secondary indexes lead with project_id.
-  // `(project_id, ts)` serves the newest-first list and time windows;
-  // `(project_id, level, ts)` serves level filters, level grouping, and the
-  // histogram as index-only counts; `(project_id, service, ts)` serves service
+  // Every read is project-scoped, so secondary indexes lead with project_key.
+  // `(project_key, ts)` serves the newest-first list and time windows;
+  // `(project_key, level, ts)` serves level filters, level grouping, and the
+  // histogram as index-only counts; `(project_key, service, ts)` serves service
   // filters and the services list. `ts` alone serves global retention.
   // `env:` and `key:` filters scan the project/time index instead of paying
   // for their own indexes on every insert.
   (table) => [
     index("idx_events_ts").on(table.ts),
-    index("idx_events_project_ts").on(table.projectId, table.ts),
-    index("idx_events_project_level_ts").on(table.projectId, table.level, table.ts),
-    index("idx_events_project_service_ts").on(table.projectId, table.service, table.ts),
+    index("idx_events_project_ts").on(table.projectKey, table.ts),
+    index("idx_events_project_level_ts").on(table.projectKey, table.level, table.ts),
+    index("idx_events_project_service_ts").on(table.projectKey, table.service, table.ts),
     uniqueIndex("uq_events_uid").on(table.uid),
   ],
 );
+
+/**
+ * Project UUID to the small integer stored on events. Keys are assigned once
+ * and never reused, so rows left behind by a deleted project can never be
+ * read as another project's.
+ */
+export const projectKeys = sqliteTable("project_keys", {
+  projectId: text("project_id").primaryKey(),
+  key: integer("key").notNull().unique(),
+});
 
 /**
  * Per-project event/byte accounting, maintained by triggers on `events`.

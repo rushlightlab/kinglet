@@ -7,7 +7,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { uuidv7 } from "../auth/ids.ts";
+import type { SearchMode } from "../types.ts";
 import * as schema from "./schema.ts";
+import { currentSearchMode, ensureSearchTriggers, reconcileSearchIndex } from "./search.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -83,7 +85,8 @@ function preservePragmasAcrossTransactions(client: Client): void {
 export async function openDatabase(opts: {
   url: string;
   authToken?: string;
-}): Promise<{ db: KingletDb; client: Client }> {
+  search?: SearchMode;
+}): Promise<{ db: KingletDb; client: Client; searchMode: SearchMode }> {
   const isFile = opts.url.toLowerCase().startsWith("file:");
 
   if (isFile) {
@@ -146,7 +149,13 @@ export async function openDatabase(opts: {
 
   await backfillEventUids(client);
 
-  return { db, client };
+  await ensureSearchTriggers(client);
+
+  const searchMode = opts.search
+    ? await reconcileSearchIndex(client, opts.search)
+    : await currentSearchMode(client);
+
+  return { db, client, searchMode };
 }
 
 /** Give existing events a UUID v7 once; new rows get one at insert time. */
@@ -188,7 +197,11 @@ async function ensureProjectIdCompat(client: Client): Promise<void> {
     return result.rows.map((row) => String(row.name));
   };
 
-  if (!(await columns("events")).includes("project_id")) {
+  const eventColumns = await columns("events");
+
+  // Migration 0011 replaced project_id with project_key; only a pre-v0.1
+  // table has neither.
+  if (!eventColumns.includes("project_id") && !eventColumns.includes("project_key")) {
     await client.execute("ALTER TABLE events ADD COLUMN project_id INTEGER NOT NULL DEFAULT 1");
   }
 
