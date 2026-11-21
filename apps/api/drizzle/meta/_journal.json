@@ -71,6 +71,13 @@
       "when": 1795156862307,
       "tag": "0009_young_the_spike",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1795220766527,
+      "tag": "0010_event_indexes",
+      "breakpoints": true
     }
   ]
 }

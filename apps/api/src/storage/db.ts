@@ -1,5 +1,5 @@
 import { createClient } from "@libsql/client";
-import type { Client } from "@libsql/client";
+import type { Client, TransactionMode } from "@libsql/client";
 import { drizzle } from "drizzle-orm/libsql";
 import type { LibSQLDatabase } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
@@ -35,6 +35,43 @@ export function toLibsqlUrl(dbPath: string): string {
 }
 
 /**
+ * Per-connection settings. `journal_mode = WAL` is persistent and set once;
+ * these reset to SQLite defaults (FULL sync, no busy wait) on every new
+ * connection.
+ */
+async function applyConnectionPragmas(client: Client): Promise<void> {
+  await client.execute("PRAGMA synchronous = NORMAL");
+  await client.execute("PRAGMA busy_timeout = 5000");
+}
+
+/**
+ * The local libSQL client hands its open connection to each interactive
+ * transaction and lazily opens a fresh one for everything after it. Without
+ * this, the first `db.transaction()` silently drops the pragmas above and
+ * every later commit pays a full fsync. Hot paths use `batch()`, which stays
+ * on the current connection; this keeps the rarer transactions from
+ * degrading it.
+ */
+function preservePragmasAcrossTransactions(client: Client): void {
+  const begin = client.transaction.bind(client);
+
+  client.transaction = async (mode?: TransactionMode) => {
+    const tx = await begin(mode);
+
+    try {
+      await applyConnectionPragmas(client);
+    } catch (err) {
+      console.warn(
+        "[kinglet] could not re-apply SQLite pragmas:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    return tx;
+  };
+}
+
+/**
  * One driver for both modes: the libSQL client opens a local SQLite file
  * (default, zero config) or a hosted Turso database with the same code.
  *
@@ -64,14 +101,15 @@ export async function openDatabase(opts: {
   if (isFile) {
     try {
       await client.execute("PRAGMA journal_mode = WAL");
-      await client.execute("PRAGMA synchronous = NORMAL");
-      await client.execute("PRAGMA busy_timeout = 5000");
+      await applyConnectionPragmas(client);
     } catch (err) {
       console.warn(
         "[kinglet] could not apply SQLite pragmas:",
         err instanceof Error ? err.message : err,
       );
     }
+
+    preservePragmasAcrossTransactions(client);
   }
 
   const db = drizzle(client, { schema });

@@ -162,10 +162,13 @@ async function projectEventCount(storage: Storage, projectId: string): Promise<n
 
   if (cached && cached.expiresAt > now) return cached.value;
 
+  // Trigger-maintained, so this is a primary-key lookup rather than a COUNT(*)
+  // over every stored event in the project.
   const rows = await storage.db
-    .select({ n: count() })
-    .from(schema.events)
-    .where(eq(schema.events.projectId, projectId));
+    .select({ n: schema.projectUsage.events })
+    .from(schema.projectUsage)
+    .where(eq(schema.projectUsage.projectId, projectId))
+    .limit(1);
 
   const value = Number(rows[0]?.n ?? 0);
   projectCountCache.set(projectId, { value, expiresAt: now + 30_000 });

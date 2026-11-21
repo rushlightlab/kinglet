@@ -20,7 +20,7 @@ export async function createStorage(settings: StorageSettings): Promise<Storage>
     db,
     client,
     insertEvents: (projectId, events, apiKeyId) =>
-      eventsRepo.insertEvents(db, projectId, events, apiKeyId),
+      eventsRepo.insertEvents(client, projectId, events, apiKeyId),
     queryEvents: (opts) => eventsRepo.queryEvents(db, opts),
     getEventByUid: (projectId, uid) => eventsRepo.getEventByUid(db, projectId, uid),
     getEventContext: (projectId, uid, before, after) =>

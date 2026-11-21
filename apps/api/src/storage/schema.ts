@@ -8,7 +8,7 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 /** Bump when a migration changes the on-disk contract (restore uses this). */
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /**
  * Kinglet's schema in Drizzle.
@@ -69,12 +69,18 @@ export const events = sqliteTable(
     /** UTF-8 bytes of the stored payload; maintained on insert. */
     sizeBytes: integer("size_bytes").notNull().default(0),
   },
+  // Every read is project-scoped, so secondary indexes lead with project_id.
+  // `(project_id, ts)` serves the newest-first list and time windows;
+  // `(project_id, level, ts)` serves level filters, level grouping, and the
+  // histogram as index-only counts; `(project_id, service, ts)` serves service
+  // filters and the services list. `ts` alone serves global retention.
+  // `env:` and `key:` filters scan the project/time index instead of paying
+  // for their own indexes on every insert.
   (table) => [
     index("idx_events_ts").on(table.ts),
     index("idx_events_project_ts").on(table.projectId, table.ts),
-    index("idx_events_project_key_ts").on(table.projectId, table.apiKeyId, table.ts),
-    index("idx_events_service_ts").on(table.service, table.ts),
-    index("idx_events_env_ts").on(table.env, table.ts),
+    index("idx_events_project_level_ts").on(table.projectId, table.level, table.ts),
+    index("idx_events_project_service_ts").on(table.projectId, table.service, table.ts),
     uniqueIndex("uq_events_uid").on(table.uid),
   ],
 );
