@@ -76,7 +76,7 @@ function mcpConfigSnippet(plaintext: string): string {
         command: "npx",
         // Keep the setup snippet on the reviewed release instead of the
         // mutable latest dist-tag.
-        args: ["-y", "@kinglet/mcp@0.3.0"],
+        args: ["-y", "@kinglet/mcp@0.4.0"],
         env: {
           KINGLET_URL: window.location.origin,
           KINGLET_MCP_KEY: plaintext,

@@ -5,7 +5,7 @@ It lets AI clients search logs and manage monitors in one Kinglet project over a
 local stdio connection.
 
 Run it with `npx -y @kinglet/mcp`, and pin the version you reviewed in
-production, for example `npx -y @kinglet/mcp@0.3.0`.
+production, for example `npx -y @kinglet/mcp@0.4.0`.
 
 ## Requirements
 
@@ -45,7 +45,7 @@ status, and row count.
   "mcpServers": {
     "kinglet": {
       "command": "npx",
-      "args": ["-y", "@kinglet/mcp@0.3.0"],
+      "args": ["-y", "@kinglet/mcp@0.4.0"],
       "env": {
         "KINGLET_URL": "https://logs.example.com",
         "KINGLET_MCP_KEY": "km_..."
@@ -62,7 +62,7 @@ On Windows, wrap the command:
   "mcpServers": {
     "kinglet": {
       "command": "cmd",
-      "args": ["/c", "npx", "-y", "@kinglet/mcp@0.3.0"],
+      "args": ["/c", "npx", "-y", "@kinglet/mcp@0.4.0"],
       "env": {
         "KINGLET_URL": "https://logs.example.com",
         "KINGLET_MCP_KEY": "km_..."
@@ -82,7 +82,7 @@ environment expansion, or clear the shell history entry afterward:
 claude mcp add kinglet \
   --env KINGLET_URL=https://logs.example.com \
   --env KINGLET_MCP_KEY=km_... \
-  -- npx -y @kinglet/mcp@0.3.0
+  -- npx -y @kinglet/mcp@0.4.0
 ```
 
 Or commit a project-scoped `.mcp.json` with the same `mcpServers` shape shown
@@ -98,7 +98,7 @@ client supports it, over a literal secret.
   "mcpServers": {
     "kinglet": {
       "command": "npx",
-      "args": ["-y", "@kinglet/mcp@0.3.0"],
+      "args": ["-y", "@kinglet/mcp@0.4.0"],
       "env": {
         "KINGLET_URL": "https://logs.example.com",
         "KINGLET_MCP_KEY": "km_..."
@@ -118,7 +118,7 @@ client supports it, over a literal secret.
     "kinglet": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@kinglet/mcp@0.3.0"],
+      "args": ["-y", "@kinglet/mcp@0.4.0"],
       "env": {
         "KINGLET_URL": "https://logs.example.com",
         "KINGLET_MCP_KEY": "km_..."
@@ -138,11 +138,11 @@ the config is shared.
 ```toml
 [mcp_servers.kinglet]
 command = "npx"
-args = ["-y", "@kinglet/mcp@0.3.0"]
+args = ["-y", "@kinglet/mcp@0.4.0"]
 env = { KINGLET_URL = "https://logs.example.com", KINGLET_MCP_KEY = "km_..." }
 ```
 
-On Windows, use `command = "cmd"` and `args = ["/c", "npx", "-y", "@kinglet/mcp@0.3.0"]`.
+On Windows, use `command = "cmd"` and `args = ["/c", "npx", "-y", "@kinglet/mcp@0.4.0"]`.
 
 ### Generic stdio
 

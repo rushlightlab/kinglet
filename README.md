@@ -47,7 +47,7 @@ Sign in with the admin email (default `admin@kinglet.local`) and that password.
 Set `KINGLET_ADMIN_EMAIL` / `KINGLET_ADMIN_PASSWORD` on the container to choose
 your own — they only apply when no administrator exists. For a public server,
 set `KINGLET_BASE_URL` to your HTTPS origin and pin a release tag such as
-`:0.3.0` instead of `:latest`.
+`:0.4.0` instead of `:latest`.
 
 Then go to **/settings → projects & keys**, create an API key (`kl_…`, scopes
 `ingest` / `query`), and send your first log with it:
@@ -496,8 +496,8 @@ publish from `main`. The workflow verifies the tag, runs the build and typecheck
 and waits for approval from the `release` environment before pushing.
 
 ```bash
-git tag v0.3.0 -m "Kinglet v0.3.0"
-git push origin v0.3.0
+git tag v0.4.0 -m "Kinglet v0.4.0"
+git push origin v0.4.0
 ```
 
 The docs changelog and landing version badge are generated from GitHub

@@ -18,7 +18,7 @@
 
 services:
   kinglet:
-    image: ghcr.io/rushlightlab/kinglet:0.3.0
+    image: ghcr.io/rushlightlab/kinglet:0.4.0
     # For production, pin the release digest instead of the mutable version tag:
     #   image: ghcr.io/rushlightlab/kinglet@sha256:<digest>
     environment:
