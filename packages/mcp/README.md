@@ -9,7 +9,8 @@ production, for example `npx -y @kinglet/mcp@0.3.0`.
 
 ## Requirements
 
-- Node.js 26 or newer, matching the Kinglet server and workspace toolchain.
+- Node.js 24 or newer. (The Kinglet server itself needs Node 26; the MCP server
+  only talks to it over HTTP.)
 - A running Kinglet server reachable over HTTP(S).
 - An **MCP key** (`km_…`) created in that project's settings. A regular API key
   (`kl_…`) is rejected with a pointer to MCP keys.

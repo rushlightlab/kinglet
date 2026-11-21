@@ -1,6 +1,6 @@
 # @kinglet/sdk-node
 
-Batching log client for Kinglet. Zero dependencies, Node 26+.
+Batching log client for Kinglet. Zero dependencies, Node 24+.
 
 ```bash
 npm install @kinglet/sdk-node
