@@ -4,14 +4,29 @@ import { drizzle } from "drizzle-orm/libsql";
 import type { LibSQLDatabase } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { uuidv7 } from "../auth/ids.ts";
 import type { SearchMode } from "../types.ts";
 import * as schema from "./schema.ts";
-import { currentSearchMode, ensureSearchTriggers, reconcileSearchIndex } from "./search.ts";
+import type { SqlEngine } from "./types.ts";
+import {
+  currentSearchMode,
+  ensureSearchTriggers,
+  isVirtualTableUnsupported,
+  reconcileSearchIndex,
+  withoutSearchIndex,
+} from "./search.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+export interface OpenedDatabase {
+  db: KingletDb;
+  client: Client;
+  searchMode: SearchMode;
+  engine: SqlEngine;
+}
 
 /** The typed Drizzle database shared by every module. */
 export type KingletDb = LibSQLDatabase<typeof schema>;
@@ -86,7 +101,7 @@ export async function openDatabase(opts: {
   url: string;
   authToken?: string;
   search?: SearchMode;
-}): Promise<{ db: KingletDb; client: Client; searchMode: SearchMode }> {
+}): Promise<OpenedDatabase> {
   const isFile = opts.url.toLowerCase().startsWith("file:");
 
   if (isFile) {
@@ -124,6 +139,16 @@ export async function openDatabase(opts: {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
 
+    if (isVirtualTableUnsupported(message)) {
+      console.warn(
+        "[kinglet] this database does not support virtual tables (for example Turso's MVCC engine); " +
+          "running without a full-text index, so text filters scan the time window.",
+      );
+      await migrateWithoutSearchIndex(db);
+
+      return finishOpen(db, client, opts.search);
+    }
+
     // Some hosted libSQL builds lack the FTS5 trigram tokenizer. Only fall
     // back for that specific failure — everything else must surface.
     if (!/trigram|tokenizer/i.test(message)) throw err;
@@ -147,15 +172,55 @@ export async function openDatabase(opts: {
     await client.execute("INSERT INTO events_fts(events_fts) VALUES('rebuild')");
   }
 
-  await backfillEventUids(client);
+  return finishOpen(db, client, opts.search);
+}
 
+async function finishOpen(
+  db: KingletDb,
+  client: Client,
+  search: SearchMode | undefined,
+): Promise<OpenedDatabase> {
+  await backfillEventUids(client);
   await ensureSearchTriggers(client);
 
-  const searchMode = opts.search
-    ? await reconcileSearchIndex(client, opts.search)
+  const searchMode = search
+    ? await reconcileSearchIndex(client, search)
     : await currentSearchMode(client);
 
-  return { db, client, searchMode };
+  return { db, client, searchMode, engine: await detectEngine(client) };
+}
+
+/** Turso's MVCC engine keeps its own bookkeeping table in the schema. */
+async function detectEngine(client: Client): Promise<SqlEngine> {
+  const result = await client.execute(
+    "SELECT 1 FROM sqlite_master WHERE name = '__turso_internal_mvcc_meta' LIMIT 1",
+  );
+
+  return result.rows.length > 0 ? "turso-mvcc" : "sqlite";
+}
+
+/**
+ * Apply the shipped migrations minus the statements that create or maintain
+ * the search index. The migrator tracks applied migrations by timestamp, so
+ * later boots see them as done and never replay the stripped statements.
+ */
+async function migrateWithoutSearchIndex(db: KingletDb): Promise<void> {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "kinglet-migrations-"));
+
+  try {
+    fs.cpSync(MIGRATIONS_FOLDER, folder, { recursive: true });
+
+    for (const file of fs.readdirSync(folder)) {
+      if (!file.endsWith(".sql")) continue;
+      const target = path.join(folder, file);
+
+      fs.writeFileSync(target, withoutSearchIndex(fs.readFileSync(target, "utf8")));
+    }
+
+    await migrate(db, { migrationsFolder: folder });
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
 }
 
 /** Give existing events a UUID v7 once; new rows get one at insert time. */

@@ -8,7 +8,7 @@ export async function createStorage(settings: StorageSettings): Promise<Storage>
   const kind = resolveStorageKind(settings);
   const url = toLibsqlUrl(settings.dbPath);
 
-  const { db, client, searchMode } = await openDatabase({
+  const { db, client, searchMode, engine } = await openDatabase({
     url,
     authToken: settings.authToken,
     search: settings.search,
@@ -25,6 +25,7 @@ export async function createStorage(settings: StorageSettings): Promise<Storage>
     db,
     client,
     searchMode,
+    engine,
     insertEvents: (projectId, events, apiKeyId) =>
       eventsRepo.insertEvents(client, projectId, events, apiKeyId),
     queryEvents: (opts) => eventsRepo.queryEvents(db, opts),
@@ -35,7 +36,7 @@ export async function createStorage(settings: StorageSettings): Promise<Storage>
     groupEventCounts: (filter, groupBy, limit) =>
       eventsRepo.groupEventCounts(db, filter, groupBy, limit),
     histogramPoints: (projectId, from, to, bucketMs) =>
-      eventsRepo.histogramPoints(db, projectId, from, to, bucketMs),
+      eventsRepo.histogramPoints(db, engine, projectId, from, to, bucketMs),
     listServices: (projectId) => eventsRepo.listServices(db, projectId),
     deleteOlderThan: (ts, excludeProjectIds) =>
       eventsRepo.deleteOlderThan(db, ts, excludeProjectIds),

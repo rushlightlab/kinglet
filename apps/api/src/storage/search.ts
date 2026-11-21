@@ -15,6 +15,25 @@ import type { SearchMode } from "../types.ts";
  */
 const TOKENIZERS = { substring: "trigram", words: "unicode61" } as const;
 
+/**
+ * Engines without virtual tables cannot hold the index at all: Turso's MVCC
+ * engine ("Virtual tables are not supported in MVCC mode") and builds without
+ * FTS5. Kinglet runs there with search `off`.
+ */
+export function isVirtualTableUnsupported(message: string): boolean {
+  return /virtual tables? (?:are|is) not supported|no such module: fts5/i.test(message);
+}
+
+/** Migration SQL with every statement touching the search index removed. */
+export function withoutSearchIndex(migrationSql: string): string {
+  const BREAKPOINT = "--> statement-breakpoint";
+
+  return migrationSql
+    .split(BREAKPOINT)
+    .filter((statement) => !/events_fts/i.test(statement))
+    .join(BREAKPOINT);
+}
+
 export async function currentSearchMode(client: Client): Promise<SearchMode> {
   const result = await client.execute(
     "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'events_fts'",
@@ -84,6 +103,14 @@ export async function reconcileSearchIndex(
     await client.batch(statements, "write");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+
+    if (isVirtualTableUnsupported(message)) {
+      console.warn(
+        `[kinglet] this database cannot hold a full-text index; KINGLET_SEARCH=${wanted} falls back to off (text filters scan the time window). Set KINGLET_SEARCH=off to silence this.`,
+      );
+
+      return current;
+    }
 
     if (wanted !== "substring" || !/trigram|tokenizer/i.test(message)) throw err;
     console.warn(`[kinglet] FTS5 trigram unavailable; keeping ${current} search:`, message);

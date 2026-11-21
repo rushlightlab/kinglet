@@ -6,6 +6,9 @@ import type { KingletDb } from "./db.ts";
 
 export type StorageKind = "sqlite" | "libsql";
 
+/** SQL engine behind the connection; Turso's MVCC engine needs a few different query shapes. */
+export type SqlEngine = "sqlite" | "turso-mvcc";
+
 export interface QueryOptions {
   /** Project the filter is scoped to; stamped on the returned rows. */
   projectId: string;
@@ -62,6 +65,8 @@ export interface Storage {
   readonly client: Client;
   /** Full-text index in effect (may differ from the setting on fallback). */
   readonly searchMode: SearchMode;
+  /** Detected at open; see `SqlEngine`. */
+  readonly engine: SqlEngine;
   insertEvents(
     projectId: string,
     events: Normalized[],

@@ -390,7 +390,8 @@ With `KINGLET_STORAGE=auto` (the default), the driver is picked from the db
 path scheme: plain paths use the local file; `libsql://`, `https://`, `wss://`,
 and `file:` URLs use the libSQL transport. One caveat: some hosted libSQL
 builds lack the FTS5 trigram tokenizer — Kinglet detects that and falls back to
-word-prefix search with a console warning.
+word-prefix search with a console warning. Turso's MVCC engine has no virtual
+tables at all; Kinglet detects that too and runs with search `off`.
 
 `KINGLET_SEARCH` trades search for ingest speed and disk. `substring` (default)
 matches any 3+ character fragment; `words` matches whole words and word

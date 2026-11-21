@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildWhere, parseFilters } from "../../src/filters.ts";
 import type { Normalized } from "../../src/ingest.ts";
 import type { SearchMode } from "../../src/types.ts";
+import { histogramPoints } from "../../src/storage/events.ts";
 import { createStorage } from "../../src/storage/index.ts";
 import type { Storage } from "../../src/storage/index.ts";
 import { createTempDatabase } from "../helpers/temp.ts";
@@ -193,6 +194,24 @@ describe("histogramPoints", () => {
       { ts: BASE + 2 * MINUTE, counts: [0, 0, 0, 2, 0, 0] },
       { ts: BASE + 3 * MINUTE, counts: [0, 0, 0, 0, 0, 1] },
     ]);
+  });
+
+  it("returns the same points from the grouped query used on Turso's MVCC engine", async () => {
+    const events = Array.from({ length: 300 }, (_, i) =>
+      event(`mixed ${i}`, BASE + ((i * 7919) % (10 * MINUTE)), i % 6),
+    );
+
+    await store().insertEvents(PROJECT, events, null);
+    await store().insertEvents(OTHER_PROJECT, [event("other", BASE + MINUTE, 4)], null);
+
+    const args = [PROJECT, BASE + 15_000, BASE + 9 * MINUTE, 45_000] as const;
+    const sliced = await histogramPoints(store().db, "sqlite", ...args);
+    const grouped = await histogramPoints(store().db, "turso-mvcc", ...args);
+
+    expect(grouped).toEqual(sliced);
+    expect(sliced.reduce((sum, point) => sum + point.counts.reduce((a, n) => a + n, 0), 0)).toBe(
+      events.filter((e) => e.ts >= args[1] && e.ts <= args[2]).length,
+    );
   });
 
   it("aligns buckets to the bucket width when the window is not aligned", async () => {

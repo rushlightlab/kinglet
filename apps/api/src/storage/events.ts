@@ -9,6 +9,7 @@ import { ensureProjectKey, projectKeyOf, projectKeysOf } from "./project-keys.ts
 import * as schema from "./schema.ts";
 import type {
   AggregateGroupBy,
+  SqlEngine,
   AggregateGroups,
   EventContext,
   HistogramPointRow,
@@ -318,13 +319,16 @@ export async function getEventContext(
 const HISTOGRAM_MAX_POINTS = 500;
 
 /**
- * Per-bucket, per-level counts. Grouping by a computed bucket makes SQLite
- * sort every row in the window; instead, generate the bucket starts and count
- * each (level, bucket) slice as an index-only range on
- * `(project_key, level, ts)`. Same totals, roughly 6x faster on a busy day.
+ * Per-bucket, per-level counts. On SQLite, grouping by a computed bucket sorts
+ * every row in the window; instead, generate the bucket starts and count each
+ * (level, bucket) slice as an index-only range on `(project_key, level, ts)`:
+ * same totals, roughly 6x faster on a busy day. Turso's MVCC engine runs those
+ * hundreds of correlated subqueries an order of magnitude slower than a plain
+ * GROUP BY, so it gets the grouped form.
  */
 export async function histogramPoints(
   db: KingletDb,
+  engine: SqlEngine,
   projectId: string,
   from: number,
   to: number,
@@ -332,6 +336,67 @@ export async function histogramPoints(
 ): Promise<HistogramPointRow[]> {
   const start = Math.floor(from / bucketMs) * bucketMs;
 
+  const map =
+    engine === "turso-mvcc"
+      ? await groupedHistogram(db, projectId, from, to, bucketMs)
+      : await sliceHistogram(db, projectId, from, to, bucketMs, start);
+
+  const points: HistogramPointRow[] = [];
+  const pointCount = Math.min(HISTOGRAM_MAX_POINTS, Math.ceil((to - start) / bucketMs) + 1);
+
+  for (let i = 0; i < pointCount; i++) {
+    const t = start + i * bucketMs;
+    points.push({ ts: t, counts: map.get(t) ?? [0, 0, 0, 0, 0, 0] });
+  }
+
+  return points;
+}
+
+async function groupedHistogram(
+  db: KingletDb,
+  projectId: string,
+  from: number,
+  to: number,
+  bucketMs: number,
+): Promise<Map<number, number[]>> {
+  const bucket = sql<number>`(CAST(${schema.events.ts} / ${bucketMs} AS INTEGER) * ${bucketMs})`;
+
+  const rows = await db
+    .select({ bucket, level: schema.events.level, n: count() })
+    .from(schema.events)
+    .where(
+      and(
+        sql`${schema.events.ts} >= ${from}`,
+        sql`${schema.events.ts} <= ${to}`,
+        eq(schema.events.projectKey, projectKeyOf(projectId)),
+      ),
+    )
+    .groupBy(bucket, schema.events.level);
+
+  const map = new Map<number, number[]>();
+
+  for (const row of rows) {
+    const bucketTs = Number(row.bucket);
+    const level = Number(row.level);
+
+    if (!Number.isFinite(bucketTs) || level < 0 || level > 5) continue;
+    const counts = map.get(bucketTs) ?? [0, 0, 0, 0, 0, 0];
+
+    counts[level] = Number(row.n);
+    map.set(bucketTs, counts);
+  }
+
+  return map;
+}
+
+async function sliceHistogram(
+  db: KingletDb,
+  projectId: string,
+  from: number,
+  to: number,
+  bucketMs: number,
+  start: number,
+): Promise<Map<number, number[]>> {
   const levelCount = (level: number): SQL =>
     sql`(SELECT count(*) FROM events e WHERE e.project_key = ${projectKeyOf(projectId)} AND e.level = ${level} AND e.ts >= max(buckets.s, ${from}) AND e.ts < buckets.s + ${bucketMs} AND e.ts <= ${to})`;
 
@@ -364,15 +429,7 @@ export async function histogramPoints(
     if (counts.some((n) => n > 0)) map.set(Number(row.s), counts);
   }
 
-  const points: HistogramPointRow[] = [];
-  const pointCount = Math.min(HISTOGRAM_MAX_POINTS, Math.ceil((to - start) / bucketMs) + 1);
-
-  for (let i = 0; i < pointCount; i++) {
-    const t = start + i * bucketMs;
-    points.push({ ts: t, counts: map.get(t) ?? [0, 0, 0, 0, 0, 0] });
-  }
-
-  return points;
+  return map;
 }
 
 export async function listServices(db: KingletDb, projectId: string): Promise<ServiceRow[]> {
