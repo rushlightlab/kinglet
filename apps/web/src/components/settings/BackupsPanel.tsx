@@ -435,7 +435,9 @@ export default function BackupsPanel() {
     setProjectArchiveState(next);
   }, [archiveAvailable, projects]);
 
-  const liveBackup = events.status?.backup ?? status;
+  // The fetched status reloads after every run; the event feed's snapshot is
+  // only sent when it connects, so it goes stale after the first backup.
+  const liveBackup = status ?? events.status?.backup ?? null;
   const liveArchive = events.status?.archive ?? null;
   const configured = liveBackup?.configured === true;
 

@@ -213,6 +213,11 @@ export function SystemEventsProvider({ children }: { children: ReactNode }) {
       setRefreshToken((value) => value + 1);
     };
 
+    // The server reports success, then runs retention cleanup and sends one
+    // more progress event for the same run. A finished run must stay finished,
+    // or the page shows "running" until the next backup.
+    const finishedRuns = new Set<string>();
+
     const connect = (): void => {
       if (disposed) return;
 
@@ -289,7 +294,7 @@ export function SystemEventsProvider({ children }: { children: ReactNode }) {
 
         const progress = parseBackupProgress(data);
 
-        if (progress) setBackupProgress(progress);
+        if (progress && !finishedRuns.has(progress.runId)) setBackupProgress(progress);
       });
 
       events.addEventListener("backup.progress", (event) => {
@@ -299,7 +304,7 @@ export function SystemEventsProvider({ children }: { children: ReactNode }) {
 
         const progress = parseBackupProgress(data);
 
-        if (progress) setBackupProgress(progress);
+        if (progress && !finishedRuns.has(progress.runId)) setBackupProgress(progress);
       });
 
       events.addEventListener("backup.succeeded", (event) => {
@@ -314,6 +319,7 @@ export function SystemEventsProvider({ children }: { children: ReactNode }) {
         const sizeBytes = readNumber(data, "sizeBytes");
         const durationMs = readNumber(data, "durationMs");
 
+        finishedRuns.add(runId);
         setBackupProgress(null);
         bumpRefresh();
         toast.success("Backup complete", {
@@ -337,6 +343,7 @@ export function SystemEventsProvider({ children }: { children: ReactNode }) {
         const phase = readString(data, "phase");
 
         if (runId) {
+          finishedRuns.add(runId);
           setBackupProgress(null);
           toast.error("Backup failed", {
             id: `backup-${runId}`,
