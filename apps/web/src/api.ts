@@ -567,6 +567,17 @@ export function fetchNotificationChannels(
   );
 }
 
+/** What the channel form can offer: email needs an SMTP server in the env. */
+/** What the channel form can offer: email needs SMTP, every channel needs KINGLET_SECRET_KEY. */
+export interface NotificationCapabilities {
+  email: { configured: boolean; from: string | null };
+  secrets: { configured: boolean };
+}
+
+export function fetchNotificationCapabilities(): Promise<NotificationCapabilities> {
+  return api<NotificationCapabilities>("/v1/notifications/capabilities");
+}
+
 /** Admin-only read that returns the unmasked URL for the edit dialog. */
 export function fetchNotificationChannel(id: string): Promise<{ channel: NotificationChannel }> {
   return api<{ channel: NotificationChannel }>(`/v1/notifications/channels/${id}`);

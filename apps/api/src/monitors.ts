@@ -6,11 +6,17 @@ import type { ParsedFilters } from "./filters.ts";
 import { isJsonObject, isString } from "./json.ts";
 import type { JsonObject, JsonValue } from "./json.ts";
 import { validateQueryString } from "./query-validation.ts";
-import { isChannelType, sendNotice, validateWebhookUrl } from "./notify.ts";
-import type { AlertNotice, NotifyChannel } from "./notify.ts";
+import { isLegacyChannelType, sendNotice, validateWebhookUrl } from "./notify.ts";
+import type { AlertNotice, NotifyChannel, SmtpSettings } from "./notify.ts";
 import { uuidv7, isUuid } from "./auth/ids.ts";
 import type { AlertState } from "./alerts.ts";
-import { resolveMonitorChannelData, recordDelivery } from "./notifications/store.ts";
+import {
+  openMonitorChannels,
+  recordDelivery,
+  resolveMonitorChannelData,
+  sealMonitorChannels,
+} from "./notifications/store.ts";
+import { secretsConfigured } from "./secrets.ts";
 import type { MonitorChannelData } from "./notifications/store.ts";
 import { safeErrorMessage } from "./notifications/types.ts";
 import type { MonitorChannelSummary } from "./notifications/types.ts";
@@ -179,7 +185,7 @@ export function parseMonitorInput(
     const type = c.type;
     const url = isString(c.url) ? c.url.trim() : "";
 
-    if (!isChannelType(type)) {
+    if (!isLegacyChannelType(type)) {
       return { ok: false, error: `channel ${index + 1}: type must be webhook, discord, or slack` };
     }
 
@@ -210,6 +216,9 @@ export function parseMonitorInput(
   };
 }
 
+const INLINE_SECRET_REQUIRED =
+  "set KINGLET_SECRET_KEY to add inline webhook destinations (they are stored encrypted); or use channelIds with a notification channel";
+
 function parseChannels(raw: string): NotifyChannel[] {
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -222,7 +231,7 @@ function parseChannels(raw: string): NotifyChannel[] {
       const type = value.type;
       const url = value.url;
 
-      return isChannelType(type) && isString(url) ? [{ type, url }] : [];
+      return isLegacyChannelType(type) && isString(url) ? [{ type, url }] : [];
     });
   } catch {
     return [];
@@ -252,7 +261,7 @@ function rowToMonitor(
     intervalMs: Number(row.intervalMs),
     cooldownMs: Number(row.cooldownMs),
     enabled: Number(row.enabled) === 1,
-    channels: parseChannels(row.channels),
+    channels: parseChannels(openMonitorChannels(row.id, row.channels)),
     channelIds: linked.channelIds,
     resolvedChannels: linked.summaries,
     createdAt: Number(row.createdAt),
@@ -332,13 +341,20 @@ export async function createMonitorFromRaw(
   const channelProblem = await validateChannelIds(storage, v.channelIds);
 
   if (channelProblem) return { ok: false, error: channelProblem };
+
+  // Inline destinations are webhook URLs: secrets, stored only encrypted.
+  if (v.channels.length > 0 && !secretsConfigured()) {
+    return { ok: false, error: INLINE_SECRET_REQUIRED };
+  }
+
   const now = Date.now();
+  const monitorId = uuidv7();
 
   const createdId = await storage.db.transaction(async (tx) => {
     const rows = await tx
       .insert(schema.monitors)
       .values({
-        id: uuidv7(),
+        id: monitorId,
         projectId,
         name: v.name,
         query: v.query,
@@ -348,7 +364,7 @@ export async function createMonitorFromRaw(
         intervalMs: v.intervalMs,
         cooldownMs: v.cooldownMs,
         enabled: v.enabled ? 1 : 0,
-        channels: JSON.stringify(v.channels),
+        channels: sealMonitorChannels(monitorId, JSON.stringify(v.channels)),
         createdAt: now,
         updatedAt: now,
       })
@@ -415,6 +431,15 @@ export async function updateMonitorFromRaw(
 
   if (channelProblem) return { ok: false, error: channelProblem };
 
+  const previous = JSON.stringify(
+    existing.channels.map((channel) => ({ type: channel.type, url: channel.url })),
+  );
+
+  // Unchanged inline destinations can be kept without a key; new ones can't.
+  if (v.channels.length > 0 && JSON.stringify(v.channels) !== previous && !secretsConfigured()) {
+    return { ok: false, error: INLINE_SECRET_REQUIRED };
+  }
+
   const updatedId = await storage.db.transaction(async (tx) => {
     const rows = await tx
       .update(schema.monitors)
@@ -427,7 +452,7 @@ export async function updateMonitorFromRaw(
         intervalMs: v.intervalMs,
         cooldownMs: v.cooldownMs,
         enabled: v.enabled ? 1 : 0,
-        channels: JSON.stringify(v.channels),
+        channels: sealMonitorChannels(id, JSON.stringify(v.channels)),
         updatedAt: Date.now(),
       })
       .where(and(eq(schema.monitors.id, id), eq(schema.monitors.projectId, projectId)))
@@ -685,11 +710,13 @@ export function startMonitorEngine(
   opts: {
     baseUrl?: string;
     allowPrivateWebhooks?: boolean;
+    smtp?: SmtpSettings | null;
     dbPath?: string;
     maxDbBytes?: number;
   } = {},
 ): MonitorEngine {
   const allowPrivate = opts.allowPrivateWebhooks ?? false;
+  const smtp = opts.smtp ?? null;
   const maxDbBytes = opts.maxDbBytes ?? 0;
   let monitors: Monitor[] = [];
   let projectNames = new Map<string, string>();
@@ -823,7 +850,7 @@ export function startMonitorEngine(
     const outcomes = await Promise.all(
       targets.map(async (ch) => {
         try {
-          await sendNotice(ch, notice, { allowPrivate });
+          await sendNotice(ch, notice, { allowPrivate, smtp });
         } catch (err) {
           const message = safeErrorMessage(err instanceof Error ? err : String(err), 500);
 

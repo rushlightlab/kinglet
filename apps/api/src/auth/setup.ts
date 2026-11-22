@@ -1,6 +1,7 @@
 import { count, eq } from "drizzle-orm";
 import fs from "node:fs";
 import path from "node:path";
+import { isRemoteDbPath } from "../env.ts";
 import type { Config } from "../env.ts";
 import type { Storage } from "../storage/index.ts";
 import * as schema from "../storage/schema.ts";
@@ -64,10 +65,6 @@ export async function ensureSchemaExtras(storage: Storage, timezone: string): Pr
       target: schema.appMeta.key,
       set: { value: String(schema.SCHEMA_VERSION) },
     });
-}
-
-function isRemoteDbPath(dbPath: string): boolean {
-  return /^(libsql:\/\/|https?:\/\/|wss?:\/\/)/i.test(dbPath);
 }
 
 export async function ensureBootstrapAdmin(

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
+import type { ChangeEvent } from "react";
 import {
   BellIcon,
+  BellRingIcon,
+  LockIcon,
+  MailIcon,
   MessageCircleIcon,
   MessageSquareIcon,
   MoreHorizontalIcon,
@@ -8,6 +12,7 @@ import {
   PlusIcon,
   RefreshCwIcon,
   SendIcon,
+  SmartphoneIcon,
   Trash2Icon,
   WebhookIcon,
 } from "lucide-react";
@@ -15,6 +20,7 @@ import { toast } from "sonner";
 import {
   createNotificationChannel,
   deleteNotificationChannel,
+  fetchNotificationCapabilities,
   fetchNotificationChannel,
   fetchNotificationChannelSummary,
   fetchNotificationChannels,
@@ -22,7 +28,7 @@ import {
   testNotificationChannel,
   updateNotificationChannel,
 } from "../../api";
-import type { PageQuery } from "../../api";
+import type { NotificationCapabilities, PageQuery } from "../../api";
 import { hasPermissionOrAdmin, useApp } from "../../app-context";
 import { formatRelativeTime, maskWebhookUrl, redactWebhookUrls } from "../../format";
 import type {
@@ -35,6 +41,16 @@ import type {
   NotificationDelivery,
 } from "../../types";
 import ErrorAlert from "../ErrorAlert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import PasswordInput from "../PasswordInput";
+import {
+  buildTargetUrl,
+  CHANNEL_TYPES,
+  channelTypeInfo,
+  initialValues,
+  readTargetUrl,
+} from "../../channel-targets";
+import type { TargetValues } from "../../channel-targets";
 import SkeletonRows from "../SkeletonRows";
 import TablePagination from "../TablePagination";
 import TableSearch, { NoMatchesRow } from "../TableSearch";
@@ -101,13 +117,20 @@ const CHANNEL_ICONS: Record<ChannelType, typeof WebhookIcon> = {
   webhook: WebhookIcon,
   discord: MessageCircleIcon,
   slack: MessageSquareIcon,
+  telegram: SendIcon,
+  ntfy: BellRingIcon,
+  gotify: BellRingIcon,
+  pushover: SmartphoneIcon,
+  email: MailIcon,
+  resend: MailIcon,
+  plunk: MailIcon,
 };
 
-const CHANNEL_PLACEHOLDERS: Record<ChannelType, string> = {
-  webhook: "https://example.com/webhooks/kinglet",
-  discord: "https://discord.com/api/webhooks/…",
-  slack: "https://hooks.slack.com/services/…",
-};
+const LEGACY_TYPES: readonly ChannelType[] = ["webhook", "discord", "slack"];
+
+function isChannelTypeValue(value: string): value is ChannelType {
+  return CHANNEL_TYPES.some((info) => info.type === value);
+}
 
 interface ActionOption {
   value: NotificationAction;
@@ -232,6 +255,7 @@ export default function NotificationsPanel() {
   const canWrite = hasPermissionOrAdmin(user.role, permissions, "notifications.write");
 
   const [summary, setSummary] = useState<NotificationChannelSummary[]>([]);
+  const [caps, setCaps] = useState<NotificationCapabilities | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -332,6 +356,27 @@ export default function NotificationsPanel() {
     }
   };
 
+  // Email needs SMTP and every new channel needs the encryption key; ask once.
+  useEffect(() => {
+    let cancelled = false;
+
+    const check = async (): Promise<void> => {
+      const next = await fetchNotificationCapabilities().catch(() => null);
+
+      if (!cancelled) setCaps(next);
+    };
+
+    void check();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Unknown until the capabilities load; don't flash a warning meanwhile.
+  const secretsReady = caps?.secrets.configured ?? true;
+  const unencrypted = channelTable.rows.filter((channel) => !channel.encrypted).length;
+
   const noChannelsYet =
     channelTable.loaded && channelTable.total === 0 && channelTable.activeQuery === "";
 
@@ -340,6 +385,20 @@ export default function NotificationsPanel() {
   return (
     <div className="flex flex-col gap-3">
       <ErrorAlert error={error ?? channelTable.error} />
+
+      {!secretsReady && (
+        <Alert variant="gold">
+          <LockIcon />
+          <AlertTitle>Set KINGLET_SECRET_KEY to add or change channels</AlertTitle>
+          <AlertDescription>
+            Channel tokens, keys, and webhook URLs are stored encrypted with this key. Generate one
+            with <code className="text-mist">openssl rand -base64 32</code>, add it to the server
+            environment, and restart Kinglet.
+            {unencrypted > 0 &&
+              ` Existing channels keep sending, but their secrets stay unencrypted until then.`}
+          </AlertDescription>
+        </Alert>
+      )}
 
       {noChannelsYet ? (
         <Card className="items-center px-4 py-10 text-center">
@@ -350,7 +409,7 @@ export default function NotificationsPanel() {
             Slack destination once and subscribe it to the events you care about.
           </p>
           {canWrite && (
-            <Button size="sm" className="mt-3" onClick={openCreate}>
+            <Button size="sm" className="mt-3" disabled={!secretsReady} onClick={openCreate}>
               <PlusIcon data-icon="inline-start" />
               add your first channel
             </Button>
@@ -385,7 +444,7 @@ export default function NotificationsPanel() {
               </Tooltip>
               {/* Hidden while loading: an empty list swaps in its own first-channel button. */}
               {canWrite && !loading && (
-                <Button size="sm" onClick={openCreate}>
+                <Button size="sm" disabled={!secretsReady} onClick={openCreate}>
                   <PlusIcon data-icon="inline-start" />
                   new channel
                 </Button>
@@ -445,9 +504,19 @@ export default function NotificationsPanel() {
                           <span className="truncate font-medium">{channel.name}</span>
                         )}
                         {!channel.enabled && <Badge variant="outline">disabled</Badge>}
+                        {channel.locked && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Badge variant="destructive">locked</Badge>
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-xs">
+                              Its secret is {channel.locked}
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
                       </div>
                       <span className="mt-0.5 block text-[10px] text-mist-faint">
-                        {channel.type}
+                        {channelTypeInfo(channel.type).label}
                       </span>
                     </TableCell>
                     <TableCell className="hidden max-w-52 md:table-cell">
@@ -644,6 +713,8 @@ export default function NotificationsPanel() {
               key={editing?.id ?? "new"}
               channel={editing}
               canWrite={canWrite}
+              emailConfigured={caps?.email.configured ?? null}
+              secretsConfigured={secretsReady}
               onCancel={() => setDialogOpen(false)}
               onSaved={async () => {
                 setDialogOpen(false);
@@ -693,15 +764,25 @@ function ChannelForm({
   canWrite,
   onCancel,
   onSaved,
+  emailConfigured,
+  secretsConfigured,
 }: {
   channel: NotificationChannel | null;
   canWrite: boolean;
   onCancel: () => void;
   onSaved: () => Promise<void>;
+  /** Null until known. */
+  emailConfigured: boolean | null;
+  /** KINGLET_SECRET_KEY is set: targets can be added or changed. */
+  secretsConfigured: boolean;
 }) {
   const [name, setName] = useState(channel?.name ?? "");
-  const [url, setUrl] = useState(channel?.url ?? "");
   const [type, setType] = useState<ChannelType>(channel?.type ?? "webhook");
+
+  const [values, setValues] = useState<TargetValues>(() =>
+    channel ? readTargetUrl(channel.type, channel.url) : initialValues("webhook"),
+  );
+
   const [enabled, setEnabled] = useState(channel?.enabled ?? true);
   const [decoration, setDecoration] = useState(channel?.decoration ?? true);
   const [actions, setActions] = useState<NotificationAction[]>(channel?.actions ?? DEFAULT_ACTIONS);
@@ -721,9 +802,14 @@ function ChannelForm({
     });
   };
 
+  // Without the key, an existing channel can be renamed or re-subscribed, but
+  // not pointed somewhere new.
+  const targetLocked = !secretsConfigured && channel !== null;
+
+  const info = channelTypeInfo(type);
+
   const save = async (): Promise<void> => {
     const trimmedName = name.trim();
-    const trimmedUrl = url.trim();
 
     if (!trimmedName) {
       setError("Give the channel a name.");
@@ -731,26 +817,40 @@ function ChannelForm({
       return;
     }
 
-    if (!/^https?:\/\//i.test(trimmedUrl)) {
-      setError("Channel URLs must start with http:// or https://");
+    const target = buildTargetUrl(type, values);
+
+    if (!target.ok) {
+      setError(target.error);
 
       return;
     }
 
     const input: NotificationChannelInput = {
       name: trimmedName,
-      url: trimmedUrl,
+      url: target.url,
       type,
       enabled,
       decoration,
       actions,
     };
 
+    // Leave the stored secret alone when the target didn't change.
+    const unchanged = channel !== null && channel.type === type && channel.url === target.url;
+
+    const payload: Partial<NotificationChannelInput> = unchanged
+      ? {
+          name: input.name,
+          enabled: input.enabled,
+          decoration: input.decoration,
+          actions: input.actions,
+        }
+      : input;
+
     setSaving(true);
     setError(null);
 
     try {
-      if (channel) await updateNotificationChannel(channel.id, input);
+      if (channel) await updateNotificationChannel(channel.id, payload);
       else await createNotificationChannel(input);
 
       toast.success(channel ? "Channel updated" : "Channel created", {
@@ -790,11 +890,27 @@ function ChannelForm({
       <DialogHeader>
         <DialogTitle>{channel ? `Edit ${channel.name}` : "New notification channel"}</DialogTitle>
         <DialogDescription>
-          Webhook URLs are bearer secrets: they stay masked in lists and are only shown here.
+          Tokens, keys, and webhook URLs are secrets: lists mask them, and only this dialog shows
+          them.
         </DialogDescription>
       </DialogHeader>
 
       <FieldGroup className="mt-4">
+        {channel?.locked && (
+          <Alert variant="destructive">
+            <LockIcon />
+            <AlertTitle>This channel's secret can't be read</AlertTitle>
+            <AlertDescription>
+              It is {channel.locked}. Enter the {channelTypeInfo(channel.type).label} settings again
+              to unlock it.
+            </AlertDescription>
+          </Alert>
+        )}
+        {targetLocked && (
+          <p className="font-mono text-[10px] text-mist-faint">
+            Changing where this channel sends needs KINGLET_SECRET_KEY.
+          </p>
+        )}
         <Field>
           <FieldLabel htmlFor="channel-name">name</FieldLabel>
           <Input
@@ -809,38 +925,72 @@ function ChannelForm({
           <FieldLabel htmlFor="channel-type">type</FieldLabel>
           <Select
             value={type}
+            disabled={targetLocked}
             onValueChange={(value) => {
-              if (value === "webhook" || value === "discord" || value === "slack") setType(value);
+              if (!isChannelTypeValue(value)) return;
+              setType(value);
+              // Another service needs different settings; start them fresh.
+              setValues(
+                channel && channel.type === value
+                  ? readTargetUrl(value, channel.url)
+                  : initialValues(value),
+              );
             }}
           >
             <SelectTrigger id="channel-type" className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectGroup>
-                <SelectLabel>Destination</SelectLabel>
-                <SelectItem value="webhook">webhook</SelectItem>
-                <SelectItem value="discord">discord</SelectItem>
-                <SelectItem value="slack">slack</SelectItem>
-              </SelectGroup>
+              {(["Chat", "Push", "Email"] as const).map((group) => (
+                <SelectGroup key={group}>
+                  <SelectLabel>{group}</SelectLabel>
+                  {CHANNEL_TYPES.filter((option) => option.group === group).map((option) => (
+                    <SelectItem
+                      key={option.type}
+                      value={option.type}
+                      disabled={option.type === "email" && emailConfigured === false}
+                    >
+                      {option.label}
+                      {option.type === "email" && emailConfigured === false
+                        ? " (needs KINGLET_SMTP_*)"
+                        : ""}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
             </SelectContent>
           </Select>
+          <FieldDescription>{info.help}</FieldDescription>
         </Field>
 
-        <Field>
-          <FieldLabel htmlFor="channel-url">url</FieldLabel>
-          <Input
-            id="channel-url"
-            value={url}
-            onChange={(event) => setUrl(event.target.value)}
-            placeholder={CHANNEL_PLACEHOLDERS[type]}
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <FieldDescription>
-            Sent with SSRF protection. Private targets require the server-side escape hatch.
-          </FieldDescription>
-        </Field>
+        {info.fields.map((field) => {
+          const id = `channel-${type}-${field.key}`;
+
+          const props = {
+            id,
+            value: values[field.key] ?? "",
+            placeholder: field.placeholder,
+            spellCheck: false,
+            autoComplete: "off",
+            onChange: (event: ChangeEvent<HTMLInputElement>) =>
+              setValues((prev) => ({ ...prev, [field.key]: event.target.value })),
+          };
+
+          return (
+            <Field key={id}>
+              <FieldLabel htmlFor={id}>
+                {field.label}
+                {field.optional ? " (optional)" : ""}
+              </FieldLabel>
+              {field.secret ? (
+                <PasswordInput {...props} disabled={targetLocked} />
+              ) : (
+                <Input {...props} disabled={targetLocked} />
+              )}
+              {field.hint && <FieldDescription>{field.hint}</FieldDescription>}
+            </Field>
+          );
+        })}
 
         <div className="grid gap-3 rounded-[5px] border border-white/[0.06] p-3 sm:grid-cols-2">
           <label className="flex items-center justify-between gap-3" htmlFor="channel-enabled">
@@ -857,20 +1007,22 @@ function ChannelForm({
               aria-label="Enable channel"
             />
           </label>
-          <label className="flex items-center justify-between gap-3" htmlFor="channel-decoration">
-            <span className="flex flex-col gap-0.5">
-              <span className="font-mono text-xs text-mist">decoration</span>
-              <span className="font-mono text-[10px] text-mist-faint">
-                Add Kinglet context to the message.
+          {LEGACY_TYPES.includes(type) && (
+            <label className="flex items-center justify-between gap-3" htmlFor="channel-decoration">
+              <span className="flex flex-col gap-0.5">
+                <span className="font-mono text-xs text-mist">decoration</span>
+                <span className="font-mono text-[10px] text-mist-faint">
+                  Add Kinglet context to the message.
+                </span>
               </span>
-            </span>
-            <Switch
-              id="channel-decoration"
-              checked={decoration}
-              onCheckedChange={setDecoration}
-              aria-label="Decorate notifications"
-            />
-          </label>
+              <Switch
+                id="channel-decoration"
+                checked={decoration}
+                onCheckedChange={setDecoration}
+                aria-label="Decorate notifications"
+              />
+            </label>
+          )}
         </div>
 
         <div>

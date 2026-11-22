@@ -12,6 +12,8 @@ import { getChannelRecord } from "../../src/notifications/store.ts";
 import { DEFAULT_NOTIFICATION_ACTIONS } from "../../src/notifications/types.ts";
 import type { NotificationAction, NotificationChannel } from "../../src/notifications/types.ts";
 import * as schema from "../../src/storage/schema.ts";
+import { storedTarget } from "../../src/notifications/store.ts";
+import { secretsConfigured } from "../../src/secrets.ts";
 import type { Storage } from "../../src/storage/index.ts";
 
 /**
@@ -167,11 +169,16 @@ export async function seedNotificationChannel(
   const url = input.url ?? "https://example.test/hooks/alpha";
   const actions = input.actions ?? DEFAULT_NOTIFICATION_ACTIONS;
 
+  // Stored like production: sealed and fingerprinted with a key, and plaintext
+  // only on a keyless install (where the routes refuse new channels).
+  const stored = secretsConfigured() ? storedTarget(id, type, url) : { url, targetHash: null };
+
   await storage.db.insert(schema.notificationChannels).values({
     id,
     name: input.name ?? "alpha-webhook",
     type,
-    url,
+    url: stored.url,
+    targetHash: stored.targetHash,
     enabled: input.enabled ?? true,
     decoration: input.decoration ?? false,
     createdAt: now,

@@ -3,6 +3,18 @@ import http from "node:http";
 import https from "node:https";
 import type { RequestOptions as HttpsRequestOptions } from "node:https";
 import { isIP } from "node:net";
+import { createTransport } from "nodemailer";
+import type { JsonValue } from "./json.ts";
+import {
+  emailFor,
+  isTargetType,
+  parseChannelTarget,
+  plainNotificationText,
+  requestFor,
+  TARGET_TYPES,
+} from "./notify-targets.ts";
+import type { PlainMessage } from "./notify-targets.ts";
+import { renderNotificationEmail } from "./notification-email.tsx";
 
 /**
  * Outbound notification channels for monitor alerts and system events. All of
@@ -12,6 +24,10 @@ import { isIP } from "node:net";
  *   webhook → n8n, Zapier, scripts, anything that accepts JSON
  *   discord → a Discord channel via its webhook URL
  *   slack   → a Slack channel via an incoming webhook
+ *
+ * Push, Telegram, and email channels (ntfy, gotify, telegram, pushover,
+ * email, resend, plunk) parse their target in notify-targets.ts and are sent
+ * from here. Email over SMTP uses the server configured in the environment.
  *
  * SSRF hardening:
  *  - non-global-unicast targets are rejected (RFC1918, CGNAT 100.64/10,
@@ -26,12 +42,73 @@ import { isIP } from "node:net";
  * self-hosted internal automations.
  */
 
-export type ChannelType = "webhook" | "discord" | "slack";
+/** The original channel types; legacy per-monitor destinations only use these. */
+export const LEGACY_CHANNEL_TYPES = ["webhook", "discord", "slack"] as const;
 
-export const CHANNEL_TYPES = ["webhook", "discord", "slack"] as const;
+export type LegacyChannelType = (typeof LEGACY_CHANNEL_TYPES)[number];
 
-export function isChannelType(value: unknown): value is ChannelType {
+export const CHANNEL_TYPES = [...LEGACY_CHANNEL_TYPES, ...TARGET_TYPES] as const;
+
+export type ChannelType = (typeof CHANNEL_TYPES)[number];
+
+export function isLegacyChannelType(
+  value: string | JsonValue | undefined,
+): value is LegacyChannelType {
   return value === "webhook" || value === "discord" || value === "slack";
+}
+
+export function isChannelType(value: string | JsonValue | undefined): value is ChannelType {
+  return isLegacyChannelType(value) || isTargetType(value);
+}
+
+/** The SMTP server for email channels; env-only, like backup credentials. */
+export interface SmtpSettings {
+  host: string;
+  port: number;
+  /** TLS from the first byte (port 465). Otherwise STARTTLS when offered. */
+  secure: boolean;
+  /** Refuse to send (and to log in) without TLS. */
+  requireTLS: boolean;
+  user?: string;
+  /** Secret: never log or return it. */
+  password?: string;
+  from: string;
+}
+
+export interface SendOptions {
+  /** KINGLET_ALLOW_PRIVATE_WEBHOOKS: webhooks and self-hosted push servers may be private. */
+  allowPrivate?: boolean;
+  smtp?: SmtpSettings | null;
+}
+
+/**
+ * Validate a channel's target when it is created or edited. Webhook-style and
+ * self-hosted targets also pass the SSRF shape check.
+ */
+/** What a channel target is checked against. */
+export interface TargetCheck {
+  allowPrivate: boolean;
+  smtpConfigured: boolean;
+}
+
+export function validateChannelUrl(
+  type: ChannelType,
+  raw: string,
+  opts: TargetCheck,
+): string | null {
+  if (isLegacyChannelType(type)) return validateWebhookUrl(raw, opts.allowPrivate);
+
+  const parsed = parseChannelTarget(type, raw);
+
+  if (!parsed.ok) return parsed.error;
+
+  if (type === "email" && !opts.smtpConfigured) {
+    return "email channels need an SMTP server (set KINGLET_SMTP_HOST and KINGLET_SMTP_FROM)";
+  }
+
+  if (type === "ntfy" || type === "gotify") return validateWebhookUrl(raw, opts.allowPrivate);
+
+  return null;
 }
 
 export interface NotifyChannel {
@@ -43,6 +120,13 @@ export interface NotifyChannel {
   name?: string;
   /** Adds an emoji prefix to generic notifications. */
   decoration?: boolean;
+  /** Set when the stored target can't be decrypted; nothing is sent. */
+  locked?: string | null;
+}
+
+/** A channel whose secret can't be read must fail loudly, not post to "". */
+function assertUnlocked(channel: NotifyChannel): void {
+  if (channel.locked) throw new Error(`channel secret is locked: ${channel.locked}`);
 }
 
 export interface AlertNotice {
@@ -249,11 +333,16 @@ export function validateWebhookUrl(raw: string, allowPrivate: boolean): string |
   return null;
 }
 
-async function postJson(url: URL, body: string, allowPrivate: boolean): Promise<void> {
+async function postJson(
+  url: URL,
+  body: string,
+  allowPrivate: boolean,
+  extraHeaders: Record<string, string> = {},
+): Promise<void> {
   if (allowPrivate) {
     const res = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...extraHeaders },
       body,
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
@@ -297,6 +386,7 @@ async function postJson(url: URL, body: string, allowPrivate: boolean): Promise<
     method: "POST",
     headers: {
       "content-type": "application/json",
+      ...extraHeaders,
       "content-length": Buffer.byteLength(body),
       host: url.host,
     },
@@ -363,11 +453,99 @@ async function deliver(channel: NotifyChannel, body: string, allowPrivate: boole
   await postJson(new URL(channel.url), body, allowPrivate);
 }
 
+const EMAIL_TYPES = new Set(["email", "resend", "plunk"]);
+
+/** The HTML email, or null so the plain text still goes out if rendering fails. */
+async function emailHtml(message: PlainMessage): Promise<string | null> {
+  try {
+    return await renderNotificationEmail(message);
+  } catch (err) {
+    console.warn("[kinglet] could not render the notification email:", err);
+
+    return null;
+  }
+}
+
+async function sendSmtp(
+  smtp: SmtpSettings,
+  to: string[],
+  subject: string,
+  text: string,
+  html: string | null,
+) {
+  const transport = createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.secure,
+    requireTLS: smtp.requireTLS,
+    // No user means an unauthenticated relay.
+    auth: smtp.user ? { user: smtp.user, pass: smtp.password ?? "" } : undefined,
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 10_000,
+  });
+
+  try {
+    await transport.sendMail(
+      html === null
+        ? { from: smtp.from, to, subject, text }
+        : { from: smtp.from, to, subject, text, html },
+    );
+  } finally {
+    transport.close();
+  }
+}
+
+/**
+ * Push, Telegram, and email channels: parse the stored target again at send
+ * time, then deliver. Official-host services never take the private escape
+ * hatch; self-hosted push servers follow KINGLET_ALLOW_PRIVATE_WEBHOOKS.
+ */
+async function deliverMessage(
+  channel: NotifyChannel,
+  message: PlainMessage,
+  opts: SendOptions,
+): Promise<void> {
+  if (!isTargetType(channel.type)) throw new Error("channel type cannot send this message");
+  const parsed = parseChannelTarget(channel.type, channel.url);
+
+  if (!parsed.ok) throw new Error(parsed.error);
+  const target = parsed.target;
+
+  // Email channels send HTML (React Email) with the plain text alongside.
+  const html = EMAIL_TYPES.has(target.type) ? await emailHtml(message) : null;
+
+  if (target.type === "email") {
+    if (!opts.smtp) throw new Error("no SMTP server is configured");
+    const email = emailFor(target, message);
+
+    await sendSmtp(opts.smtp, email.to, email.subject, email.text, html);
+
+    return;
+  }
+
+  const request = requestFor(target, message, html);
+  const allowPrivate = request.selfHosted && (opts.allowPrivate ?? false);
+  const invalid = validateWebhookUrl(request.url, allowPrivate);
+
+  if (invalid) throw new Error(invalid);
+
+  await postJson(new URL(request.url), request.body, allowPrivate, request.headers);
+}
+
 export async function sendNotice(
   channel: NotifyChannel,
   notice: AlertNotice,
-  opts: { allowPrivate?: boolean } = {},
+  opts: SendOptions = {},
 ): Promise<void> {
+  assertUnlocked(channel);
+
+  if (!isLegacyChannelType(channel.type)) {
+    await deliverMessage(channel, alertMessage(notice), opts);
+
+    return;
+  }
+
   const allowPrivate = opts.allowPrivate ?? false;
 
   const body =
@@ -522,8 +700,16 @@ function genericSlackPayload(notice: GenericNotice, decoration: boolean): SlackP
 export async function sendGeneric(
   channel: NotifyChannel,
   notice: GenericNotice,
-  opts: { allowPrivate?: boolean } = {},
+  opts: SendOptions = {},
 ): Promise<void> {
+  assertUnlocked(channel);
+
+  if (!isLegacyChannelType(channel.type)) {
+    await deliverMessage(channel, genericMessage(notice), opts);
+
+    return;
+  }
+
   const allowPrivate = opts.allowPrivate ?? false;
   const decoration = channel.decoration === true;
 
@@ -772,6 +958,68 @@ function formatText(n: AlertNotice): string {
   if (n.link) lines.push(n.link);
 
   return lines.join("\n");
+}
+
+const LEVEL_OF_STATE: Record<AlertNotice["state"], PlainMessage["level"]> = {
+  fired: "alert",
+  resolved: "ok",
+  test: "info",
+};
+
+/** A monitor alert as plain text for push, Telegram, and email channels. */
+export function alertMessage(n: AlertNotice): PlainMessage {
+  const meta = STATE_META[n.state];
+  const monitor = plainNotificationText(n.monitorName || "monitor", 120);
+  const lines: string[] = [];
+
+  if (n.summary) lines.push(plainNotificationText(n.summary, 1000));
+
+  if (n.projectName) lines.push(`Project: ${plainNotificationText(n.projectName, 200)}`);
+
+  if (n.service) lines.push(`Service: ${plainNotificationText(n.service, 200)}`);
+
+  if (n.env) lines.push(`Env: ${plainNotificationText(n.env, 200)}`);
+
+  if (n.level) lines.push(`Level: ${plainNotificationText(n.level, 40)}`);
+  lines.push(n.query ? `Query: ${plainNotificationText(n.query, 400)}` : "Query: all events");
+
+  if (n.state === "fired" && n.count !== undefined && n.count !== null) {
+    lines.push(`Count: ${n.count}`);
+  }
+
+  if (n.sampleMessage) lines.push(`Sample: ${plainNotificationText(n.sampleMessage, 300)}`);
+
+  const message: PlainMessage = {
+    title: `${meta.emoji} ${meta.title}: ${monitor}`,
+    lines,
+    level: LEVEL_OF_STATE[n.state],
+  };
+
+  if (n.link) message.link = n.link;
+
+  return message;
+}
+
+/** A backup, archive, or system event as plain text. */
+export function genericMessage(notice: GenericNotice): PlainMessage {
+  const meta = genericActionMeta(notice.action);
+  const lines: string[] = [];
+
+  if (notice.summary) lines.push(plainNotificationText(notice.summary, 1000));
+
+  for (const field of notice.fields ?? []) {
+    const name = plainNotificationText(field.name, 80);
+
+    if (name) lines.push(`${name}: ${plainNotificationText(field.value, 1000)}`);
+  }
+
+  const failed = notice.action.endsWith(".failed") || notice.action === "system.warning";
+
+  return {
+    title: `${meta.emoji} ${meta.label}`,
+    lines,
+    level: failed ? "alert" : notice.action.endsWith(".succeeded") ? "ok" : "info",
+  };
 }
 
 function truncate(s: string, max: number): string {
