@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { RefObject } from "react";
 import type { KingletEvent } from "../types";
 import { pad } from "../time";
-import Crown from "./Crown";
+import Logo from "./Logo";
 import { LevelBadge } from "./LevelBadge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -42,7 +42,7 @@ export default function LogTable({
       <div className="relative h-full overflow-y-auto">
         <div className="k-bg-grid absolute inset-0" aria-hidden="true" />
         <div className="relative flex h-full flex-col items-center justify-center gap-3 px-4 text-center">
-          <Crown className="h-8 w-8 text-gold/60" />
+          <Logo className="h-8 w-8 text-gold/60" />
           <p className="font-mono text-xs text-mist-dim">
             No events match. Loosen the filters or widen the window.
           </p>
