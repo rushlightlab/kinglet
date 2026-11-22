@@ -30,6 +30,8 @@ interface McpFixture {
   countClient: McpStdioClient;
   alertClient: McpStdioClient;
   eventClient: McpStdioClient;
+  /** Only for the leak check, so it never waits on another test's rate-limit budget. */
+  leakClient: McpStdioClient;
   bulkClient: McpStdioClient;
   cwd: string;
   writeKey: string;
@@ -63,6 +65,7 @@ beforeAll(async () => {
   let countClient: McpStdioClient | null = null;
   let alertClient: McpStdioClient | null = null;
   let eventClient: McpStdioClient | null = null;
+  let leakClient: McpStdioClient | null = null;
   let bulkClient: McpStdioClient | null = null;
   let cwd: string | null = null;
 
@@ -97,6 +100,15 @@ beforeAll(async () => {
     const eventKey = await seedApiKey(storage, {
       projectId: alpha.id,
       name: "mcp-contract-events",
+      keyType: "mcp",
+      scopes: ["logs.read"],
+    });
+
+    // The leak check makes several calls at the end of the suite; on a fast
+    // runner the events key's burst (10, refilling 1/s) is already spent.
+    const leakKey = await seedApiKey(storage, {
+      projectId: alpha.id,
+      name: "mcp-contract-leak",
       keyType: "mcp",
       scopes: ["logs.read"],
     });
@@ -303,6 +315,14 @@ beforeAll(async () => {
     });
     await eventClient.initialize();
 
+    leakClient = await McpStdioClient.start({
+      url: server.url,
+      key: leakKey.plaintext,
+      cwd,
+      cliPath: CLI_PATH,
+    });
+    await leakClient.initialize();
+
     bulkClient = await McpStdioClient.start({
       url: server.url,
       key: bulkKey.plaintext,
@@ -327,6 +347,7 @@ beforeAll(async () => {
       countClient,
       alertClient,
       eventClient,
+      leakClient,
       bulkClient,
       cwd,
       writeKey: writeKey.plaintext,
@@ -347,6 +368,7 @@ beforeAll(async () => {
   } catch (err) {
     const cleanupSteps = [
       async () => bulkClient?.close(),
+      async () => leakClient?.close(),
       async () => eventClient?.close(),
       async () => alertClient?.close(),
       async () => countClient?.close(),
@@ -390,6 +412,8 @@ afterAll(async () => {
     expect(closing.alertClient.terminated).toBe(true);
     await closing.eventClient.close();
     expect(closing.eventClient.terminated).toBe(true);
+    await closing.leakClient.close();
+    expect(closing.leakClient.terminated).toBe(true);
     await closing.bulkClient.close();
     expect(closing.bulkClient.terminated).toBe(true);
   } finally {
@@ -1043,7 +1067,7 @@ describe("MCP stdio contract", () => {
     );
 
     const eventContext = toolText(
-      await test.eventClient.callTool("get_event_context", {
+      await test.leakClient.callTool("get_event_context", {
         uid: test.middleEventUid,
         before: 1,
         after: 1,
@@ -1051,7 +1075,7 @@ describe("MCP stdio contract", () => {
     );
 
     const projectedSearch = toolText(
-      await test.eventClient.callTool("search_events", { q: "alpha", fields: ["message"] }),
+      await test.leakClient.callTool("search_events", { q: "alpha", fields: ["message"] }),
     );
 
     const combined = [
