@@ -41,6 +41,7 @@ stdio MCP server.
 | `apps/web/`                        | React UI (TanStack Router, TanStack Virtual, Vite, Tailwind, shadcn/Radix)    |
 | `packages/config/`                 | Shared TypeScript config                                                      |
 | `packages/sdk-node/`               | `@kinglet/sdk-node`, the batching Node client                                 |
+| `packages/sdk-php/`                | `rushlightlab/kinglet` (Composer), the batching PHP client, PSR-3 and Monolog |
 | `packages/mcp/`                    | `@kinglet/mcp`, the stdio MCP server for AI clients                           |
 | `scripts/`                         | Local demos and the Playwright server fixture (`e2e-server.mjs`)              |
 | `e2e/`                             | Playwright end-to-end specs, setup/teardown, and fixtures                     |
@@ -218,6 +219,17 @@ adding a parallel component system.
 `packages/sdk-node` buffers events and POSTs NDJSON batches. It is zero-dependency,
 requeues failed batches with a cap, and exposes `onError`. `LogFields` is a JSON
 object type; do not widen it back to `unknown`.
+
+### PHP SDK
+
+`packages/sdk-php` is a Composer package (`rushlightlab/kinglet`, PHP 8.1+), not
+a pnpm workspace project, so the root scripts don't build or test it. Run
+`composer install` and `composer test` (PHPUnit) inside the folder; the tests
+include real HTTP against a local `php -S` server. Logging must never throw, and
+automatic sends back off after a failure so an unreachable Kinglet can't slow
+every request. Keep `Client::VERSION` aligned with the workspace version.
+Packagist can't install from a monorepo subfolder, so releases need a read-only
+mirror repository; don't add that workflow without approval.
 
 ## Common change recipes
 

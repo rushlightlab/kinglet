@@ -116,6 +116,32 @@ Events buffer in-process and ship as one NDJSON batch (1000 events or every
 1000ms by default; at most 5000 per request). Failed batches are re-queued and reported via `onError` —
 your app never blocks on logging.
 
+### PHP
+
+```bash
+composer require rushlightlab/kinglet
+```
+
+A batching client for PHP 8.1+ with no required dependencies, plus a PSR-3
+logger and a Monolog handler for Laravel and Symfony:
+
+```php
+$kinglet = new Kinglet\Client(
+    url: 'http://localhost:8080',
+    token: getenv('KINGLET_KEY'), // API key with the ingest scope (kl_…)
+    service: 'my-app',
+    env: 'prod',
+);
+
+$kinglet->info('user signed in', ['userId' => 42]);
+$kinglet->error('payment failed', ['exception' => $e]);
+```
+
+Events batch in memory and send when the batch fills (100), every 5 seconds in
+long-running workers, and when the script ends. Logging never throws, requests
+time out after 2 s, and an unreachable Kinglet backs off. See
+[packages/sdk-php](packages/sdk-php/README.md) for Laravel and Symfony setup.
+
 ### AI clients (MCP)
 
 `@kinglet/mcp` is a local stdio MCP server for Claude Desktop, Claude Code,

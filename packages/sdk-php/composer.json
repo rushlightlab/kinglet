@@ -1,0 +1,52 @@
+{
+  "name": "rushlightlab/kinglet",
+  "description": "Batching log client for Kinglet — small, light, king. PSR-3 and Monolog ready.",
+  "type": "library",
+  "license": "MIT",
+  "keywords": [
+    "kinglet",
+    "logging",
+    "logs",
+    "logger",
+    "psr-3",
+    "monolog",
+    "observability"
+  ],
+  "homepage": "https://kinglet.rushlightlab.com/php-sdk/",
+  "support": {
+    "issues": "https://github.com/rushlightlab/kinglet/issues",
+    "docs": "https://kinglet.rushlightlab.com/php-sdk/",
+    "source": "https://github.com/rushlightlab/kinglet-php"
+  },
+  "require": {
+    "php": ">=8.1",
+    "ext-json": "*"
+  },
+  "require-dev": {
+    "monolog/monolog": "^3.0",
+    "phpunit/phpunit": "^10.5 || ^11.5 || ^12.0",
+    "psr/log": "^3.0"
+  },
+  "suggest": {
+    "ext-curl": "Faster HTTP transport; PHP streams are used otherwise",
+    "psr/log": "Use Kinglet\\Psr\\KingletLogger as a PSR-3 logger",
+    "monolog/monolog": "Use Kinglet\\Monolog\\KingletHandler in Laravel, Symfony, or any Monolog setup"
+  },
+  "autoload": {
+    "psr-4": {
+      "Kinglet\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Kinglet\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "phpunit"
+  },
+  "config": {
+    "sort-packages": true
+  },
+  "minimum-stability": "stable"
+}
