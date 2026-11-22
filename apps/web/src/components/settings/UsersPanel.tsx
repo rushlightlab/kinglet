@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import {
   BanIcon,
   CircleCheckIcon,
@@ -10,11 +10,17 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { createUser, deleteUser, fetchUsers, resetUserPassword, updateUser } from "../../api";
+import type { PageQuery, UserPatch } from "../../api";
 import { useApp } from "../../app-context";
-import type { AppUser } from "../../types";
+import type { AppUser, UserRole } from "../../types";
 import { passwordProblem } from "../../lib/password";
 import CopyButton from "../CopyButton";
 import ErrorAlert from "../ErrorAlert";
+import SkeletonRows from "../SkeletonRows";
+import TablePagination from "../TablePagination";
+import TableSearch, { NoMatchesRow } from "../TableSearch";
+import { fadeWhileLoading, useServerTable } from "../../server-table";
+import type { TablePage } from "../../server-table";
 import PasswordInput from "../PasswordInput";
 import PasswordRequirements from "../PasswordRequirements";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -29,7 +35,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -47,10 +60,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -69,14 +81,41 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
+async function loadUserPage(page: PageQuery): Promise<TablePage<AppUser>> {
+  const result = await fetchUsers(page);
+
+  return { rows: result.users, total: result.total };
+}
+
+function isUserRole(value: string): value is UserRole {
+  return value === "admin" || value === "member" || value === "viewer";
+}
+
+/** What a role change will do beyond the label, shown before saving. */
+function roleChangeNote(from: UserRole, to: UserRole): string | null {
+  if (from === to) return null;
+
+  if (to === "admin") {
+    return "Admins see every project and manage users, backups, and notification channels.";
+  }
+
+  if (to === "viewer" || from === "admin") {
+    return "Demoting revokes every API and MCP key this user created.";
+  }
+
+  return null;
+}
+
 export default function UsersPanel() {
   const { user } = useApp();
-  const [users, setUsers] = useState<AppUser[]>([]);
+  const userTable = useServerTable("users", loadUserPage);
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState("member");
   const [password, setPassword] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const [createdPassword, setCreatedPassword] = useState<{
     email: string;
@@ -88,22 +127,14 @@ export default function UsersPanel() {
     user: AppUser;
   } | null>(null);
 
-  const [roleTarget, setRoleTarget] = useState<AppUser | null>(null);
-  const [roleValue, setRoleValue] = useState("member");
+  const [editTarget, setEditTarget] = useState<AppUser | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editRole, setEditRole] = useState<UserRole>("member");
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      setUsers((await fetchUsers()).users);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const load = userTable.reload;
 
   const add = async (): Promise<void> => {
     if (!email.trim()) return;
@@ -112,7 +143,7 @@ export default function UsersPanel() {
       const problem = passwordProblem(password);
 
       if (problem) {
-        setError(problem);
+        setFormError(problem);
 
         return;
       }
@@ -132,31 +163,50 @@ export default function UsersPanel() {
       setEmail("");
       setName("");
       setPassword("");
+      setFormError(null);
+      setAddOpen(false);
       await load();
       toast.success("User created");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setFormError(err instanceof Error ? err.message : String(err));
     }
   };
 
-  const changeRole = async (target: AppUser, nextRole: string): Promise<boolean> => {
+  const openEdit = (target: AppUser): void => {
+    setEditTarget(target);
+    setEditName(target.name);
+    setEditRole(target.role);
+    setEditError(null);
+  };
+
+  // Sends only what changed. The server guards the last administrator and
+  // revokes a demoted user's keys.
+  const saveEdit = async (): Promise<void> => {
+    if (!editTarget) return;
+    const patch: UserPatch = {};
+
+    if (editName.trim() !== editTarget.name) patch.name = editName.trim();
+
+    if (editRole !== editTarget.role && editTarget.id !== user.id) patch.role = editRole;
+
+    if (patch.name === undefined && patch.role === undefined) {
+      setEditTarget(null);
+
+      return;
+    }
+
+    setEditSaving(true);
+
     try {
-      await updateUser(target.id, { role: nextRole });
+      await updateUser(editTarget.id, patch);
+      setEditTarget(null);
       await load();
-      toast.success("Role updated");
-
-      return true;
+      toast.success("User updated", { description: editTarget.email });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-
-      return false;
+      setEditError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setEditSaving(false);
     }
-  };
-
-  const saveRole = async (): Promise<void> => {
-    if (!roleTarget) return;
-
-    if (await changeRole(roleTarget, roleValue)) setRoleTarget(null);
   };
 
   const remove = async (id: string): Promise<void> => {
@@ -209,7 +259,7 @@ export default function UsersPanel() {
 
   return (
     <div className="flex flex-col gap-3">
-      <ErrorAlert error={error} />
+      <ErrorAlert error={error ?? userTable.error} />
 
       {createdPassword && (
         <Alert variant="gold">
@@ -233,6 +283,17 @@ export default function UsersPanel() {
         <CardHeader>
           <CardTitle>Users</CardTitle>
           <CardDescription>Administrators can create accounts and assign roles.</CardDescription>
+          <CardAction className="row-span-1 flex items-center gap-2 self-center">
+            <TableSearch
+              label="Search users"
+              value={userTable.query}
+              onChange={userTable.setQuery}
+            />
+            <Button size="sm" className="shrink-0" onClick={() => setAddOpen(true)}>
+              <UserPlusIcon data-icon="inline-start" />
+              add user
+            </Button>
+          </CardAction>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <Table>
@@ -244,8 +305,8 @@ export default function UsersPanel() {
                 <TableHead className="text-right">actions</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
-              {users.map((u) => (
+            <TableBody className={fadeWhileLoading(userTable)}>
+              {userTable.rows.map((u) => (
                 <TableRow key={u.id}>
                   <TableCell>
                     <div className="flex min-w-0 flex-col gap-0.5">
@@ -279,57 +340,30 @@ export default function UsersPanel() {
                     {(() => {
                       const isSelf = u.id === user.id;
 
-                      const trigger = (
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon-xs"
-                            disabled={isSelf}
-                            aria-label={`Actions for ${u.email}`}
-                          >
-                            <MoreHorizontalIcon />
-                          </Button>
-                        </DropdownMenuTrigger>
-                      );
-
                       return (
                         <DropdownMenu>
-                          {isSelf ? (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span
-                                  tabIndex={0}
-                                  className="inline-flex rounded-[4px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gold/40"
-                                >
-                                  {trigger}
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                Use Account settings to change your own account
-                              </TooltipContent>
-                            </Tooltip>
-                          ) : (
-                            trigger
-                          )}
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              aria-label={`Actions for ${u.email}`}
+                            >
+                              <MoreHorizontalIcon />
+                            </Button>
+                          </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuLabel>User actions</DropdownMenuLabel>
                             <DropdownMenuGroup>
-                              <DropdownMenuItem
-                                disabled={u.role === "admin"}
-                                onSelect={() => {
-                                  setRoleTarget(u);
-                                  setRoleValue(u.role === "viewer" ? "viewer" : "member");
-                                }}
-                              >
+                              <DropdownMenuItem onSelect={() => openEdit(u)}>
                                 <UserCogIcon />
-                                Change role
+                                Edit user
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 disabled={isSelf}
                                 onSelect={() => setPendingUser({ type: "reset", user: u })}
                               >
                                 <KeyRoundIcon />
-                                Reset password
+                                {isSelf ? "Reset password (use my account)" : "Reset password"}
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 disabled={u.role === "admin"}
@@ -339,7 +373,11 @@ export default function UsersPanel() {
                                 }}
                               >
                                 {u.disabled ? <CircleCheckIcon /> : <BanIcon />}
-                                {u.disabled ? "Enable user" : "Disable user"}
+                                {u.disabled
+                                  ? "Enable user"
+                                  : u.role === "admin"
+                                    ? "Disable user (demote first)"
+                                    : "Disable user"}
                               </DropdownMenuItem>
                             </DropdownMenuGroup>
                             <DropdownMenuSeparator />
@@ -349,7 +387,7 @@ export default function UsersPanel() {
                               onSelect={() => setPendingUser({ type: "delete", user: u })}
                             >
                               <Trash2Icon />
-                              Delete user
+                              {u.role === "admin" ? "Delete user (demote first)" : "Delete user"}
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -358,7 +396,16 @@ export default function UsersPanel() {
                   </TableCell>
                 </TableRow>
               ))}
-              {users.length === 0 && (
+              {!userTable.loaded && <SkeletonRows columns={4} label="Loading users…" />}
+              {userTable.loaded && userTable.total === 0 && userTable.activeQuery !== "" && (
+                <NoMatchesRow
+                  columns={4}
+                  query={userTable.activeQuery}
+                  noun="users"
+                  onClear={() => userTable.setQuery("")}
+                />
+              )}
+              {userTable.loaded && userTable.total === 0 && userTable.activeQuery === "" && (
                 <TableRow>
                   <TableCell colSpan={4} className="py-4 text-center text-mist-faint">
                     No users loaded.
@@ -367,9 +414,28 @@ export default function UsersPanel() {
               )}
             </TableBody>
           </Table>
+        </CardContent>
+        <TablePagination table={userTable} noun="users" className="-mb-4" />
+      </Card>
 
+      <Dialog
+        open={addOpen}
+        onOpenChange={(open) => {
+          setAddOpen(open);
+
+          if (!open) setFormError(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Add user</DialogTitle>
+            <DialogDescription>
+              Members can use logs, monitors, and keys in the projects you assign them; viewers can
+              only read. Leave the password blank to generate one that is shown once.
+            </DialogDescription>
+          </DialogHeader>
           <form
-            className="grid gap-3 border-t border-white/[0.06] pt-4 sm:grid-cols-2"
+            className="grid gap-3 sm:grid-cols-2"
             onSubmit={(event) => {
               event.preventDefault();
               void add();
@@ -419,21 +485,29 @@ export default function UsersPanel() {
               />
               {password && <PasswordRequirements value={password} />}
             </Field>
-            <div className="sm:col-span-2">
+            {formError && (
+              <p className="font-mono text-[11px] text-coral sm:col-span-2" role="alert">
+                {formError}
+              </p>
+            )}
+            <DialogFooter className="sm:col-span-2">
+              <Button variant="outline" size="sm" type="button" onClick={() => setAddOpen(false)}>
+                Cancel
+              </Button>
               <Button
                 type="submit"
-                className="shadow-none hover:translate-y-0 hover:shadow-none"
+                size="sm"
                 disabled={
                   !email.trim() || (password.length > 0 && passwordProblem(password) !== null)
                 }
               >
                 <UserPlusIcon data-icon="inline-start" />
-                add user
+                Create user
               </Button>
-            </div>
+            </DialogFooter>
           </form>
-        </CardContent>
-      </Card>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog
         open={pendingUser !== null}
@@ -484,41 +558,78 @@ export default function UsersPanel() {
       </AlertDialog>
 
       <Dialog
-        open={roleTarget !== null}
+        open={editTarget !== null}
         onOpenChange={(open) => {
-          if (!open) setRoleTarget(null);
+          if (!open) setEditTarget(null);
         }}
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Change role</DialogTitle>
-            <DialogDescription>
-              Choose the role for {roleTarget?.email ?? "this user"}.
-            </DialogDescription>
-          </DialogHeader>
-          <Field>
-            <FieldLabel htmlFor="change-role">role</FieldLabel>
-            <Select value={roleValue} onValueChange={setRoleValue}>
-              <SelectTrigger id="change-role" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectLabel>Role</SelectLabel>
-                  <SelectItem value="member">member — logs, monitors, keys</SelectItem>
-                  <SelectItem value="viewer">viewer — read only</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setRoleTarget(null)}>
-              Cancel
-            </Button>
-            <Button size="sm" onClick={() => void saveRole()}>
-              Save role
-            </Button>
-          </DialogFooter>
+        <DialogContent className="sm:max-w-md">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveEdit();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Edit user</DialogTitle>
+              <DialogDescription>{editTarget?.email ?? "this user"}</DialogDescription>
+            </DialogHeader>
+            <FieldGroup className="mt-4">
+              <Field>
+                <FieldLabel htmlFor="edit-user-name">name</FieldLabel>
+                <Input
+                  id="edit-user-name"
+                  value={editName}
+                  maxLength={80}
+                  onChange={(event) => setEditName(event.target.value)}
+                  placeholder="Jane Doe"
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="edit-user-role">role</FieldLabel>
+                <Select
+                  value={editRole}
+                  disabled={editTarget?.id === user.id}
+                  onValueChange={(value) => {
+                    if (isUserRole(value)) setEditRole(value);
+                  }}
+                >
+                  <SelectTrigger id="edit-user-role" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectLabel>Role</SelectLabel>
+                      <SelectItem value="admin">admin — every project, users, backups</SelectItem>
+                      <SelectItem value="member">member — logs, monitors, keys</SelectItem>
+                      <SelectItem value="viewer">viewer — read only</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                {editTarget?.id === user.id ? (
+                  <FieldDescription>You can&apos;t change your own role.</FieldDescription>
+                ) : editTarget && roleChangeNote(editTarget.role, editRole) ? (
+                  <FieldDescription className="text-gold/80">
+                    {roleChangeNote(editTarget.role, editRole)}
+                  </FieldDescription>
+                ) : null}
+              </Field>
+              {editError && (
+                <p className="font-mono text-[11px] text-coral" role="alert">
+                  {editError}
+                </p>
+              )}
+            </FieldGroup>
+            <DialogFooter className="mt-4">
+              <Button variant="outline" size="sm" type="button" onClick={() => setEditTarget(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={editSaving}>
+                {editSaving && <Spinner data-icon="inline-start" />}
+                Save changes
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

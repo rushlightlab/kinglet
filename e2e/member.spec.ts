@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { LEGACY_MONITOR_NAME } from "./support/data";
 import { MEMBER_STATE_PATH, readSeed } from "./support/state";
-import { cardWithText } from "./support/ui";
+import { rowAction, tableRow } from "./support/ui";
 
 interface MonitorChannel {
   type: string;
@@ -27,13 +27,14 @@ test("a member sees legacy monitor webhooks masked", async ({ page }) => {
   await expect(page.getByText(LEGACY_MONITOR_NAME)).toBeVisible();
   await expect(page.locator("body")).not.toContainText("legacy-e2e-secret");
 
-  const card = cardWithText(page, LEGACY_MONITOR_NAME);
+  const row = tableRow(page, LEGACY_MONITOR_NAME);
 
-  await expect(card.getByText("paused", { exact: true })).toBeVisible();
-  await expect(card).toContainText("1 channel");
-  await expect(card).not.toContainText("no channels");
+  await expect(row.getByText("paused", { exact: true })).toBeVisible();
+  // A legacy monitor's inline destination shows by type, never by URL.
+  await expect(row).toContainText("webhook");
+  await expect(row).not.toContainText("history only");
 
-  await card.getByRole("button", { name: "edit" }).click();
+  await rowAction(row, "Edit");
 
   const dialog = page.getByRole("dialog");
 

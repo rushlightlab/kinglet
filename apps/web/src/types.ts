@@ -112,6 +112,9 @@ export interface Monitor {
   lastEvalAt: number | null;
   lastError: string | null;
   lastErrorAt: number | null;
+  /** List reads only: when the newest alert fired, and whether it is still open. */
+  lastAlertAt?: number | null;
+  firing?: boolean;
 }
 
 export interface AlertRecord {
@@ -234,6 +237,8 @@ export interface NotificationChannelInput {
 export interface NotificationDelivery {
   id: string;
   channelId: string;
+  /** Null once the channel is deleted. */
+  channelName: string | null;
   scope: string;
   event: string;
   subject: string | null;

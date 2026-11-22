@@ -4,6 +4,7 @@ import {
   applySuggestion,
   fieldFilterTerm,
   fieldLeaves,
+  isIncompleteQuery,
   suggest,
   textScopeOf,
   withTextScope,
@@ -28,6 +29,48 @@ describe("withTextScope", () => {
 
   it("leaves the default scope implicit", () => {
     expect(withTextScope("timeout in:all", "message")).toBe("timeout");
+  });
+});
+
+describe("isIncompleteQuery", () => {
+  it("waits for a key or operator that has no value yet", () => {
+    for (const q of [
+      "level>=",
+      "level:",
+      "service:",
+      "env:",
+      "in:",
+      "key:",
+      "field.status>",
+      "-field.reason:",
+    ]) {
+      expect(isIncompleteQuery(q)).toBe(true);
+    }
+  });
+
+  it("waits for a field path without an operator", () => {
+    expect(isIncompleteQuery("field.")).toBe(true);
+    expect(isIncompleteQuery("level:error field.imei")).toBe(true);
+    expect(isIncompleteQuery("field.data.")).toBe(true);
+  });
+
+  it("searches finished terms and plain words", () => {
+    for (const q of [
+      "",
+      "timeout",
+      "level",
+      "service",
+      "level>=warn",
+      "field.status>=500",
+      "field.imei:1",
+      "in:fields",
+    ]) {
+      expect(isIncompleteQuery(q)).toBe(false);
+    }
+  });
+
+  it("treats a trailing space as the end of a term", () => {
+    expect(isIncompleteQuery("field. ")).toBe(false);
   });
 });
 

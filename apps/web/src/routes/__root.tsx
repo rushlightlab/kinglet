@@ -7,6 +7,7 @@ import type { AppContextValue } from "../app-context";
 import { SystemEventsProvider } from "../system-events";
 import ErrorAlert from "../components/ErrorAlert";
 import Login from "../components/Login";
+import Logo from "../components/Logo";
 import { Button } from "@/components/ui/button";
 import type { AppUser, Project } from "../types";
 
@@ -122,7 +123,13 @@ function RootComponent() {
     return (
       <div className="relative flex h-screen items-center justify-center bg-ink-950">
         <div className="k-bg-grid absolute inset-0" aria-hidden="true" />
-        <span className="k-live-dot relative" />
+        <div role="status" className="relative flex flex-col items-center gap-4">
+          <Logo className="h-9 w-9 text-gold" />
+          <span className="flex items-center gap-2 font-mono text-[11px] text-mist-dim">
+            <span className="k-live-dot" aria-hidden="true" />
+            loading workspace…
+          </span>
+        </div>
       </div>
     );
   }

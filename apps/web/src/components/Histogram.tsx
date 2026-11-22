@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerE
 import { RotateCcwIcon, XIcon } from "lucide-react";
 import { LEVEL_COLORS, LEVEL_NAMES } from "../types";
 import type { Histogram } from "../types";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface HistogramChartProps {
   data: Histogram;
@@ -610,6 +611,37 @@ export default function HistogramChart({
         <div className="flex justify-between px-1 pt-1 pb-1 font-mono text-[9px] text-mist-faint">
           <span>{formatAxisTime(data.from, longRange)}</span>
           <span>{formatAxisTime(data.to, longRange)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Bar heights for the placeholder; fixed so it doesn't jump between renders.
+const SKELETON_BARS = Array.from({ length: 90 }, (_, i) =>
+  Math.round(18 + 30 * Math.abs(Math.sin(i * 0.37)) + 12 * Math.abs(Math.sin(i * 1.9))),
+);
+
+/** Same footprint as the histogram, shown until the first histogram arrives. */
+export function HistogramSkeleton() {
+  return (
+    <div aria-hidden="true" className="border-b border-white/[0.08] bg-ink-950/40">
+      <div className="flex h-5 items-center px-3">
+        <Skeleton className="h-2 w-40" />
+      </div>
+      <div className="px-2">
+        <div className="flex h-20 items-end gap-px">
+          {SKELETON_BARS.map((height, i) => (
+            <div
+              key={i}
+              className="min-w-0 flex-1 animate-pulse rounded-t-[2px] bg-white/[0.06] motion-reduce:animate-none"
+              style={{ height: `${height}%` }}
+            />
+          ))}
+        </div>
+        <div className="flex justify-between px-1 pt-1 pb-1">
+          <Skeleton className="h-2 w-16" />
+          <Skeleton className="h-2 w-16" />
         </div>
       </div>
     </div>

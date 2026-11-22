@@ -1,7 +1,14 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { PencilIcon, PlusIcon, RefreshCwIcon, SendIcon, Trash2Icon } from "lucide-react";
+import {
+  MoreHorizontalIcon,
+  PencilIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SendIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   createMonitor,
@@ -12,6 +19,7 @@ import {
   testMonitor,
   updateMonitor,
 } from "../api";
+import type { PageQuery } from "../api";
 import { hasPermission, hasPermissionOrAdmin, useApp } from "../app-context";
 import { formatRelativeTime, redactWebhookUrls } from "../format";
 import type {
@@ -23,6 +31,10 @@ import type {
 } from "../types";
 import ErrorAlert from "../components/ErrorAlert";
 import PageShell from "../components/PageShell";
+import SkeletonRows from "../components/SkeletonRows";
+import TablePagination from "../components/TablePagination";
+import TableSearch, { NoMatchesRow } from "../components/TableSearch";
+import { fadeWhileLoading, useServerTable } from "../server-table";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -32,15 +44,14 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -64,6 +75,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -115,14 +133,32 @@ function describe(m: Monitor): string {
   return `Fires when fewer than ${m.threshold} matching events land within ${fmtDur(m.windowMs)} — silence means something broke.`;
 }
 
-function channelCount(m: Monitor): number {
-  // Linked channels win; otherwise a pre-channel-table monitor still has its
-  // inline destinations, and those count for the card summary.
-  if (m.channelIds !== undefined && m.channelIds.length > 0) return m.channelIds.length;
+/** The rule in a few characters: `> 20 in 15m`. */
+function ruleText(m: Monitor): string {
+  if (m.kind === "match") return "every match";
 
-  if ((m.channels?.length ?? 0) > 0) return m.channels?.length ?? 0;
+  return `${m.kind === "count_above" ? ">" : "<"} ${m.threshold} in ${fmtDur(m.windowMs)}`;
+}
 
-  return 0;
+/** Linked channel names, or a legacy monitor's inline destinations by type. */
+function channelNames(m: Monitor): string[] {
+  if (m.resolvedChannels !== undefined && m.resolvedChannels.length > 0) {
+    return m.resolvedChannels.map((channel) => channel.name);
+  }
+
+  return (m.channels ?? []).map((channel) => channel.type);
+}
+
+/** An alert is firing until it resolves; resolved alerts are history. */
+function alertState(a: AlertRecord): "firing" | "resolved" {
+  return a.state === "fired" && a.resolvedAt === null ? "firing" : "resolved";
+}
+
+/** "6 monitors", or "2 matching monitors" while a search is active. */
+function countLabel(total: number, activeQuery: string, noun: string): string {
+  const plural = `${noun}${total === 1 ? "" : "s"}`;
+
+  return activeQuery === "" ? `${total} ${plural}` : `${total} matching ${plural}`;
 }
 
 /**
@@ -165,40 +201,59 @@ function MonitorsPage() {
   const { currentProjectId, permissions, user } = useApp();
   const canWrite = hasPermission(permissions, "monitors.write");
   const canManageChannels = hasPermissionOrAdmin(user.role, permissions, "notifications.read");
-  const [monitors, setMonitors] = useState<Monitor[]>([]);
-  const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [channelSummary, setChannelSummary] = useState<NotificationChannelSummary[]>([]);
   const [editing, setEditing] = useState<string | "new" | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Monitor | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const loadMonitors = useCallback(
+    async (page: PageQuery) => {
+      const result = await fetchMonitors(currentProjectId, page);
+
+      return { rows: result.monitors, total: result.total };
+    },
+    [currentProjectId],
+  );
+
+  const loadAlerts = useCallback(
+    async (page: PageQuery) => {
+      const result = await fetchAlerts(currentProjectId, page);
+
+      return { rows: result.alerts, total: result.total };
+    },
+    [currentProjectId],
+  );
+
+  const monitorTable = useServerTable("monitors", loadMonitors);
+
+  const { reload: reloadMonitors } = monitorTable;
+  const alertTable = useServerTable("alerts", loadAlerts);
+  const { reload: reloadAlerts } = alertTable;
+
+  const loadSummary = useCallback(async () => {
     try {
-      const [m, a] = await Promise.all([
-        fetchMonitors(currentProjectId),
-        fetchAlerts(currentProjectId, 50),
-      ]);
-
-      setMonitors(m.monitors);
-      setAlerts(a.alerts);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-
-    try {
-      const summary = await fetchNotificationChannelSummary();
-
-      setChannelSummary(summary.channels);
+      setChannelSummary((await fetchNotificationChannelSummary()).channels);
     } catch {
       // The channel summary is additive. Keep the previous list when the
       // endpoint is unavailable so monitors still render.
     }
-  }, [currentProjectId]);
+  }, []);
 
   useEffect(() => {
+    void loadSummary();
+  }, [loadSummary]);
+
+  // Another project closes an open editor (reset while rendering).
+  const [editingProjectId, setEditingProjectId] = useState(currentProjectId);
+
+  if (editingProjectId !== currentProjectId) {
+    setEditingProjectId(currentProjectId);
     setEditing(null);
-    void load();
-  }, [load]);
+  }
+
+  const load = useCallback(async () => {
+    await Promise.all([reloadMonitors(), reloadAlerts(), loadSummary()]);
+  }, [reloadMonitors, reloadAlerts, loadSummary]);
 
   const toggleEnabled = async (m: Monitor): Promise<void> => {
     try {
@@ -247,10 +302,18 @@ function MonitorsPage() {
   };
 
   const editingMonitor =
-    editing !== null && editing !== "new" ? (monitors.find((m) => m.id === editing) ?? null) : null;
+    editing !== null && editing !== "new"
+      ? (monitorTable.rows.find((m) => m.id === editing) ?? null)
+      : null;
+
+  const noMonitorsYet =
+    monitorTable.loaded && monitorTable.total === 0 && monitorTable.activeQuery === "";
+
+  const visibleError = error ?? monitorTable.error ?? alertTable.error;
 
   return (
     <PageShell
+      wide
       kicker="monitors"
       title="Alerts on your terms."
       description="Get notified when logs match a query — or when expected logs go missing. Channels are plain webhook URLs: anything that accepts a POST works."
@@ -266,150 +329,199 @@ function MonitorsPage() {
       }
     >
       <div className="mt-6 flex flex-col gap-3">
-        <ErrorAlert error={error} />
+        <ErrorAlert error={visibleError} />
 
-        <div className="flex items-center justify-between">
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
-            {monitors.length} monitor{monitors.length === 1 ? "" : "s"}
-          </span>
-          <WriteGuard allowed={canWrite}>
-            <Button size="sm" disabled={!canWrite} onClick={() => setEditing("new")}>
-              <PlusIcon data-icon="inline-start" />
-              new monitor
-            </Button>
-          </WriteGuard>
-        </div>
+        {noMonitorsYet ? (
+          <Card className="items-center px-4 py-10 text-center">
+            <p className="font-mono text-xs text-mist-dim">No monitors yet.</p>
+            <p className="font-mono text-[11px] text-mist-faint">
+              Watch for <span className="text-gold">level:fatal</span>, spike rates, or a cron that
+              went quiet.
+            </p>
+            <WriteGuard allowed={canWrite}>
+              <Button
+                size="sm"
+                className="mt-1"
+                disabled={!canWrite}
+                onClick={() => setEditing("new")}
+              >
+                <PlusIcon data-icon="inline-start" />
+                Create your first monitor
+              </Button>
+            </WriteGuard>
+          </Card>
+        ) : (
+          <Card className="gap-0 py-0">
+            <div className="flex flex-wrap items-center gap-3 border-b border-white/[0.06] px-4 py-3">
+              <TableSearch
+                label="Search monitors"
+                value={monitorTable.query}
+                onChange={monitorTable.setQuery}
+              />
+              <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
+                {monitorTable.loaded
+                  ? countLabel(monitorTable.total, monitorTable.activeQuery, "monitor")
+                  : "loading monitors…"}
+              </span>
+              {/* Hidden while loading: an empty list swaps in its own first-monitor button. */}
+              {monitorTable.loaded && (
+                <WriteGuard allowed={canWrite}>
+                  <Button
+                    size="sm"
+                    className="ml-auto"
+                    disabled={!canWrite}
+                    onClick={() => setEditing("new")}
+                  >
+                    <PlusIcon data-icon="inline-start" />
+                    new monitor
+                  </Button>
+                </WriteGuard>
+              )}
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="w-12 pl-4">
+                    <span className="sr-only">enabled</span>
+                  </TableHead>
+                  <TableHead>monitor</TableHead>
+                  <TableHead className="hidden md:table-cell">query</TableHead>
+                  <TableHead className="hidden lg:table-cell">channels</TableHead>
+                  <TableHead>last alert</TableHead>
+                  <TableHead className="w-10 pr-4">
+                    <span className="sr-only">actions</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody className={fadeWhileLoading(monitorTable)}>
+                {!monitorTable.loaded && <SkeletonRows columns={6} label="Loading monitors…" />}
+                {monitorTable.rows.map((m) => {
+                  const names = channelNames(m);
 
-        <div className="flex flex-col gap-3">
-          {monitors.map((m) => (
-            <Card key={m.id} className={m.enabled ? undefined : "opacity-60"}>
-              <CardHeader>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 flex-col gap-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <CardTitle className="truncate">{m.name}</CardTitle>
-                      <Badge>{KIND_LABELS[m.kind]}</Badge>
-                      {!m.enabled && <Badge variant="outline">paused</Badge>}
-                      {m.lastError && (
+                  return (
+                    <TableRow key={m.id} className={m.enabled ? undefined : "text-mist-faint"}>
+                      <TableCell className="pl-4">
+                        <WriteGuard allowed={canWrite}>
+                          <Switch
+                            checked={m.enabled}
+                            onCheckedChange={() => void toggleEnabled(m)}
+                            disabled={!canWrite}
+                            aria-label={m.enabled ? `Pause ${m.name}` : `Enable ${m.name}`}
+                          />
+                        </WriteGuard>
+                      </TableCell>
+                      <TableCell className="max-w-64">
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          {canWrite ? (
+                            <button
+                              type="button"
+                              onClick={() => setEditing(m.id)}
+                              className={`truncate text-left font-medium hover:text-gold hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gold/40 ${m.enabled ? "text-mist" : "text-mist-dim"}`}
+                            >
+                              {m.name}
+                            </button>
+                          ) : (
+                            <span className="truncate font-medium">{m.name}</span>
+                          )}
+                          {!m.enabled && <Badge variant="outline">paused</Badge>}
+                          {m.lastError && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge variant="destructive">degraded</Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>{m.lastError}</TooltipContent>
+                            </Tooltip>
+                          )}
+                        </div>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Badge variant="destructive">degraded</Badge>
+                            <span className="mt-0.5 block w-fit text-[10px] text-mist-faint">
+                              {KIND_LABELS[m.kind]} · {ruleText(m)}
+                            </span>
                           </TooltipTrigger>
-                          <TooltipContent>{m.lastError}</TooltipContent>
+                          <TooltipContent className="max-w-xs">
+                            {describe(m)}
+                            {m.kind !== "match" &&
+                              ` Checked every ${fmtDur(m.intervalMs)}, cooldown ${fmtDur(m.cooldownMs)}.`}
+                          </TooltipContent>
                         </Tooltip>
-                      )}
-                    </div>
-                    <CardDescription>{describe(m)}</CardDescription>
-                  </div>
-                  <WriteGuard allowed={canWrite}>
-                    <Switch
-                      checked={m.enabled}
-                      onCheckedChange={() => void toggleEnabled(m)}
-                      disabled={!canWrite}
-                      aria-label={m.enabled ? "Pause monitor" : "Enable monitor"}
-                    />
-                  </WriteGuard>
-                </div>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-2">
-                <code className="inline-block max-w-full truncate rounded-[3px] border border-white/[0.08] bg-ink-850 px-2 py-1 font-mono text-[11px] text-mist">
-                  {m.query || "(all events)"}
-                </code>
-                <p className="font-mono text-[10px] text-mist-faint">
-                  checked every {fmtDur(m.kind === "match" ? 0 : m.intervalMs)}
-                  {m.kind !== "match" && ` · cooldown ${fmtDur(m.cooldownMs)}`} ·{" "}
-                  {channelCount(m) === 0
-                    ? "no channels (history only)"
-                    : `${channelCount(m)} channel${channelCount(m) === 1 ? "" : "s"}`}
-                </p>
-                {m.resolvedChannels !== undefined && m.resolvedChannels.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {m.resolvedChannels.map((channel) => (
-                      <Badge key={channel.id} variant="outline">
-                        {channel.name}
-                      </Badge>
-                    ))}
-                  </div>
+                      </TableCell>
+                      <TableCell className="hidden max-w-56 md:table-cell">
+                        <code className="block truncate text-[11px] text-mist-dim" title={m.query}>
+                          {m.query || "(all events)"}
+                        </code>
+                      </TableCell>
+                      <TableCell className="hidden max-w-40 lg:table-cell">
+                        {names.length === 0 ? (
+                          <span className="text-[10px] text-mist-faint">history only</span>
+                        ) : (
+                          <span
+                            className="block truncate text-[11px] text-mist-dim"
+                            title={names.join(", ")}
+                          >
+                            {names.join(", ")}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {m.firing ? (
+                          <Badge variant="destructive">firing</Badge>
+                        ) : m.lastAlertAt ? (
+                          <span className="text-[11px] text-mist-dim">
+                            {relTime(m.lastAlertAt)}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-mist-faint">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="pr-4 text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              disabled={!canWrite}
+                              aria-label={`Actions for ${m.name}`}
+                            >
+                              <MoreHorizontalIcon />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onSelect={() => void runTest(m)}>
+                              <SendIcon />
+                              Send test notification
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => setEditing(m.id)}>
+                              <PencilIcon />
+                              Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant="destructive"
+                              onSelect={() => setPendingDelete(m)}
+                            >
+                              <Trash2Icon />
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {monitorTable.loaded && monitorTable.total === 0 && (
+                  <NoMatchesRow
+                    columns={6}
+                    query={monitorTable.activeQuery}
+                    noun="monitors"
+                    onClear={() => monitorTable.setQuery("")}
+                  />
                 )}
-              </CardContent>
-              <CardFooter className="gap-2">
-                <WriteGuard allowed={canWrite}>
-                  <Button
-                    variant="chip"
-                    size="xs"
-                    onClick={() => void runTest(m)}
-                    disabled={!canWrite}
-                  >
-                    <SendIcon data-icon="inline-start" />
-                    test
-                  </Button>
-                </WriteGuard>
-                <WriteGuard allowed={canWrite}>
-                  <Button
-                    variant="chip"
-                    size="xs"
-                    onClick={() => setEditing(m.id)}
-                    disabled={!canWrite}
-                  >
-                    <PencilIcon data-icon="inline-start" />
-                    edit
-                  </Button>
-                </WriteGuard>
-                <AlertDialog>
-                  <WriteGuard allowed={canWrite}>
-                    <AlertDialogTrigger asChild>
-                      <Button
-                        variant="destructive"
-                        size="xs"
-                        className="ml-auto"
-                        disabled={!canWrite}
-                      >
-                        <Trash2Icon data-icon="inline-start" />
-                        delete
-                      </Button>
-                    </AlertDialogTrigger>
-                  </WriteGuard>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Delete {m.name}?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        The monitor stops checking and its alert history stays behind. This cannot
-                        be undone.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction variant="destructive" onClick={() => void remove(m)}>
-                        Delete monitor
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              </CardFooter>
-            </Card>
-          ))}
-
-          {monitors.length === 0 && (
-            <Card className="items-center px-4 py-10 text-center">
-              <p className="font-mono text-xs text-mist-dim">No monitors yet.</p>
-              <p className="font-mono text-[11px] text-mist-faint">
-                Watch for <span className="text-gold">level:fatal</span>, spike rates, or a cron
-                that went quiet.
-              </p>
-              <WriteGuard allowed={canWrite}>
-                <Button
-                  size="sm"
-                  className="mt-1"
-                  disabled={!canWrite}
-                  onClick={() => setEditing("new")}
-                >
-                  <PlusIcon data-icon="inline-start" />
-                  Create your first monitor
-                </Button>
-              </WriteGuard>
-            </Card>
-          )}
-        </div>
+              </TableBody>
+            </Table>
+            <TablePagination table={monitorTable} noun="monitors" />
+          </Card>
+        )}
 
         <div className="mt-10">
           <div className="k-kicker">
@@ -421,28 +533,37 @@ function MonitorsPage() {
               <CardDescription>
                 Fired and resolved history for this project, newest first.
               </CardDescription>
+              {(alertTable.total > 0 || alertTable.activeQuery !== "") && (
+                <CardAction className="row-span-1 self-center">
+                  <TableSearch
+                    label="Search alerts"
+                    value={alertTable.query}
+                    onChange={alertTable.setQuery}
+                  />
+                </CardAction>
+              )}
             </CardHeader>
             <CardContent>
               <Table>
                 <TableHeader>
-                  <TableRow>
+                  <TableRow className="hover:bg-transparent">
                     <TableHead>when</TableHead>
                     <TableHead>monitor</TableHead>
-                    <TableHead>summary</TableHead>
-                    <TableHead className="hidden sm:table-cell">notify</TableHead>
+                    <TableHead className="w-full">summary</TableHead>
                     <TableHead className="text-right">state</TableHead>
                   </TableRow>
                 </TableHeader>
-                <TableBody>
-                  {alerts.map((a) => (
+                <TableBody className={fadeWhileLoading(alertTable)}>
+                  {alertTable.rows.map((a) => (
                     <TableRow key={a.id}>
                       <TableCell className="whitespace-nowrap text-mist-faint">
                         {relTime(a.firedAt)}
                       </TableCell>
-                      <TableCell className="max-w-36 truncate text-mist-dim">
+                      <TableCell className="max-w-40 truncate text-mist-dim">
                         {a.monitorName ?? "monitor"}
                       </TableCell>
-                      <TableCell className="max-w-[24rem] text-mist">
+                      {/* max-w-0 + w-full: the summary takes the leftover width and truncates. */}
+                      <TableCell className="w-full max-w-0 text-mist">
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <span className="block truncate">{a.summary}</span>
@@ -450,52 +571,87 @@ function MonitorsPage() {
                           <TooltipContent className="max-w-sm">{a.summary}</TooltipContent>
                         </Tooltip>
                       </TableCell>
-                      <TableCell className="hidden sm:table-cell">
-                        {a.state === "fired" && a.notifyStatus && a.notifyStatus !== "none" ? (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Badge
-                                variant={
-                                  a.notifyStatus === "sent"
-                                    ? "ghost"
-                                    : a.notifyStatus === "partial"
-                                      ? "outline"
-                                      : "destructive"
-                                }
-                              >
-                                {a.notifyStatus}
-                              </Badge>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              {a.notifyError ?? "Notification delivery"}
-                            </TooltipContent>
-                          </Tooltip>
-                        ) : (
-                          <span className="text-[10px] text-mist-faint">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {a.state === "fired" && a.resolvedAt === null ? (
-                          <Badge variant="destructive">fired</Badge>
-                        ) : (
-                          <Badge variant="ghost">resolved</Badge>
-                        )}
+                      <TableCell className="whitespace-nowrap text-right">
+                        <span className="inline-flex items-center gap-1">
+                          {a.state === "fired" && a.notifyStatus && a.notifyStatus !== "none" && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge
+                                  variant={
+                                    a.notifyStatus === "sent"
+                                      ? "ghost"
+                                      : a.notifyStatus === "partial"
+                                        ? "outline"
+                                        : "destructive"
+                                  }
+                                >
+                                  {a.notifyStatus === "sent"
+                                    ? "notified"
+                                    : `notify ${a.notifyStatus}`}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {a.notifyError ?? "Notification delivery"}
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
+                          <Badge variant={alertState(a) === "firing" ? "destructive" : "ghost"}>
+                            {alertState(a)}
+                          </Badge>
+                        </span>
                       </TableCell>
                     </TableRow>
                   ))}
-                  {alerts.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={5} className="py-6 text-center text-mist-faint">
+                  {!alertTable.loaded && <SkeletonRows columns={4} label="Loading alerts…" />}
+                  {alertTable.loaded && alertTable.total === 0 && alertTable.activeQuery === "" && (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell colSpan={4} className="py-6 text-center text-mist-faint">
                         No alerts yet. When a monitor fires, its story lands here.
                       </TableCell>
                     </TableRow>
                   )}
+                  {alertTable.loaded && alertTable.total === 0 && alertTable.activeQuery !== "" && (
+                    <NoMatchesRow
+                      columns={4}
+                      query={alertTable.activeQuery}
+                      noun="alerts"
+                      onClear={() => alertTable.setQuery("")}
+                    />
+                  )}
                 </TableBody>
               </Table>
             </CardContent>
+            <TablePagination table={alertTable} noun="alerts" className="-mb-4" />
           </Card>
         </div>
       </div>
+
+      <AlertDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {pendingDelete?.name ?? "this monitor"}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The monitor stops checking and its alert history stays behind. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (pendingDelete) void remove(pendingDelete);
+              }}
+            >
+              Delete monitor
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog
         open={editing !== null}

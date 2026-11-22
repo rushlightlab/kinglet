@@ -1,7 +1,8 @@
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { hasPermissionOrAdmin, useApp } from "../app-context";
 import { isString } from "../json";
 import PageShell from "../components/PageShell";
+import AccountPanel from "../components/settings/AccountPanel";
 import BackupsPanel from "../components/settings/BackupsPanel";
 import NotificationsPanel from "../components/settings/NotificationsPanel";
 import ProjectsPanel from "../components/settings/ProjectsPanel";
@@ -16,21 +17,15 @@ export const Route = createFileRoute("/settings")({
   validateSearch: (search): SettingsSearch => ({
     tab: isString(search.tab) ? search.tab : undefined,
   }),
-  beforeLoad: ({ location }) => {
-    // Keep old bookmarks and the previous user-menu link working.
-    if (new URLSearchParams(location.searchStr).get("tab") === "account") {
-      throw redirect({ to: "/account" });
-    }
-  },
   component: SettingsPage,
 });
 
-type Tab = "projects" | "users" | "backups" | "notifications";
+type Tab = "projects" | "users" | "backups" | "notifications" | "account";
+
+const TABS: readonly Tab[] = ["projects", "users", "backups", "notifications", "account"];
 
 function isTab(value: string | undefined): value is Tab {
-  return (
-    value === "projects" || value === "users" || value === "backups" || value === "notifications"
-  );
+  return TABS.some((tab) => tab === value);
 }
 
 function SettingsPage() {
@@ -52,6 +47,9 @@ function SettingsPage() {
 
   if (canNotifications) available.push("notifications");
 
+  // Everyone has an account, so the tabs always show.
+  available.push("account");
+
   const requested = isTab(search.tab) ? search.tab : "projects";
   const tab = available.includes(requested) ? requested : "projects";
 
@@ -65,48 +63,47 @@ function SettingsPage() {
 
   return (
     <PageShell
+      wide
       kicker="settings"
       title="Workspace."
-      description="Projects, people, backups, and notification channels across this Kinglet instance."
+      description="Projects, people, backups, and notification channels across this Kinglet instance, and your own account."
     >
-      {available.length > 1 ? (
-        <Tabs
-          value={tab}
-          onValueChange={(value) => {
-            if (isTab(value)) selectTab(value);
-          }}
-          className="mt-6 gap-4"
-        >
-          <TabsList className="overflow-x-auto">
-            <TabsTrigger value="projects">projects</TabsTrigger>
-            {canUsers && <TabsTrigger value="users">users</TabsTrigger>}
-            {canBackups && <TabsTrigger value="backups">backups</TabsTrigger>}
-            {canNotifications && <TabsTrigger value="notifications">notifications</TabsTrigger>}
-          </TabsList>
-          <TabsContent value="projects">
-            <ProjectsPanel />
-          </TabsContent>
-          {canUsers && (
-            <TabsContent value="users">
-              <UsersPanel />
-            </TabsContent>
-          )}
-          {canBackups && (
-            <TabsContent value="backups">
-              <BackupsPanel />
-            </TabsContent>
-          )}
-          {canNotifications && (
-            <TabsContent value="notifications">
-              <NotificationsPanel />
-            </TabsContent>
-          )}
-        </Tabs>
-      ) : (
-        <div className="mt-6">
+      <Tabs
+        value={tab}
+        onValueChange={(value) => {
+          if (isTab(value)) selectTab(value);
+        }}
+        className="mt-6 gap-4"
+      >
+        <TabsList className="overflow-x-auto">
+          <TabsTrigger value="projects">projects</TabsTrigger>
+          {canUsers && <TabsTrigger value="users">users</TabsTrigger>}
+          {canBackups && <TabsTrigger value="backups">backups</TabsTrigger>}
+          {canNotifications && <TabsTrigger value="notifications">notifications</TabsTrigger>}
+          <TabsTrigger value="account">my account</TabsTrigger>
+        </TabsList>
+        <TabsContent value="projects">
           <ProjectsPanel />
-        </div>
-      )}
+        </TabsContent>
+        {canUsers && (
+          <TabsContent value="users">
+            <UsersPanel />
+          </TabsContent>
+        )}
+        {canBackups && (
+          <TabsContent value="backups">
+            <BackupsPanel />
+          </TabsContent>
+        )}
+        {canNotifications && (
+          <TabsContent value="notifications">
+            <NotificationsPanel />
+          </TabsContent>
+        )}
+        <TabsContent value="account">
+          <AccountPanel />
+        </TabsContent>
+      </Tabs>
     </PageShell>
   );
 }
