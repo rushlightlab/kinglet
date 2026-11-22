@@ -2238,7 +2238,10 @@ export function registerRoutes(
     const results = await Promise.all(
       targets.map(async (channel) => {
         try {
-          await sendNotice(channel, notice, { allowPrivate: config.allowPrivateWebhooks });
+          await sendNotice(channel, notice, {
+            allowPrivate: config.allowPrivateWebhooks,
+            smtp: config.smtp,
+          });
 
           return { type: channel.type, ok: true };
         } catch (err) {

@@ -61,6 +61,10 @@ export interface NotificationChannel {
   url: string;
   enabled: boolean;
   decoration: boolean;
+  /** The target is stored encrypted (false only for rows from before KINGLET_SECRET_KEY). */
+  encrypted: boolean;
+  /** Why the target can't be decrypted (changed or missing key); it must be re-entered. */
+  locked: string | null;
   actions: NotificationAction[];
   createdAt: number;
   updatedAt: number;
@@ -113,6 +117,13 @@ export interface NotificationEvent {
  * segment. Query strings and credentials are always dropped.
  */
 export function maskChannelUrl(raw: string): string {
+  // Email channels store mailto:recipients; lists show only how many.
+  if (raw.toLowerCase().startsWith("mailto:")) {
+    const count = raw.slice("mailto:".length).split(",").filter(Boolean).length;
+
+    return `email · ${count} recipient${count === 1 ? "" : "s"}`;
+  }
+
   try {
     const url = new URL(raw);
     const segments = url.pathname.split("/").filter((segment) => segment.length > 0);

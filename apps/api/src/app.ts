@@ -27,6 +27,7 @@ import { APP_VERSION } from "./version.ts";
 import { isJsonObject, isString } from "./json.ts";
 import type { JsonValue } from "./json.ts";
 import * as schema from "./storage/schema.ts";
+import { configureSecrets } from "./secrets.ts";
 import type { Storage } from "./storage/index.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -70,6 +71,8 @@ export interface CreateAppOptions {
  */
 export function createApp(options: CreateAppOptions): Hono<AppEnv> {
   const { storage, config, auth, engines } = options;
+  // Idempotent; tests build the app without index.ts.
+  configureSecrets(config.secretKey);
   const app = new Hono<AppEnv>();
 
   app.onError((err, c) => {

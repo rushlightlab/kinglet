@@ -49,3 +49,40 @@ test("a notification channel is created, masked, revealed for editing, and delet
 
   await expect(row).toHaveCount(0);
 });
+
+test("a Telegram channel is built from its own fields and stays masked", async ({ page }) => {
+  const suffix = Date.now().toString(36);
+  const name = `e2e telegram ${suffix}`;
+  // Fake token: shaped to pass the format check only.
+  const token = `123456:FAKE_fake_FAKE_fake_${suffix}`;
+
+  await openSettingsTab(page, "notifications");
+  await page.getByRole("button", { name: /^(new channel|add your first channel)$/ }).click();
+
+  const dialog = page.getByRole("dialog");
+
+  await dialog.getByLabel("name").fill(name);
+  await dialog.getByLabel("type").click();
+  await page.getByRole("option", { name: "Telegram" }).click();
+  await dialog.getByLabel("bot token").fill(token);
+  await dialog.getByLabel("chat ID").fill("-1001234567890");
+  await dialog.getByRole("button", { name: "Create channel" }).click();
+
+  const row = tableRow(page, name);
+
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("Telegram");
+  await expect(page.locator("body")).not.toContainText(token);
+
+  await rowAction(row, "Edit");
+
+  const edit = page.getByRole("dialog");
+
+  await expect(edit.getByLabel("chat ID")).toHaveValue("-1001234567890");
+  await expect(edit.getByLabel("bot token")).toHaveValue(token);
+  await edit.getByRole("button", { name: "Cancel" }).click();
+
+  await rowAction(row, "Delete");
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete channel" }).click();
+  await expect(row).toHaveCount(0);
+});

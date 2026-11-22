@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { SEARCH_MODES } from "./types.ts";
+import type { SmtpSettings } from "./notify.ts";
+import { decodeSecretKey } from "./secrets.ts";
 import type { SearchMode } from "./types.ts";
 
 export type StorageKindSetting = "auto" | "sqlite" | "libsql";
@@ -41,6 +43,13 @@ export interface Config {
   baseUrl?: string;
   /** Allow webhook channels that point at private/loopback addresses. */
   allowPrivateWebhooks: boolean;
+  /** SMTP server for email channels; null when KINGLET_SMTP_* is not set. */
+  smtp: SmtpSettings | null;
+  /**
+   * KINGLET_SECRET_KEY, decoded: encrypts stored channel secrets. Null turns
+   * off features that would store a new secret.
+   */
+  secretKey: Buffer | null;
   /** Explicit opt-in for MCP keys to create/update/delete monitors. */
   mcpAllowMonitorWrites: boolean;
   /** Secret used to sign sessions/cookies — env override or persisted file. */
@@ -108,6 +117,77 @@ function storageKindEnv(): StorageKindSetting {
   const raw = process.env.KINGLET_STORAGE?.trim().toLowerCase();
 
   return raw === "sqlite" || raw === "libsql" ? raw : "auto";
+}
+
+/**
+ * KINGLET_SECRET_KEY is optional, but a set key must be usable: a typo would
+ * otherwise leave secrets unencrypted without anyone noticing, so boot stops.
+ */
+function resolveSecretKey(): Buffer | null {
+  const raw = process.env.KINGLET_SECRET_KEY?.trim() ?? "";
+
+  if (raw === "") return null;
+  const key = decodeSecretKey(raw);
+
+  if (key === null) {
+    throw new Error(
+      "KINGLET_SECRET_KEY must be at least 32 random bytes, base64 or hex. Generate one with: openssl rand -base64 32",
+    );
+  }
+
+  return key;
+}
+
+function envFlag(name: string): boolean | undefined {
+  const raw = process.env[name]?.trim().toLowerCase();
+
+  if (raw === undefined || raw === "") return undefined;
+
+  return ["1", "true", "yes"].includes(raw);
+}
+
+/**
+ * Email channels send through one SMTP server set in the environment. The
+ * password is env-only: never stored, logged, or returned. Without TLS a
+ * login would cross the network in the clear, so a configured user requires
+ * TLS unless KINGLET_SMTP_REQUIRE_TLS=0 says otherwise.
+ */
+function resolveSmtpConfig(): SmtpSettings | null {
+  const host = process.env.KINGLET_SMTP_HOST?.trim() ?? "";
+
+  if (host === "") return null;
+  const from = process.env.KINGLET_SMTP_FROM?.trim() ?? "";
+
+  if (from === "" || /[\r\n]/.test(from)) {
+    console.warn(
+      "[kinglet] KINGLET_SMTP_HOST is set but KINGLET_SMTP_FROM is missing; email channels are off",
+    );
+
+    return null;
+  }
+
+  const secure = envFlag("KINGLET_SMTP_SECURE");
+  const rawPort = Number(process.env.KINGLET_SMTP_PORT ?? "");
+
+  const port =
+    Number.isInteger(rawPort) && rawPort > 0 && rawPort < 65_536 ? rawPort : secure ? 465 : 587;
+
+  const user = process.env.KINGLET_SMTP_USER?.trim() || undefined;
+  const password = process.env.KINGLET_SMTP_PASSWORD || undefined;
+
+  const smtp: SmtpSettings = {
+    host,
+    port,
+    secure: secure ?? port === 465,
+    requireTLS: envFlag("KINGLET_SMTP_REQUIRE_TLS") ?? user !== undefined,
+    from,
+  };
+
+  if (user) smtp.user = user;
+
+  if (password) smtp.password = password;
+
+  return smtp;
 }
 
 const BACKUP_S3_VARS = [
@@ -262,10 +342,28 @@ function resolveBackupConfig(): BackupConfigResolution {
  * override first, then a persisted random secret next to the database
  * (created 0600), so cookie-cache sessions stay valid across restarts.
  */
-function resolveAuthSecret(dataDir: string): string {
+/** libsql://, http(s)://, and ws(s):// are remote libSQL/Turso; anything else is a local file. */
+export function isRemoteDbPath(dbPath: string): boolean {
+  return /^(libsql:\/\/|https?:\/\/|wss?:\/\/)/i.test(dbPath);
+}
+
+/**
+ * The session signing secret: BETTER_AUTH_SECRET, else one generated once and
+ * kept in auth-secret.txt next to a local database. A remote database has no
+ * local data directory to keep it in, so a generated secret would change on
+ * every start and sign everyone out: boot stops and asks for one instead.
+ */
+function resolveAuthSecret(dataDir: string, dbPath: string): string {
   const explicit = (process.env.BETTER_AUTH_SECRET ?? process.env.KINGLET_AUTH_SECRET ?? "").trim();
 
   if (explicit) return explicit;
+
+  if (isRemoteDbPath(dbPath)) {
+    throw new Error(
+      "BETTER_AUTH_SECRET is required with a remote database (KINGLET_DB_PATH is a libsql:// or http(s) URL): there is no local data directory to keep a generated one in, so every restart would sign everyone out. Generate one with: openssl rand -base64 32",
+    );
+  }
+
   const secretFile = path.join(dataDir, "auth-secret.txt");
 
   try {
@@ -313,10 +411,12 @@ export function loadConfig(): Config {
     allowPrivateWebhooks: ["1", "true", "yes"].includes(
       (process.env.KINGLET_ALLOW_PRIVATE_WEBHOOKS ?? "").toLowerCase(),
     ),
+    smtp: resolveSmtpConfig(),
+    secretKey: resolveSecretKey(),
     mcpAllowMonitorWrites: ["1", "true", "yes"].includes(
       (process.env.KINGLET_MCP_ALLOW_MONITOR_WRITES ?? "").toLowerCase(),
     ),
-    authSecret: resolveAuthSecret(dataDir),
+    authSecret: resolveAuthSecret(dataDir, dbPath),
     trustedProxies: (process.env.KINGLET_TRUSTED_PROXIES ?? "")
       .split(",")
       .map((v) => v.trim())

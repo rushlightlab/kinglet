@@ -83,10 +83,23 @@ export interface ClearPreview {
 
 export type MonitorKind = "match" | "count_above" | "count_below";
 
-export type ChannelType = "webhook" | "discord" | "slack";
+export type ChannelType =
+  | "webhook"
+  | "discord"
+  | "slack"
+  | "telegram"
+  | "ntfy"
+  | "gotify"
+  | "pushover"
+  | "email"
+  | "resend"
+  | "plunk";
+
+/** Legacy per-monitor destinations only ever used the first three types. */
+export type LegacyChannelType = "webhook" | "discord" | "slack";
 
 export interface NotifyChannel {
-  type: ChannelType;
+  type: LegacyChannelType;
   url: string;
 }
 
@@ -217,6 +230,10 @@ export interface NotificationChannel {
   url: string;
   enabled: boolean;
   decoration: boolean;
+  /** Stored encrypted; false only for channels from before KINGLET_SECRET_KEY. */
+  encrypted: boolean;
+  /** Why the stored secret can't be read (changed or missing key); re-enter it. */
+  locked: string | null;
   actions: NotificationAction[];
   createdAt: number;
   updatedAt: number;

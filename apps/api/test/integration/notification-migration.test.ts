@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMonitorFromRaw } from "../../src/monitors.ts";
 import { migrateLegacyMonitorChannels } from "../../src/notifications/migrate.ts";
+import { readChannelTarget } from "../../src/notifications/store.ts";
 import * as schema from "../../src/storage/schema.ts";
 import { createTestHarness } from "../helpers/harness.ts";
 import type { TestHarness } from "../helpers/harness.ts";
@@ -52,11 +53,11 @@ async function createLegacyMonitor(
   return result.monitor.id;
 }
 
+/** Channels whose decrypted target is `url` (targets are stored encrypted). */
 async function channelRows(url: string) {
-  return ctx()
-    .harness.storage.db.select()
-    .from(schema.notificationChannels)
-    .where(eq(schema.notificationChannels.url, url));
+  const rows = await ctx().harness.storage.db.select().from(schema.notificationChannels);
+
+  return rows.filter((row) => readChannelTarget(row.id, row.url).url === url);
 }
 
 beforeAll(async () => {
@@ -111,6 +112,9 @@ describe("legacy monitor channel migration", () => {
 
     expect(enabledChannel.name).toBe("Webhook 1");
     expect(enabledChannel.type).toBe("webhook");
+    // The promoted target is stored sealed, never as the plaintext URL.
+    expect(enabledChannel.url.startsWith("enc:v1:")).toBe(true);
+    expect(enabledChannel.targetHash).not.toBeNull();
 
     const actions = await harness.storage.db
       .select({ action: schema.notificationChannelActions.action })

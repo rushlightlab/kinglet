@@ -4,6 +4,16 @@ import { uuidv7 } from "../auth/ids.ts";
 import { isChannelType } from "../notify.ts";
 import type { ChannelType } from "../notify.ts";
 import * as schema from "../storage/schema.ts";
+import {
+  channelContext,
+  isSealed,
+  lockedReason,
+  monitorContext,
+  openSecret,
+  sealSecret,
+  secretFingerprint,
+  secretsConfigured,
+} from "../secrets.ts";
 import { tableSearchCondition } from "../table-search.ts";
 import type { Storage } from "../storage/index.ts";
 import { isNotificationAction } from "./types.ts";
@@ -27,8 +37,164 @@ export interface DeliveryTarget {
   id: string;
   name: string;
   type: ChannelType;
+  /** Decrypted; empty when `locked`. */
   url: string;
   decoration: boolean;
+  /** Why the target can't be decrypted; delivery refuses to send. */
+  locked: string | null;
+}
+
+/** A channel's stored target, decrypted, and why it can't be when it can't. */
+export interface ReadTarget {
+  url: string;
+  /** Stored encrypted (false only for rows from before KINGLET_SECRET_KEY). */
+  encrypted: boolean;
+  locked: string | null;
+}
+
+export function readChannelTarget(channelId: string, stored: string): ReadTarget {
+  const opened = openSecret(stored, channelContext(channelId));
+
+  if (!opened.ok) return { url: "", encrypted: true, locked: lockedReason(opened.reason) };
+
+  return { url: opened.value, encrypted: opened.sealed, locked: null };
+}
+
+/**
+ * A monitor's legacy inline destinations (JSON with webhook URLs), decrypted.
+ * A locked value reads as no destinations: nothing is sent to a guessed URL.
+ */
+export function openMonitorChannels(monitorId: string, stored: string): string {
+  const opened = openSecret(stored, monitorContext(monitorId));
+
+  if (!opened.ok) {
+    console.warn(
+      `[kinglet] legacy destinations on monitor ${monitorId} are ${lockedReason(opened.reason)}`,
+    );
+
+    return "[]";
+  }
+
+  return opened.value;
+}
+
+/**
+ * Legacy destinations for storage: sealed with the key, or plaintext without
+ * one (only possible for rows that already held plaintext). An empty list
+ * holds no secret and stays readable.
+ */
+export function sealMonitorChannels(monitorId: string, json: string): string {
+  if (json === "[]" || !secretsConfigured()) return json;
+
+  return sealSecret(json, monitorContext(monitorId));
+}
+
+/** The keyed fingerprint that keeps two channels from sharing a target. */
+export function targetFingerprint(type: ChannelType, url: string): string | null {
+  return secretFingerprint(`${type}\n${url}`);
+}
+
+/** The stored columns for a channel target. */
+export interface StoredTarget {
+  url: string;
+  targetHash: string | null;
+}
+
+/** Columns for storing a target: sealed and fingerprinted. Needs the key. */
+export function storedTarget(channelId: string, type: ChannelType, url: string): StoredTarget {
+  return {
+    url: sealSecret(url, channelContext(channelId)),
+    targetHash: targetFingerprint(type, url),
+  };
+}
+
+/**
+ * Seal every secret stored before KINGLET_SECRET_KEY was set: plaintext channel
+ * targets (adding their fingerprints) and legacy per-monitor destinations.
+ * Runs at boot; safe to repeat, and a no-op without a key.
+ */
+export async function sealStoredSecrets(
+  storage: Storage,
+): Promise<{ channels: number; monitors: number }> {
+  if (!secretsConfigured()) return { channels: 0, monitors: 0 };
+  let channels = 0;
+  let monitors = 0;
+
+  const channelRows = await storage.db
+    .select({
+      id: schema.notificationChannels.id,
+      type: schema.notificationChannels.type,
+      url: schema.notificationChannels.url,
+      targetHash: schema.notificationChannels.targetHash,
+    })
+    .from(schema.notificationChannels);
+
+  for (const row of channelRows) {
+    if (!isChannelType(row.type)) continue;
+
+    if (isSealed(row.url) && row.targetHash !== null) continue;
+    const target = readChannelTarget(row.id, row.url);
+
+    // Sealed with another key: leave it locked for an admin to re-enter.
+    if (target.locked !== null) continue;
+    const stored = storedTarget(row.id, row.type, target.url);
+
+    await storage.db
+      .update(schema.notificationChannels)
+      .set({ url: stored.url, targetHash: stored.targetHash })
+      .where(eq(schema.notificationChannels.id, row.id));
+    channels++;
+  }
+
+  const monitorRows = await storage.db
+    .select({ id: schema.monitors.id, channels: schema.monitors.channels })
+    .from(schema.monitors);
+
+  for (const row of monitorRows) {
+    if (isSealed(row.channels) || row.channels === "[]") continue;
+
+    await storage.db
+      .update(schema.monitors)
+      .set({ channels: sealMonitorChannels(row.id, row.channels) })
+      .where(eq(schema.monitors.id, row.id));
+    monitors++;
+  }
+
+  if (channels > 0 || monitors > 0) {
+    console.log(
+      `[kinglet] encrypted ${channels} notification channel secret(s) and ${monitors} monitor destination list(s)`,
+    );
+  }
+
+  return { channels, monitors };
+}
+
+/** Whether another channel already sends to this target. */
+export async function hasChannelWithTarget(
+  storage: Storage,
+  type: ChannelType,
+  url: string,
+  excludeId: string | null,
+): Promise<boolean> {
+  const hash = targetFingerprint(type, url);
+
+  const rows = await storage.db
+    .select({
+      id: schema.notificationChannels.id,
+      type: schema.notificationChannels.type,
+      url: schema.notificationChannels.url,
+      targetHash: schema.notificationChannels.targetHash,
+    })
+    .from(schema.notificationChannels);
+
+  // Fingerprints cover sealed rows; rows from before encryption compare as plaintext.
+  return rows.some((row) => {
+    if (row.id === excludeId) return false;
+
+    if (hash !== null && row.targetHash === hash) return true;
+
+    return row.type === type && readChannelTarget(row.id, row.url).url === url;
+  });
 }
 
 export interface LatestDeliveryState {
@@ -124,12 +290,15 @@ function channelFromRow(
   const type = row.type;
 
   if (!isChannelType(type)) return null;
+  const target = readChannelTarget(row.id, row.url);
 
   return {
     id: row.id,
     name: row.name,
     type,
-    url: row.url,
+    url: target.url,
+    encrypted: target.encrypted,
+    locked: target.locked,
     enabled: row.enabled,
     decoration: row.decoration,
     actions,
@@ -215,12 +384,15 @@ export async function channelsForAction(
 
   for (const row of rows) {
     if (!isChannelType(row.type)) continue;
+    const target = readChannelTarget(row.id, row.url);
+
     targets.push({
       id: row.id,
       name: row.name,
       type: row.type,
-      url: row.url,
+      url: target.url,
       decoration: row.decoration,
+      locked: target.locked,
     });
   }
 
@@ -287,12 +459,15 @@ export async function resolveMonitorChannelData(
     });
 
     if (row.enabled) {
+      const target = readChannelTarget(row.channelId, row.url);
+
       entry.delivery.push({
         id: row.channelId,
         name: row.name,
         type: row.type,
-        url: row.url,
+        url: target.url,
         decoration: row.decoration,
+        locked: target.locked,
       });
     }
   }

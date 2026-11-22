@@ -165,7 +165,10 @@ in-process bus in `apps/api/src/bus.ts`; there is no external queue.
 The monitor engine runs in-process and refreshes from storage after CRUD.
 Kinds: `match`, `count_above`, `count_below`. Each monitor has a cooldown;
 count monitors auto-resolve when the condition clears. Channels are webhook,
-Discord, or Slack. Alerts are stored in `alerts`; retention is separate from
+Discord, Slack, Telegram, ntfy, Gotify, Pushover, or email (SMTP, Resend,
+Plunk); per-service targets are parsed in `apps/api/src/notify-targets.ts` and
+email HTML is rendered with React Email in `notification-email.tsx`. Legacy
+per-monitor destinations stay webhook/Discord/Slack only. Alerts are stored in `alerts`; retention is separate from
 event retention. `POST /v1/monitors/:id/test` sends a test notification.
 
 ### Auth, projects, and keys
@@ -342,8 +345,12 @@ Treat a change to any of these as security-sensitive and call it out explicitly.
 - Webhook targets are SSRF-checked; DNS is resolved once and the connection is
   pinned to the vetted IP. Do not bypass this. Private targets require the
   explicit `KINGLET_ALLOW_PRIVATE_WEBHOOKS=1` escape hatch.
-- Notification text is untrusted. Keep sanitization/truncation for webhooks,
-  Discord, and Slack; never include secrets in payloads or logs.
+- Notification text is untrusted. Keep sanitization/truncation for every
+  channel; never include secrets in payloads or logs. Telegram is sent without
+  a parse mode, Plunk HTML is escaped, and email HTML relies on React's escaping.
+- Telegram, Pushover, Resend, and Plunk targets may only reach their official
+  hosts. Self-hosted ntfy and Gotify follow the same SSRF rules as webhooks.
+- SMTP credentials (`KINGLET_SMTP_*`) are env-only, like backup credentials.
 - The test-notification endpoint must not leak internal network details to
   non-admin callers.
 - Shared notification channel URLs are admin-only secrets: list responses mask
@@ -364,9 +371,14 @@ Treat a change to any of these as security-sensitive and call it out explicitly.
 ### Secrets
 
 - `BETTER_AUTH_SECRET`, bootstrap passwords, `KINGLET_DB_AUTH_TOKEN`, API/MCP
-  keys, `KINGLET_BACKUP_S3_SECRET_ACCESS_KEY`, and
-  `KINGLET_BACKUP_PASSPHRASE` are secrets. Never commit, print, or send them to
-  logs.
+  keys, `KINGLET_BACKUP_S3_SECRET_ACCESS_KEY`, `KINGLET_BACKUP_PASSPHRASE`,
+  `KINGLET_SECRET_KEY`, and `KINGLET_SMTP_PASSWORD` are secrets. Never commit,
+  print, or send them to logs.
+- Notification channel targets and legacy per-monitor webhook URLs are stored
+  encrypted (`apps/api/src/secrets.ts`). Read them only through
+  `readChannelTarget` / `openMonitorChannels`, write them only sealed
+  (`storedTarget` / `sealMonitorChannels`), and never write a decrypted value
+  back. Without `KINGLET_SECRET_KEY`, refuse anything that stores a new secret.
 - Data directories contain the database, auth secret, and bootstrap password.
   Keep them out of Git and image layers.
 

@@ -1,11 +1,18 @@
-import { and, eq } from "drizzle-orm";
-import { isChannelType, validateWebhookUrl } from "../notify.ts";
-import type { ChannelType } from "../notify.ts";
+import { eq } from "drizzle-orm";
+import { isLegacyChannelType, validateWebhookUrl } from "../notify.ts";
+import type { LegacyChannelType as ChannelType } from "../notify.ts";
 import { isJsonObject, isString } from "../json.ts";
 import { uuidv7 } from "../auth/ids.ts";
+import { secretsConfigured } from "../secrets.ts";
 import * as schema from "../storage/schema.ts";
 import type { Storage } from "../storage/index.ts";
 import { DEFAULT_NOTIFICATION_ACTIONS } from "./types.ts";
+import {
+  openMonitorChannels,
+  readChannelTarget,
+  sealMonitorChannels,
+  storedTarget,
+} from "./store.ts";
 
 /**
  * One-time migration from `monitors.channels` inline JSON to first-class
@@ -58,7 +65,7 @@ function parseLegacyChannels(raw: string): LegacyChannel[] {
       const type = value.type;
       const rawUrl = value.url;
 
-      if (!isChannelType(type) || !isString(rawUrl)) continue;
+      if (!isLegacyChannelType(type) || !isString(rawUrl)) continue;
       const url = rawUrl.trim();
 
       if (!url) continue;
@@ -129,14 +136,16 @@ export async function migrateLegacyMonitorChannels(
     for (const row of existing) {
       usedNames.add(row.name);
 
-      if (isChannelType(row.type)) byKey.set(legacyKey(row.type, row.url), row.id);
+      if (isLegacyChannelType(row.type)) {
+        byKey.set(legacyKey(row.type, readChannelTarget(row.id, row.url).url), row.id);
+      }
     }
 
     const monitorLegacy = new Map<string, LegacyChannel[]>();
     const pending = new Map<string, PendingChannel>();
 
     for (const monitor of monitors) {
-      const channels = parseLegacyChannels(monitor.channels);
+      const channels = parseLegacyChannels(openMonitorChannels(monitor.id, monitor.channels));
 
       if (channels.length === 0) continue;
       monitorLegacy.set(monitor.id, channels);
@@ -166,13 +175,22 @@ export async function migrateLegacyMonitorChannels(
       const name = nextChannelName(channel.type, usedNames, counters);
       const now = Date.now();
 
+      const id = uuidv7();
+
+      // Sealed when the key is set; a keyless install keeps the plaintext it
+      // already had, and boot seals it once a key is added.
+      const stored = secretsConfigured()
+        ? storedTarget(id, channel.type, channel.url)
+        : { url: channel.url, targetHash: null };
+
       const inserted = await tx
         .insert(schema.notificationChannels)
         .values({
-          id: uuidv7(),
+          id,
           name,
           type: channel.type,
-          url: channel.url,
+          url: stored.url,
+          targetHash: stored.targetHash,
           enabled: true,
           decoration: false,
           createdAt: now,
@@ -184,19 +202,17 @@ export async function migrateLegacyMonitorChannels(
       let channelId = inserted[0]?.id;
 
       if (!channelId) {
-        // Another instance won the unique (type, url) race.
+        // Another instance won the unique fingerprint race.
         const found = await tx
-          .select({ id: schema.notificationChannels.id })
+          .select({
+            id: schema.notificationChannels.id,
+            type: schema.notificationChannels.type,
+            url: schema.notificationChannels.url,
+          })
           .from(schema.notificationChannels)
-          .where(
-            and(
-              eq(schema.notificationChannels.type, channel.type),
-              eq(schema.notificationChannels.url, channel.url),
-            ),
-          )
-          .limit(1);
+          .where(eq(schema.notificationChannels.type, channel.type));
 
-        channelId = found[0]?.id;
+        channelId = found.find((row) => readChannelTarget(row.id, row.url).url === channel.url)?.id;
       }
 
       if (!channelId) continue;
@@ -287,14 +303,17 @@ export async function scrubLegacyChannelUrl(
   let updated = 0;
 
   for (const row of rows) {
-    const channels = parseLegacyChannels(row.channels);
+    const channels = parseLegacyChannels(openMonitorChannels(row.id, row.channels));
     const filtered = channels.filter((channel) => channel.type !== type || channel.url !== url);
 
     if (filtered.length === channels.length) continue;
 
     await storage.db
       .update(schema.monitors)
-      .set({ channels: JSON.stringify(filtered), updatedAt: Date.now() })
+      .set({
+        channels: sealMonitorChannels(row.id, JSON.stringify(filtered)),
+        updatedAt: Date.now(),
+      })
       .where(eq(schema.monitors.id, row.id));
 
     updated++;

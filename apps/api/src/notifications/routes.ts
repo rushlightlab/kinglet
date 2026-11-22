@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { Context } from "hono";
@@ -10,18 +10,28 @@ import type { Config } from "../env.ts";
 import { isBoolean, isJsonObject, isString } from "../json.ts";
 import type { JsonObject, JsonValue } from "../json.ts";
 import { pageList, readPageRequest } from "../paging.ts";
-import { isChannelType, sendGeneric, validateWebhookUrl } from "../notify.ts";
+import {
+  CHANNEL_TYPES,
+  isChannelType,
+  isLegacyChannelType,
+  sendGeneric,
+  validateChannelUrl,
+} from "../notify.ts";
+import type { TargetCheck } from "../notify.ts";
 import type { ChannelType } from "../notify.ts";
+import { secretsConfigured } from "../secrets.ts";
 import * as schema from "../storage/schema.ts";
 import type { Storage } from "../storage/index.ts";
 import type { NotificationEngine } from "./engine.ts";
 import { scrubLegacyChannelUrl } from "./migrate.ts";
 import {
   getChannelRecord,
+  hasChannelWithTarget,
   healthFromDelivery,
   latestDeliveryStates,
   listChannelRecords,
   pageDeliveryRecords,
+  storedTarget,
 } from "./store.ts";
 import {
   DEFAULT_NOTIFICATION_ACTIONS,
@@ -89,7 +99,7 @@ function parseActions(
   return { ok: true, actions };
 }
 
-function parseChannelInput(raw: JsonObject, partial: boolean, config: Config): ChannelParse {
+function parseChannelInput(raw: JsonObject, partial: boolean): ChannelParse {
   const value: ChannelInput = {};
 
   if (!partial || raw.name !== undefined) {
@@ -105,7 +115,7 @@ function parseChannelInput(raw: JsonObject, partial: boolean, config: Config): C
 
   if (!partial || raw.type !== undefined) {
     if (!isChannelType(raw.type)) {
-      return { ok: false, error: "type must be webhook, discord, or slack" };
+      return { ok: false, error: `type must be one of: ${CHANNEL_TYPES.join(", ")}` };
     }
 
     value.type = raw.type;
@@ -113,10 +123,14 @@ function parseChannelInput(raw: JsonObject, partial: boolean, config: Config): C
 
   if (!partial || raw.url !== undefined) {
     if (!isString(raw.url)) return { ok: false, error: "url is required" };
+    // The target is checked against its type once the type is known (create
+    // and update), since an update may change only one of them.
     const url = raw.url.trim();
-    const urlError = validateWebhookUrl(url, config.allowPrivateWebhooks);
 
-    if (urlError) return { ok: false, error: urlError };
+    if (url.length === 0 || url.length > 2048) {
+      return { ok: false, error: "url must be 1-2048 characters" };
+    }
+
     value.url = url;
   }
 
@@ -146,6 +160,13 @@ function parseChannelInput(raw: JsonObject, partial: boolean, config: Config): C
   return { ok: true, value };
 }
 
+const SECRET_KEY_REQUIRED =
+  "set KINGLET_SECRET_KEY to add or change notification channels: their tokens and URLs are stored encrypted (generate one with: openssl rand -base64 32)";
+
+function targetCheck(config: Config): TargetCheck {
+  return { allowPrivate: config.allowPrivateWebhooks, smtpConfigured: config.smtp !== null };
+}
+
 function channelDto(channel: NotificationChannel, revealUrl: boolean): NotificationChannel {
   return {
     ...channel,
@@ -157,23 +178,6 @@ function channelDto(channel: NotificationChannel, revealUrl: boolean): Notificat
 
 function isUniqueViolation(message: string): boolean {
   return /unique/i.test(message);
-}
-
-async function hasDuplicateChannel(
-  storage: Storage,
-  type: ChannelType,
-  url: string,
-  excludeId: string | null,
-): Promise<boolean> {
-  const rows = await storage.db
-    .select({ id: schema.notificationChannels.id })
-    .from(schema.notificationChannels)
-    .where(
-      and(eq(schema.notificationChannels.type, type), eq(schema.notificationChannels.url, url)),
-    )
-    .limit(2);
-
-  return rows.some((row) => row.id !== excludeId);
 }
 
 /** One test per channel per minute, enforced in memory and by last_test_at. */
@@ -205,6 +209,19 @@ export function registerNotificationRoutes(
   );
 
   // Static route before `/channels/:id`. MCP keys with monitors.read may use it.
+  // What the channel form can offer: email needs a server-side SMTP config.
+  app.get("/v1/notifications/capabilities", (c) => {
+    const denied = requirePermission(c, "notifications.read");
+
+    if (denied) return denied;
+
+    return c.json({
+      email: { configured: config.smtp !== null, from: config.smtp?.from ?? null },
+      // Adding or changing a channel needs KINGLET_SECRET_KEY.
+      secrets: { configured: secretsConfigured() },
+    });
+  });
+
   app.get("/v1/notifications/channels/summary", async (c) => {
     if (!canCapability(getAuth(c), "monitors.read")) {
       return c.json({ error: "forbidden" }, 403);
@@ -261,7 +278,7 @@ export function registerNotificationRoutes(
 
     if (!body.ok) return c.json({ error: body.error }, 400);
 
-    const parsed = parseChannelInput(body.body, false, config);
+    const parsed = parseChannelInput(body.body, false);
 
     if (!parsed.ok) return c.json({ error: parsed.error }, 400);
 
@@ -271,7 +288,14 @@ export function registerNotificationRoutes(
       return c.json({ error: "name, type, and url are required" }, 400);
     }
 
-    if (await hasDuplicateChannel(storage, type, url, null)) {
+    const targetError = validateChannelUrl(type, url, targetCheck(config));
+
+    if (targetError) return c.json({ error: targetError }, 400);
+
+    // Channel targets are secrets and are only ever stored encrypted.
+    if (!secretsConfigured()) return c.json({ error: SECRET_KEY_REQUIRED }, 400);
+
+    if (await hasChannelWithTarget(storage, type, url, null)) {
       return c.json({ error: "a channel with this type and URL already exists" }, 409);
     }
 
@@ -281,14 +305,18 @@ export function registerNotificationRoutes(
     const now = Date.now();
 
     try {
+      const id = uuidv7();
+      const stored = storedTarget(id, type, url);
+
       const created = await storage.db.transaction(async (tx) => {
         const rows = await tx
           .insert(schema.notificationChannels)
           .values({
-            id: uuidv7(),
+            id,
             name,
             type,
-            url,
+            url: stored.url,
+            targetHash: stored.targetHash,
             enabled,
             decoration,
             createdAt: now,
@@ -369,7 +397,7 @@ export function registerNotificationRoutes(
 
     if (!body.ok) return c.json({ error: body.error }, 400);
 
-    const parsed = parseChannelInput(body.body, true, config);
+    const parsed = parseChannelInput(body.body, true);
 
     if (!parsed.ok) return c.json({ error: parsed.error }, 400);
 
@@ -379,31 +407,49 @@ export function registerNotificationRoutes(
     const enabled = parsed.value.enabled ?? existing.enabled;
     const decoration = parsed.value.decoration ?? existing.decoration;
 
-    if (await hasDuplicateChannel(storage, type, url, channelId)) {
-      return c.json({ error: "a channel with this type and URL already exists" }, 409);
-    }
-
     const destinationChanged = existing.type !== type || existing.url !== url;
+
+    if (destinationChanged) {
+      const targetError = validateChannelUrl(type, url, targetCheck(config));
+
+      if (targetError) return c.json({ error: targetError }, 400);
+
+      // A new target is a new secret: it can only be stored encrypted. Renames,
+      // subscriptions, and on/off changes still work without the key.
+      if (!secretsConfigured()) return c.json({ error: SECRET_KEY_REQUIRED }, 400);
+
+      if (await hasChannelWithTarget(storage, type, url, channelId)) {
+        return c.json({ error: "a channel with this type and URL already exists" }, 409);
+      }
+    }
 
     if (destinationChanged) {
       // Retire the old legacy copy before the new destination is live. The
       // one-time migration marker prevents recreation, and removing the copy
       // stops the legacy fallback from delivering to the old URL.
-      await scrubLegacyChannelUrl(storage, existing.type, existing.url);
+      // Only the original three types ever had legacy inline copies.
+      if (isLegacyChannelType(existing.type)) {
+        await scrubLegacyChannelUrl(storage, existing.type, existing.url);
+      }
     }
 
     const now = Date.now();
 
+    // The stored target is only rewritten when it changes, so an unchanged
+    // secret is never written back as plaintext.
     const changes: Partial<typeof schema.notificationChannels.$inferInsert> = {
       name,
-      type,
-      url,
       enabled,
       decoration,
       updatedAt: now,
     };
 
     if (destinationChanged) {
+      const stored = storedTarget(channelId, type, url);
+
+      changes.type = type;
+      changes.url = stored.url;
+      changes.targetHash = stored.targetHash;
       changes.lastTestAt = null;
       changes.lastTestStatus = null;
       changes.lastTestError = null;
@@ -468,7 +514,9 @@ export function registerNotificationRoutes(
 
     // Remove the legacy inline copy first so the fallback cannot keep posting
     // to a destination the admin just deleted.
-    await scrubLegacyChannelUrl(storage, channel.type, channel.url);
+    if (isLegacyChannelType(channel.type)) {
+      await scrubLegacyChannelUrl(storage, channel.type, channel.url);
+    }
 
     // Delivery rows are kept for audit; they contain no URLs. Links and
     // action subscriptions have no other owner and are removed with the
@@ -522,14 +570,19 @@ export function registerNotificationRoutes(
 
     try {
       await sendGeneric(
-        { type: channel.type, url: channel.url, decoration: channel.decoration },
+        {
+          type: channel.type,
+          url: channel.url,
+          decoration: channel.decoration,
+          locked: channel.locked,
+        },
         {
           action: "test",
           subject: "Test notification",
           summary: `Test notification from Kinglet — ${channel.name} works.`,
           at: Date.now(),
         },
-        { allowPrivate: config.allowPrivateWebhooks },
+        { allowPrivate: config.allowPrivateWebhooks, smtp: config.smtp },
       );
     } catch (err) {
       testError = safeErrorMessage(err instanceof Error ? err : String(err), 500);

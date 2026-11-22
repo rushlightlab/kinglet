@@ -13,13 +13,13 @@ Docs and landing page: **https://kinglet.rushlightlab.com**
 - **Full-text search** — SQLite FTS5 with a trigram tokenizer, so substring
   matches (`"timeout"`) just work
 - **Trill search** — `level>=warn service:api "connection refused" -healthcheck field.status>=500`, with autocomplete
-- **Monitors & alerts** — instant match, rate spikes, silence detection → webhook/Discord/Slack
+- **Monitors & alerts** — instant match, rate spikes, silence detection → webhook, Discord, Slack, Telegram, ntfy, Gotify, Pushover, or email
 - **Team-ready auth** — Better Auth email/password login with admin / member / viewer roles, cached sessions, and per-project membership
 - **Multi-project** — every project owns its logs, monitors, and `kl_…` API keys with `ingest`/`query` scopes; non-admins see only projects they're assigned to
 - **Volume histogram** by level, drag across it to zoom into a time range
 - **Retention built in** — drop events older than N days, automatically
 - **S3 backups & restore** — optional compressed (zstd), optionally age-encrypted snapshots to R2/S3/MinIO, scheduled and restorable from Settings
-- **Notification channels** — reusable webhook/Discord/Slack channels with per-action subscriptions for backups, archive, and system warnings
+- **Notification channels** — reusable webhook, Discord, Slack, Telegram, ntfy, Gotify, Pushover, and email (SMTP, Resend, Plunk) channels with per-action subscriptions for backups, archive, and system warnings
 - **Log archive** — optional per-project NDJSON export to S3 before retention deletes events, with a re-import path
 - **MCP server** — query logs and manage monitors from Claude Desktop, Cursor, VS Code, Codex, and other MCP clients with a project-scoped `km_…` key
 - **Zero external services** — no Postgres, no Redis, no Kafka. One process; S3 is optional.
@@ -315,7 +315,8 @@ curl -X POST http://localhost:8080/v1/monitors \
 ```
 
 Channels are reusable destinations — **webhook** (JSON payload; n8n, Zapier,
-scripts), **discord**, and **slack** — managed in **Settings → Notifications**
+scripts), **discord**, **slack**, **telegram**, **ntfy**, **gotify**, **pushover**,
+and email through **SMTP**, **Resend**, or **Plunk** — managed in **Settings → Notifications**
 and subscribed to actions such as `backup.failed`, `backup.restore_staged`,
 `archive.failed`, and `system.warning`. Attach them to a monitor by id with
 `channelIds`; legacy inline `channels` are still accepted for one release. Each
@@ -323,7 +324,49 @@ monitor has a cooldown; count monitors auto-resolve when the condition clears
 and say so. `POST /v1/monitors/:id/test` sends a test notification, so wiring a
 channel is verifiable in one click. Webhook targets are SSRF-checked:
 loopback/private/metadata addresses are blocked unless
-`KINGLET_ALLOW_PRIVATE_WEBHOOKS=1` is set.
+`KINGLET_ALLOW_PRIVATE_WEBHOOKS=1` is set; that also lets a self-hosted ntfy or
+Gotify server live on a private address. Telegram, Pushover, Resend, and Plunk
+only ever reach their official API hosts. Email is HTML (React Email) with a
+plain-text copy; SMTP email uses the server set by `KINGLET_SMTP_*`.
+
+Each channel stores one secret target, masked in lists:
+
+| Type       | Target                                                                    |
+| ---------- | ------------------------------------------------------------------------- |
+| `ntfy`     | `https://ntfy.sh/<topic>`, optional `?auth=<base64url("Bearer <token>")>` |
+| `gotify`   | `https://<server>/message?token=<app token>`                              |
+| `telegram` | `https://api.telegram.org/bot<token>/sendMessage?chat_id=<chat>`          |
+| `pushover` | `https://api.pushover.net/1/messages.json?token=<app>&user=<user>`        |
+| `email`    | `mailto:<address>[,<address>…]` (up to 10)                                |
+| `resend`   | `https://api.resend.com/emails?key=<re_…>&from=<from>&to=<a,b>`           |
+| `plunk`    | `https://api.useplunk.com/v1/send?key=<sk_…>&to=<a,b>`                    |
+
+The UI builds these from per-service fields, so most people never type one.
+
+### Encrypted channel secrets
+
+Channel targets hold secrets (webhook URLs, bot tokens, API keys), so Kinglet
+stores them encrypted with `KINGLET_SECRET_KEY`: AES-256-GCM with a fresh IV
+per value, each value bound to its row, and a keyed fingerprint for duplicate
+checks. Legacy per-monitor webhook URLs are encrypted the same way. The SMTP
+and S3 credentials never reach the database; they stay in the environment.
+
+```bash
+openssl rand -base64 32   # set the output as KINGLET_SECRET_KEY, then restart
+```
+
+- **Without a key**, nothing new is stored as a secret: adding a channel,
+  pointing one somewhere new, and inline monitor webhooks are refused (the UI
+  says why). Existing channels keep sending so an upgrade can't silently stop
+  your alerts, and the UI warns that their secrets are not encrypted yet.
+- **On the first start with a key**, existing plaintext secrets are encrypted
+  in place.
+- **Keep the key safe and backed up separately.** Snapshots contain the
+  database, not the key: a leaked snapshot doesn't expose channel secrets, and
+  a restore needs the same key. If the key is lost or changed, affected
+  channels show as **locked** and need their settings entered again.
+- A key that is set but too short or malformed stops startup instead of
+  silently storing plaintext.
 
 Set `KINGLET_BASE_URL` and every notification carries a deep link back into
 your UI with the query and time range pre-filled.
@@ -365,44 +408,51 @@ the database, manifests, logs, or API responses.
 
 ## Configuration
 
-| Env var                                      | Default                                       | What it does                                                                          |
-| -------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `KINGLET_PORT`                               | `3000`                                        | HTTP port                                                                             |
-| `KINGLET_HOST`                               | _(all interfaces)_                            | Bind address; set `127.0.0.1` for a loopback-only listener                            |
-| `KINGLET_STORAGE`                            | `auto`                                        | `sqlite`, `libsql`, or `auto` (picks by db path scheme)                               |
-| `KINGLET_SEARCH`                             | `substring`                                   | Message search index: `substring` (trigram), `words` (word prefix), or `off`          |
-| `KINGLET_DB_PATH`                            | `data/kinglet.db` (image: `/data/kinglet.db`) | Plain path or `file:` → local SQLite; `libsql://`/`https://`/`wss://` → remote libSQL |
-| `KINGLET_DB_AUTH_TOKEN`                      | —                                             | Auth token for remote libSQL/Turso databases                                          |
-| `KINGLET_ADMIN_EMAIL`                        | `admin@kinglet.local`                         | Bootstrap administrator email (when no administrator exists)                          |
-| `KINGLET_ADMIN_PASSWORD`                     | _(generated)_                                 | Bootstrap administrator password (when no administrator exists)                       |
-| `BETTER_AUTH_SECRET`                         | _(generated, persisted)_                      | Session signing secret; set explicitly for multi-instance installs                    |
-| `KINGLET_TRUSTED_PROXIES`                    | —                                             | CIDRs allowed to set `X-Forwarded-For`                                                |
-| `KINGLET_ALLOW_PRIVATE_WEBHOOKS`             | —                                             | Allow private/internal webhook targets (SSRF escape hatch)                            |
-| `KINGLET_MCP_ALLOW_MONITOR_WRITES`           | —                                             | Allow MCP keys to create/update/delete monitors; off by default                       |
-| `KINGLET_SESSION_DAYS`                       | `30`                                          | Web session lifetime                                                                  |
-| `KINGLET_BASE_URL`                           | —                                             | Public URL, used for deep links in alert notifications                                |
-| `KINGLET_TIMEZONE`                           | system TZ                                     | Default timezone for backup and archive schedules                                     |
-| `KINGLET_BACKUP_S3_BUCKET`                   | —                                             | Bucket for snapshots; backups are enabled when this and the next three are set        |
-| `KINGLET_BACKUP_S3_ENDPOINT`                 | —                                             | S3-compatible endpoint (R2/MinIO/B2); HTTPS required except loopback                  |
-| `KINGLET_BACKUP_S3_REGION`                   | `auto`                                        | Region; `auto` for Cloudflare R2                                                      |
-| `KINGLET_BACKUP_S3_ACCESS_KEY_ID`            | —                                             | Least-privilege access key                                                            |
-| `KINGLET_BACKUP_S3_SECRET_ACCESS_KEY`        | —                                             | Secret key (never stored in the database)                                             |
-| `KINGLET_BACKUP_S3_SESSION_TOKEN`            | —                                             | Optional temporary credential token                                                   |
-| `KINGLET_BACKUP_S3_PREFIX`                   | `kinglet`                                     | Object prefix inside the bucket                                                       |
-| `KINGLET_BACKUP_S3_FORCE_PATH_STYLE`         | `false`                                       | `true` for most MinIO setups                                                          |
-| `KINGLET_BACKUP_S3_SSE`                      | `AES256`                                      | Server-side encryption: `AES256`, `aws:kms`, or `none`                                |
-| `KINGLET_BACKUP_S3_KMS_KEY_ID`               | —                                             | Required when `KINGLET_BACKUP_S3_SSE=aws:kms`                                         |
-| `KINGLET_BACKUP_PASSPHRASE`                  | —                                             | Optional age passphrase; when set, restores require age-encrypted snapshots           |
-| `KINGLET_BACKUP_MANIFEST_SECRET`             | S3 secret                                     | Stable HMAC key for snapshot manifests; set a dedicated value for credential rotation |
-| `KINGLET_BACKUP_ALLOW_UNSIGNED_MANIFESTS`    | `0`                                           | Legacy compatibility for manifests written before signing; leave off for new setups   |
-| `KINGLET_BACKUP_ALLOW_UNENCRYPTED_SNAPSHOTS` | `0`                                           | Legacy compatibility for unencrypted snapshots while a passphrase is configured       |
-| `KINGLET_BACKUP_MAX_SNAPSHOT_MB`             | `8192`                                        | Absolute restore size cap in MiB; larger snapshots are rejected before download       |
-| `KINGLET_BACKUP_PART_SIZE_MB`                | `8`                                           | Multipart part size in MiB (minimum 5)                                                |
-| `KINGLET_RETENTION_DAYS`                     | `14`                                          | Delete events older than this                                                         |
-| `KINGLET_ALERT_RETENTION_DAYS`               | `90`                                          | Delete alert history older than this                                                  |
-| `KINGLET_MAX_EVENTS_PER_PROJECT`             | `1000000`                                     | Hard cap on retained events per project (`0` = unlimited)                             |
-| `KINGLET_MAX_PROJECT_DB_MB`                  | `1024`                                        | Hard cap on retained event bytes per project (`0` = unlimited)                        |
-| `KINGLET_MAX_DB_MB`                          | `4096`                                        | Hard cap on local database size in MB (`0` = unlimited)                               |
+| Env var                                       | Default                                       | What it does                                                                          |
+| --------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `KINGLET_PORT`                                | `3000`                                        | HTTP port                                                                             |
+| `KINGLET_HOST`                                | _(all interfaces)_                            | Bind address; set `127.0.0.1` for a loopback-only listener                            |
+| `KINGLET_STORAGE`                             | `auto`                                        | `sqlite`, `libsql`, or `auto` (picks by db path scheme)                               |
+| `KINGLET_SEARCH`                              | `substring`                                   | Message search index: `substring` (trigram), `words` (word prefix), or `off`          |
+| `KINGLET_DB_PATH`                             | `data/kinglet.db` (image: `/data/kinglet.db`) | Plain path or `file:` → local SQLite; `libsql://`/`https://`/`wss://` → remote libSQL |
+| `KINGLET_DB_AUTH_TOKEN`                       | —                                             | Auth token for remote libSQL/Turso databases                                          |
+| `KINGLET_ADMIN_EMAIL`                         | `admin@kinglet.local`                         | Bootstrap administrator email (when no administrator exists)                          |
+| `KINGLET_ADMIN_PASSWORD`                      | _(generated)_                                 | Bootstrap administrator password (when no administrator exists)                       |
+| `BETTER_AUTH_SECRET`                          | _(generated, persisted)_                      | Session signing secret; required with a remote database (Turso) or several instances  |
+| `KINGLET_SECRET_KEY`                          | —                                             | Encrypts stored channel secrets; required to add or change notification channels      |
+| `KINGLET_TRUSTED_PROXIES`                     | —                                             | CIDRs allowed to set `X-Forwarded-For`                                                |
+| `KINGLET_ALLOW_PRIVATE_WEBHOOKS`              | —                                             | Allow private/internal webhook targets (SSRF escape hatch)                            |
+| `KINGLET_SMTP_HOST`                           | —                                             | SMTP server for email channels; email channels are off without it                     |
+| `KINGLET_SMTP_FROM`                           | —                                             | Sender for email channels, e.g. `Kinglet <alerts@example.com>` (required with host)   |
+| `KINGLET_SMTP_PORT`                           | `587` (`465` when secure)                     | SMTP port                                                                             |
+| `KINGLET_SMTP_SECURE`                         | on for port 465                               | TLS from the first byte; otherwise STARTTLS when the server offers it                 |
+| `KINGLET_SMTP_USER` / `KINGLET_SMTP_PASSWORD` | —                                             | SMTP login (the password is env-only and never stored)                                |
+| `KINGLET_SMTP_REQUIRE_TLS`                    | on when a user is set                         | Refuse to send without TLS; set `0` for a trusted local relay                         |
+| `KINGLET_MCP_ALLOW_MONITOR_WRITES`            | —                                             | Allow MCP keys to create/update/delete monitors; off by default                       |
+| `KINGLET_SESSION_DAYS`                        | `30`                                          | Web session lifetime                                                                  |
+| `KINGLET_BASE_URL`                            | —                                             | Public URL, used for deep links in alert notifications                                |
+| `KINGLET_TIMEZONE`                            | system TZ                                     | Default timezone for backup and archive schedules                                     |
+| `KINGLET_BACKUP_S3_BUCKET`                    | —                                             | Bucket for snapshots; backups are enabled when this and the next three are set        |
+| `KINGLET_BACKUP_S3_ENDPOINT`                  | —                                             | S3-compatible endpoint (R2/MinIO/B2); HTTPS required except loopback                  |
+| `KINGLET_BACKUP_S3_REGION`                    | `auto`                                        | Region; `auto` for Cloudflare R2                                                      |
+| `KINGLET_BACKUP_S3_ACCESS_KEY_ID`             | —                                             | Least-privilege access key                                                            |
+| `KINGLET_BACKUP_S3_SECRET_ACCESS_KEY`         | —                                             | Secret key (never stored in the database)                                             |
+| `KINGLET_BACKUP_S3_SESSION_TOKEN`             | —                                             | Optional temporary credential token                                                   |
+| `KINGLET_BACKUP_S3_PREFIX`                    | `kinglet`                                     | Object prefix inside the bucket                                                       |
+| `KINGLET_BACKUP_S3_FORCE_PATH_STYLE`          | `false`                                       | `true` for most MinIO setups                                                          |
+| `KINGLET_BACKUP_S3_SSE`                       | `AES256`                                      | Server-side encryption: `AES256`, `aws:kms`, or `none`                                |
+| `KINGLET_BACKUP_S3_KMS_KEY_ID`                | —                                             | Required when `KINGLET_BACKUP_S3_SSE=aws:kms`                                         |
+| `KINGLET_BACKUP_PASSPHRASE`                   | —                                             | Optional age passphrase; when set, restores require age-encrypted snapshots           |
+| `KINGLET_BACKUP_MANIFEST_SECRET`              | S3 secret                                     | Stable HMAC key for snapshot manifests; set a dedicated value for credential rotation |
+| `KINGLET_BACKUP_ALLOW_UNSIGNED_MANIFESTS`     | `0`                                           | Legacy compatibility for manifests written before signing; leave off for new setups   |
+| `KINGLET_BACKUP_ALLOW_UNENCRYPTED_SNAPSHOTS`  | `0`                                           | Legacy compatibility for unencrypted snapshots while a passphrase is configured       |
+| `KINGLET_BACKUP_MAX_SNAPSHOT_MB`              | `8192`                                        | Absolute restore size cap in MiB; larger snapshots are rejected before download       |
+| `KINGLET_BACKUP_PART_SIZE_MB`                 | `8`                                           | Multipart part size in MiB (minimum 5)                                                |
+| `KINGLET_RETENTION_DAYS`                      | `14`                                          | Delete events older than this                                                         |
+| `KINGLET_ALERT_RETENTION_DAYS`                | `90`                                          | Delete alert history older than this                                                  |
+| `KINGLET_MAX_EVENTS_PER_PROJECT`              | `1000000`                                     | Hard cap on retained events per project (`0` = unlimited)                             |
+| `KINGLET_MAX_PROJECT_DB_MB`                   | `1024`                                        | Hard cap on retained event bytes per project (`0` = unlimited)                        |
+| `KINGLET_MAX_DB_MB`                           | `4096`                                        | Hard cap on local database size in MB (`0` = unlimited)                               |
 
 On first boot, or if the database has no administrator, Kinglet creates one from
 `KINGLET_ADMIN_EMAIL` / `KINGLET_ADMIN_PASSWORD`. If no password is set, one is

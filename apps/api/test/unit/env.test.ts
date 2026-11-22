@@ -54,3 +54,34 @@ describe("KINGLET_HOST", () => {
     expect(loadConfig().host).toBe("127.0.0.1");
   });
 });
+
+describe("BETTER_AUTH_SECRET with a remote database", () => {
+  let dbPath: string | undefined;
+
+  beforeEach(() => {
+    dbPath = process.env.KINGLET_DB_PATH;
+    process.env.KINGLET_DB_PATH = "libsql://kinglet-test.turso.io";
+  });
+
+  afterEach(() => {
+    if (dbPath === undefined) delete process.env.KINGLET_DB_PATH;
+    else process.env.KINGLET_DB_PATH = dbPath;
+  });
+
+  it("stops boot instead of generating a secret that can't be kept", () => {
+    delete process.env.BETTER_AUTH_SECRET;
+
+    expect(() => loadConfig()).toThrow(/BETTER_AUTH_SECRET is required with a remote database/);
+  });
+
+  it("uses an explicit secret", () => {
+    expect(loadConfig().authSecret).toBe("kinglet-env-test-secret-0123456789abcdef");
+  });
+
+  it("accepts the older KINGLET_AUTH_SECRET name", () => {
+    delete process.env.BETTER_AUTH_SECRET;
+    process.env.KINGLET_AUTH_SECRET = "kinglet-env-test-legacy-secret-0123456789";
+
+    expect(loadConfig().authSecret).toBe("kinglet-env-test-legacy-secret-0123456789");
+  });
+});
