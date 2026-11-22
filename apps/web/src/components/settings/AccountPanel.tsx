@@ -12,6 +12,7 @@ import SettingsRow from "../SettingsRow";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -64,7 +65,7 @@ export default function AccountPanel() {
         <CardContent>
           <SettingsRow
             label="password"
-            description="Changing it signs out your other sessions. You need the current one."
+            description="Changing it signs out your other sessions and, unless you opt out, revokes the keys you created. You need the current one."
           >
             <Button variant="outline" size="sm" onClick={() => setPasswordOpen(true)}>
               <KeyRoundIcon data-icon="inline-start" />
@@ -88,6 +89,7 @@ function PasswordForm({ onDone }: { onDone: () => void }) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [revokeKeys, setRevokeKeys] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const nextProblem = passwordProblem(next);
@@ -110,8 +112,8 @@ function PasswordForm({ onDone }: { onDone: () => void }) {
     setSaving(true);
 
     try {
-      await changePassword(current, next);
-      toast.success("Password updated");
+      await changePassword(current, next, revokeKeys);
+      toast.success(revokeKeys ? "Password updated and your keys revoked" : "Password updated");
       onDone();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -163,6 +165,24 @@ function PasswordForm({ onDone }: { onDone: () => void }) {
             <p className="font-mono text-[10px] text-coral">passwords don&apos;t match</p>
           )}
         </Field>
+        <label
+          className="flex items-start justify-between gap-3 rounded-[5px] border border-white/[0.06] p-3"
+          htmlFor="revoke-keys"
+        >
+          <span className="flex flex-col gap-0.5">
+            <span className="font-mono text-xs text-mist">also revoke my keys</span>
+            <span className="font-mono text-[10px] text-mist-faint">
+              Deletes the API and MCP keys you created, in every project. Keep this on if your
+              account may have been used by someone else; apps using those keys stop sending.
+            </span>
+          </span>
+          <Checkbox
+            id="revoke-keys"
+            aria-label="also revoke my keys"
+            checked={revokeKeys}
+            onCheckedChange={(checked) => setRevokeKeys(checked === true)}
+          />
+        </label>
         <ErrorAlert error={error} />
       </FieldGroup>
       <DialogFooter className="mt-4">

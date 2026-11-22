@@ -445,13 +445,13 @@ the database, manifests, logs, or API responses.
 | `KINGLET_BACKUP_PASSPHRASE`                   | —                                             | Optional age passphrase; when set, restores require age-encrypted snapshots           |
 | `KINGLET_BACKUP_MANIFEST_SECRET`              | S3 secret                                     | Stable HMAC key for snapshot manifests; set a dedicated value for credential rotation |
 | `KINGLET_BACKUP_ALLOW_UNSIGNED_MANIFESTS`     | `0`                                           | Legacy compatibility for manifests written before signing; leave off for new setups   |
-| `KINGLET_BACKUP_ALLOW_UNENCRYPTED_SNAPSHOTS`  | `0`                                           | Legacy compatibility for unencrypted snapshots while a passphrase is configured       |
+| `KINGLET_BACKUP_ALLOW_UNENCRYPTED_SNAPSHOTS`  | `0`                                           | Legacy: unencrypted snapshots and archive parts while a passphrase is configured      |
 | `KINGLET_BACKUP_MAX_SNAPSHOT_MB`              | `8192`                                        | Absolute restore size cap in MiB; larger snapshots are rejected before download       |
 | `KINGLET_BACKUP_PART_SIZE_MB`                 | `8`                                           | Multipart part size in MiB (minimum 5)                                                |
 | `KINGLET_RETENTION_DAYS`                      | `14`                                          | Delete events older than this                                                         |
 | `KINGLET_ALERT_RETENTION_DAYS`                | `90`                                          | Delete alert history older than this                                                  |
 | `KINGLET_MAX_EVENTS_PER_PROJECT`              | `1000000`                                     | Hard cap on retained events per project (`0` = unlimited)                             |
-| `KINGLET_MAX_PROJECT_DB_MB`                   | `1024`                                        | Hard cap on retained event bytes per project (`0` = unlimited)                        |
+| `KINGLET_MAX_PROJECT_DB_MB`                   | `1024`                                        | Cap on a project's on-disk event size, indexes included (`0` = unlimited)             |
 | `KINGLET_MAX_DB_MB`                           | `4096`                                        | Hard cap on local database size in MB (`0` = unlimited)                               |
 
 On first boot, or if the database has no administrator, Kinglet creates one from

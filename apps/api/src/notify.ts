@@ -229,7 +229,8 @@ export function isPrivateAddress(address: string): boolean {
   if (family !== 6) return false;
   const groups = ipv6Groups(normalized);
 
-  if (!groups) return false;
+  // isIP accepted it, so this only fails on a form we do not parse: refuse it.
+  if (!groups) return true;
   const g0 = groups[0] ?? 0;
   const g1 = groups[1] ?? 0;
   const g2 = groups[2] ?? 0;
@@ -239,44 +240,6 @@ export function isPrivateAddress(address: string): boolean {
   const g6 = groups[6] ?? 0;
   const g7 = groups[7] ?? 0;
 
-  // :: and ::1
-  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0 && g6 === 0 && g7 <= 1) {
-    return true;
-  }
-
-  // fc00::/7 — unique local
-  if ((g0 & 0xfe00) === 0xfc00) return true;
-
-  // fe80::/10 — link local
-  if ((g0 & 0xffc0) === 0xfe80) return true;
-
-  // fec0::/10 — deprecated site local
-  if ((g0 & 0xffc0) === 0xfec0) return true;
-
-  // ff00::/8 — multicast
-  if ((g0 & 0xff00) === 0xff00) return true;
-
-  // 2001:db8::/32 — documentation
-  if (g0 === 0x2001 && g1 === 0x0db8) return true;
-
-  // 2002::/16 — 6to4
-  if (g0 === 0x2002) return true;
-
-  // 64:ff9b::/96 — well-known NAT64 prefix
-  if (g0 === 0x0064 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) return true;
-
-  // 64:ff9b:1::/48 — local-use NAT64 prefix (RFC 8215). The /48 can embed
-  // private IPv4 addresses in several RFC 6052 formats, so reject the whole
-  // prefix rather than trying to classify the embedded address.
-  if (g0 === 0x0064 && g1 === 0xff9b && g2 === 0x0001) return true;
-
-  // 100::/64 — discard-only
-  if (g0 === 0x0100 && g1 === 0 && g2 === 0 && g3 === 0) return true;
-
-  // 2001:0000::/32 — Teredo; 2001:2::/48 — benchmarking; 2001:10::/28 and 2001:20::/28 — ORCHID
-  if (g0 === 0x2001 && (g1 === 0x0000 || g1 === 0x0002 || g1 === 0x0010 || g1 === 0x0020))
-    return true;
-
   // ::ffff:0:0/96 — IPv4-mapped, recurse into the IPv4 classifier
   if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff) {
     const v4 = `${g6 >> 8}.${g6 & 0xff}.${g7 >> 8}.${g7 & 0xff}`;
@@ -284,18 +247,26 @@ export function isPrivateAddress(address: string): boolean {
     return ipv4Private(v4);
   }
 
-  // ::/96 IPv4-compatible (deprecated)
-  if (
-    g0 === 0 &&
-    g1 === 0 &&
-    g2 === 0 &&
-    g3 === 0 &&
-    g4 === 0 &&
-    g5 === 0 &&
-    (g6 !== 0 || g7 !== 0)
-  ) {
-    return true;
-  }
+  // Only global unicast (2000::/3) is public. Everything else is refused
+  // rather than listed: ::/128, ::1, IPv4-compatible ::/96 and the
+  // IPv4-translated ::ffff:0:0:0/96, NAT64 (64:ff9b::/96, 64:ff9b:1::/48),
+  // discard-only 100::/64, SRv6 SIDs 5f00::/16, unique local fc00::/7, link
+  // local fe80::/10, site local fec0::/10, multicast ff00::/8, and any range
+  // assigned later outside 2000::/3.
+  if ((g0 & 0xe000) !== 0x2000) return true;
+
+  // Special-purpose blocks inside 2000::/3:
+  // 2001::/23 — IETF protocol assignments (Teredo, benchmarking, ORCHID, …)
+  if (g0 === 0x2001 && g1 < 0x0200) return true;
+
+  // 2001:db8::/32 — documentation
+  if (g0 === 0x2001 && g1 === 0x0db8) return true;
+
+  // 2002::/16 — 6to4
+  if (g0 === 0x2002) return true;
+
+  // 3fff::/20 — documentation (RFC 9637)
+  if (g0 === 0x3fff && (g1 & 0xf000) === 0) return true;
 
   return false;
 }
@@ -789,6 +760,19 @@ function codeBlock(text: string): string {
 }
 
 /**
+ * Slack parses <!here>, <@user>, and <url|label> sequences even inside a code
+ * fence, so event text there must have &, <, and > escaped as Slack requires.
+ */
+function slackCodeBlock(text: string): string {
+  const cleaned = truncate(text.replace(/```/g, "'''"), 900)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  return `\`\`\`\n${cleaned}\n\`\`\``;
+}
+
+/**
  * Event text is untrusted. Flatten line breaks and neutralize chat markup and
  * mention syntax before it reaches Discord, Slack, or a line-oriented webhook.
  */
@@ -906,7 +890,7 @@ export function slackPayload(n: AlertNotice): SlackPayload {
 
   if (n.summary) textParts.push(sanitizeNotificationText(n.summary, 1000));
 
-  if (n.sampleMessage) textParts.push(codeBlock(n.sampleMessage));
+  if (n.sampleMessage) textParts.push(slackCodeBlock(n.sampleMessage));
 
   return {
     text: `${meta.emoji} Kinglet · ${meta.title.toLowerCase()}`,

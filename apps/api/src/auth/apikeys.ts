@@ -37,6 +37,8 @@ export interface VerifiedKey {
   name: string;
   keyType: KeyType;
   scopes: Set<AnyKeyScope>;
+  /** The user who minted the key; null for keys with no recorded owner. */
+  createdBy: string | null;
 }
 
 /** Parses stored scopes; anything invalid for the key type fails closed. */
@@ -326,6 +328,7 @@ export async function verifyApiKey(
     name: row.name,
     keyType,
     scopes: new Set(parseScopes(row.scopes, keyType)),
+    createdBy: row.createdBy ?? null,
   };
 }
 

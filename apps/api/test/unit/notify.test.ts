@@ -121,7 +121,27 @@ describe("isPrivateAddress", () => {
     expect(isPrivateAddress("64:ff9b::8.8.8.8")).toBe(true);
     expect(isPrivateAddress("64:ff9b:1::1")).toBe(true);
     expect(isPrivateAddress("64:ff9b:1:2::1")).toBe(true);
-    expect(isPrivateAddress("64:ff9c::1")).toBe(false);
+  });
+
+  it("refuses everything outside global unicast 2000::/3", () => {
+    // Unassigned space next to NAT64, the IPv4-translated form, SRv6 SIDs.
+    expect(isPrivateAddress("64:ff9c::1")).toBe(true);
+    expect(isPrivateAddress("::ffff:0:a9fe:a9fe")).toBe(true);
+    expect(isPrivateAddress("::ffff:0:7f00:1")).toBe(true);
+    expect(isPrivateAddress("5f00::1")).toBe(true);
+    expect(isPrivateAddress("4000::1")).toBe(true);
+  });
+
+  it("refuses special-purpose blocks inside 2000::/3", () => {
+    expect(isPrivateAddress("3fff::1")).toBe(true);
+    expect(isPrivateAddress("3fff:fff::1")).toBe(true);
+    // The whole ORCHID /28s, not only their first /32.
+    expect(isPrivateAddress("2001:11::1")).toBe(true);
+    expect(isPrivateAddress("2001:1f::1")).toBe(true);
+    expect(isPrivateAddress("2001:2f::1")).toBe(true);
+    expect(isPrivateAddress("2001:1ff::1")).toBe(true);
+    expect(isPrivateAddress("3fff:1000::1")).toBe(false);
+    expect(isPrivateAddress("2001:200::1")).toBe(false);
   });
 
   it("accepts public IPv6 addresses and non-IP input", () => {
@@ -386,6 +406,21 @@ describe("slackPayload", () => {
 
     expect(attachment.text.startsWith("5 errors in 10 minutes\n```\n")).toBe(true);
     expect(attachment.text).toContain("stack line\nsecond");
+  });
+
+  it("escapes Slack control sequences in the sample code block", () => {
+    const attachment = firstAttachment(
+      slackPayload(
+        makeNotice({
+          sampleMessage: "<!here> <https://lure.example.test/x|Open in Kinglet> <@U0FAKE01> & done",
+        }),
+      ),
+    );
+
+    expect(attachment.text).toContain(
+      "&lt;!here&gt; &lt;https://lure.example.test/x|Open in Kinglet&gt; &lt;@U0FAKE01&gt; &amp; done",
+    );
+    expect(attachment.text).not.toContain("<!here>");
   });
 
   it("truncates long field values", () => {

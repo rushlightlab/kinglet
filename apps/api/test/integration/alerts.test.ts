@@ -291,6 +291,25 @@ describe("alert list projection", () => {
     expect(alert.monitorName).toBe("alert-source");
     expect(stringAt(alert.monitorId, "monitorId")).toBe(ctx().monitorId);
   });
+
+  it("does not let an MCP key without logs.read search the hidden summary", async () => {
+    const { session, noLogsKey } = ctx();
+
+    const search = async (bearer: string | undefined, q: string): Promise<number> => {
+      const auth = bearer === undefined ? { cookies: session.adminJar } : { bearer };
+      const response = await request(session.harness.app, alertsPath({ q }), auth);
+
+      expect(response.status).toBe(200);
+
+      return Number((await jsonBody(response)).total);
+    };
+
+    // The summary holds log-derived text; the total must not reveal a match.
+    expect(await search(noLogsKey.plaintext, "4 events in 5m")).toBe(0);
+    // Monitor names stay searchable, and readers of logs still search summaries.
+    expect(await search(noLogsKey.plaintext, "alert-source")).toBeGreaterThan(0);
+    expect(await search(undefined, "4 events in 5m")).toBeGreaterThan(0);
+  });
 });
 
 describe("alert filters", () => {

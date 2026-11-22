@@ -22,6 +22,8 @@ export type AuthInfo =
       projectId: string;
       keyType: KeyType;
       scopes: Set<AnyKeyScope>;
+      /** The user who minted the key, so per-user limits cover their keys too. */
+      createdBy: string | null;
     };
 
 export interface AuthUser {
@@ -33,7 +35,8 @@ export interface AuthUser {
   updatedAt: number;
 }
 
-export type AppEnv = { Variables: { auth: AuthInfo } };
+/** `ingestProjectId` is set by the ingest admission middleware for its handler. */
+export type AppEnv = { Variables: { auth: AuthInfo; ingestProjectId: string } };
 
 interface SessionRequest {
   headers: Headers;
@@ -73,6 +76,7 @@ async function resolveAuth(
       projectId: key.projectId,
       keyType: key.keyType,
       scopes: key.scopes,
+      createdBy: key.createdBy,
     };
   }
 

@@ -9,6 +9,7 @@ import { pipeline } from "node:stream/promises";
 import { createZstdCompress } from "node:zlib";
 import { isUuid, uuidv7 } from "../auth/ids.ts";
 import { BackupStore, describeBackupError } from "../backups/s3.ts";
+import type { BackupObjectStore } from "../backups/s3.ts";
 import type { Config } from "../env.ts";
 import { isFiniteNumber } from "../json.ts";
 import { createCronScheduler, validateCron } from "../schedule.ts";
@@ -83,6 +84,13 @@ export interface ArchiveEngine {
   listParts(query?: ArchivePartsQuery): Promise<ArchivePart[]>;
   importEvents(input: ArchiveImportRequest): Promise<ArchiveImportResult>;
   run(projectId?: string): Promise<ArchiveRunHandle>;
+  /**
+   * Hold off archiving for a project while it is cleared or deleted. Waits for
+   * a part already being exported, and until the returned release is called no
+   * part is uploaded or recorded for the project, so nothing the caller is
+   * removing can reappear in the bucket.
+   */
+  fenceProject(projectId: string): Promise<() => void>;
   stop(): void;
 }
 
@@ -126,20 +134,29 @@ interface Digester {
   finish: () => number;
 }
 
-export function startArchiveEngine(options: { storage: Storage; config: Config }): ArchiveEngine {
-  return createEngine(options.storage, options.config);
+export function startArchiveEngine(options: {
+  storage: Storage;
+  config: Config;
+  /** Test seam: an object store to use instead of the configured S3 bucket. */
+  store?: BackupObjectStore;
+}): ArchiveEngine {
+  return createEngine(options.storage, options.config, options.store);
 }
 
-function createEngine(storage: Storage, config: Config): ArchiveEngine {
+function createEngine(
+  storage: Storage,
+  config: Config,
+  injectedStore?: BackupObjectStore,
+): ArchiveEngine {
   const configured = config.backup !== null;
   // Archive only reads events and writes local temp files; it works on both
   // local SQLite and hosted libSQL. Kept as a field for UI parity and future
   // driver-specific restrictions.
   const supported = true;
-  let store: BackupStore | null = null;
+  let store: BackupObjectStore | null = injectedStore ?? null;
   let storeProblem: string | null = null;
 
-  if (config.backup !== null) {
+  if (config.backup !== null && store === null) {
     try {
       store = new BackupStore(config.backup);
     } catch (cause) {
@@ -160,10 +177,15 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
     stopped: false,
   };
 
+  /** Projects being cleared or deleted (count of holders). */
+  const fences = new Map<string, number>();
+  /** The part export in progress per project, for fenceProject to wait on. */
+  const exporting = new Map<string, Promise<"done" | "fenced">>();
+
   let schedulerGeneration = 0;
   let partCounter = 0;
 
-  function requireStore(): BackupStore {
+  function requireStore(): BackupObjectStore {
     if (!configured) throw new ArchiveError("S3 archive storage is not configured", 409);
 
     if (store === null) {
@@ -289,8 +311,31 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
       to: input.to,
       dataDir: config.dataDir,
       passphrase: config.backup?.passphrase,
+      allowUnencrypted: config.backup?.allowUnencryptedSnapshots ?? false,
       s3: activeStore,
     });
+  }
+
+  async function fenceProject(projectId: string): Promise<() => void> {
+    const id = projectId.toLowerCase();
+
+    fences.set(id, (fences.get(id) ?? 0) + 1);
+
+    const pending = exporting.get(id);
+
+    if (pending) await pending.catch(() => undefined);
+
+    let released = false;
+
+    return () => {
+      if (released) return;
+      released = true;
+
+      const remaining = (fences.get(id) ?? 1) - 1;
+
+      if (remaining <= 0) fences.delete(id);
+      else fences.set(id, remaining);
+    };
   }
 
   async function run(projectId?: string): Promise<ArchiveRunHandle> {
@@ -358,7 +403,7 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
     runId: string;
     targets: readonly string[];
     settings: ArchiveSettings;
-    activeStore: BackupStore;
+    activeStore: BackupObjectStore;
   }): Promise<void> {
     const startedAt = Date.now();
     const deadline = startedAt + TIME_BUDGET_MS;
@@ -424,7 +469,7 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
     projectId: string;
     cutoff: number;
     deadline: number;
-    activeStore: BackupStore;
+    activeStore: BackupObjectStore;
     passphrase: string | undefined;
     pending: PendingBatch;
   }): Promise<void> {
@@ -440,9 +485,11 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
       for (const group of groups) {
         if (state.stopped || Date.now() >= input.deadline) return;
 
+        if (fences.has(input.projectId)) return;
+
         input.pending.ids = group.rows.map((row) => row.id);
 
-        await exportGroup({
+        const work = exportGroup({
           runId: input.runId,
           store: input.activeStore,
           projectId: input.projectId,
@@ -452,7 +499,19 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
           partIndex: partCounter++,
         });
 
+        exporting.set(input.projectId, work);
+
+        let outcome: "done" | "fenced";
+
+        try {
+          outcome = await work;
+        } finally {
+          if (exporting.get(input.projectId) === work) exporting.delete(input.projectId);
+        }
+
         input.pending.ids = [];
+
+        if (outcome === "fenced") return;
       }
     }
   }
@@ -499,13 +558,13 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
 
   async function exportGroup(input: {
     runId: string;
-    store: BackupStore;
+    store: BackupObjectStore;
     projectId: string;
     date: string;
     rows: readonly ArchiveEventRow[];
     passphrase: string | undefined;
     partIndex: number;
-  }): Promise<void> {
+  }): Promise<"done" | "fenced"> {
     const first = input.rows[0];
     const last = input.rows[input.rows.length - 1];
 
@@ -564,6 +623,9 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
         encryption,
       });
 
+      // The project is being cleared or deleted: these rows are going away.
+      if (fences.has(input.projectId)) return "fenced";
+
       reportProgress(input.runId, input.projectId, "upload", 0, finalBytes);
 
       await input.store.uploadFile({
@@ -587,6 +649,14 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
         throw new ArchiveError("uploaded archive object checksum did not match", 502);
       }
 
+      // A clear or delete started during the upload: remove the object rather
+      // than record a part of rows the caller is removing.
+      if (fences.has(input.projectId)) {
+        await input.store.deleteObject(objectKey);
+
+        return "fenced";
+      }
+
       await recordPart({
         projectId: input.projectId,
         date: input.date,
@@ -608,6 +678,8 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
         type: "archive.succeeded",
         data: { projectId: input.projectId, events: input.rows.length, bytes: finalBytes },
       });
+
+      return "done";
     } finally {
       await cleanupTempFiles(paths);
     }
@@ -821,6 +893,7 @@ function createEngine(storage: Storage, config: Config): ArchiveEngine {
     listParts,
     importEvents,
     run,
+    fenceProject,
     stop,
   };
 }

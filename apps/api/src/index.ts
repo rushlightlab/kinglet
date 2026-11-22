@@ -127,8 +127,18 @@ async function main(): Promise<void> {
     },
   });
 
-  const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, () =>
-    printBanner(config, storage, bootstrap),
+  const server = serve(
+    {
+      fetch: app.fetch,
+      port: config.port,
+      hostname: config.host,
+      // Node's 300 s default would let a slow upload hold its buffered body
+      // for five minutes; 60 s still allows an 8 MiB batch at ~140 KB/s.
+      // Live tail is unaffected: these limits cover receiving the request,
+      // not how long the response streams.
+      serverOptions: { requestTimeout: 60_000, headersTimeout: 20_000 },
+    },
+    () => printBanner(config, storage, bootstrap),
   );
 
   server.on("error", (err: NodeJS.ErrnoException) => {
