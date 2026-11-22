@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ArrowUpRightIcon } from "lucide-react";
 import { login } from "../api";
-import Crown from "./Crown";
+import Logo from "./Logo";
 import ErrorAlert from "./ErrorAlert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -53,7 +53,7 @@ export default function Login({
           </span>
         </div>
         <div className="px-6 py-7">
-          <Crown className="size-9 text-gold" />
+          <Logo className="size-9 text-gold" />
           <h1 className="font-display mt-3 text-xl font-bold tracking-wide text-mist">KINGLET</h1>
           <p className="mt-1 font-mono text-xs text-mist-dim">small. light. king.</p>
 

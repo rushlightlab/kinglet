@@ -2,7 +2,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { ChevronDownIcon, LogOutIcon, SettingsIcon } from "lucide-react";
 import { useApp } from "../app-context";
-import Crown from "./Crown";
+import Logo from "./Logo";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,7 +37,7 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
         className="group flex items-center gap-2.5"
         aria-label="Kinglet home"
       >
-        <Crown className="size-5 text-gold transition-colors group-hover:text-gold-bright" />
+        <Logo className="size-5 text-gold transition-colors group-hover:text-gold-bright" />
         <span className="font-display text-[15px] font-bold tracking-[0.1em] text-mist">
           KINGLET
         </span>
