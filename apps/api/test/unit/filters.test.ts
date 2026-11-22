@@ -11,7 +11,29 @@ function emptyFilters(): ParsedFilters {
     apiKeyId: null,
     includes: [],
     excludes: [],
+    fields: [],
+    textScope: "message",
   };
+}
+
+const FIELDS_ROW = {
+  level: 2,
+  service: "udp",
+  env: "production",
+  message: "RUPTELA 864351050000101 · 3 records saved",
+  apiKeyId: null,
+  fields: JSON.stringify({
+    imei: "864351050000101",
+    savedCount: 3,
+    durationMs: 1450,
+    ack: true,
+    reason: null,
+    data: { rss: 251, protocol: "RUPTELA" },
+  }),
+};
+
+function matches(q: string, row: Parameters<typeof matchesEvent>[1] = FIELDS_ROW): boolean {
+  return matchesEvent(parseFilters(q), row);
 }
 
 const SAMPLE_ROW = {
@@ -117,6 +139,96 @@ describe("parseFilters", () => {
 
     expect(filters.includes).toEqual(["foo", "baz qux"]);
     expect(filters.excludes).toEqual(["bar"]);
+  });
+
+  it("parses field equality, comparisons, existence, and negation", () => {
+    expect(
+      parseFilters("field.imei:8643 field.status>=500 field.error:* -field.reason:dup").fields,
+    ).toEqual([
+      { path: ["imei"], op: "=", value: "8643", numeric: null, negative: false },
+      { path: ["status"], op: ">=", value: "500", numeric: 500, negative: false },
+      { path: ["error"], op: "exists", value: "", numeric: null, negative: false },
+      { path: ["reason"], op: "=", value: "dup", numeric: null, negative: true },
+    ]);
+  });
+
+  it("keeps the case of field keys but lowercases compared values", () => {
+    const [filter] = parseFilters("field.savedCount:ABC").fields;
+
+    expect(filter).toMatchObject({ path: ["savedCount"], value: "abc" });
+  });
+
+  it("reads nested keys and quoted values", () => {
+    expect(parseFilters('field.data.rss>250 field.reason:"already saved"').fields).toEqual([
+      { path: ["data", "rss"], op: ">", value: "250", numeric: 250, negative: false },
+      { path: ["reason"], op: "=", value: "already saved", numeric: null, negative: false },
+    ]);
+  });
+
+  it("accepts fields. as an alias for field.", () => {
+    expect(parseFilters("fields.imei:1").fields).toHaveLength(1);
+  });
+
+  it("treats malformed field tokens as free text", () => {
+    const filters = parseFilters("field.status>abc field.imei: field.a.b.c.d.e:1 field.a$b:1");
+
+    expect(filters.fields).toEqual([]);
+    expect(filters.includes).toHaveLength(4);
+  });
+
+  it("sets the free-text scope, last token winning", () => {
+    expect(parseFilters("timeout").textScope).toBe("message");
+    expect(parseFilters("in:fields timeout").textScope).toBe("fields");
+    expect(parseFilters("IN:ALL in:message").textScope).toBe("message");
+    expect(parseFilters("in:all").includes).toEqual([]);
+  });
+});
+
+describe("matchesEvent field filters", () => {
+  it("compares strings, numbers, and booleans by their text", () => {
+    expect(matches("field.imei:864351050000101")).toBe(true);
+    expect(matches("field.savedCount:3")).toBe(true);
+    expect(matches("field.ack:true")).toBe(true);
+    expect(matches("field.reason:null")).toBe(true);
+    expect(matches("field.imei:999")).toBe(false);
+  });
+
+  it("applies numeric comparisons only to numbers", () => {
+    expect(matches("field.durationMs>1000")).toBe(true);
+    expect(matches("field.durationMs<=1000")).toBe(false);
+    expect(matches("field.imei>1")).toBe(false);
+  });
+
+  it("follows nested keys", () => {
+    expect(matches("field.data.rss>=251")).toBe(true);
+    expect(matches("field.data.protocol:ruptela")).toBe(true);
+    expect(matches("field.data.missing:*")).toBe(false);
+  });
+
+  it("checks existence and keeps rows without the field for a negated filter", () => {
+    expect(matches("field.ack:*")).toBe(true);
+    expect(matches("field.error:*")).toBe(false);
+    expect(matches("-field.error:boom")).toBe(true);
+    expect(matches("-field.imei:864351050000101")).toBe(false);
+  });
+
+  it("never matches a field filter on an event without fields", () => {
+    expect(matches("field.imei:*", { ...FIELDS_ROW, fields: null })).toBe(false);
+    expect(matches("-field.imei:*", { ...FIELDS_ROW, fields: null })).toBe(true);
+  });
+
+  it("does not read inherited object properties", () => {
+    expect(matches("field.constructor:*")).toBe(false);
+    expect(matches("field.data.toString:*")).toBe(false);
+  });
+
+  it("searches the chosen text scope", () => {
+    expect(matches("in:message ruptela")).toBe(true);
+    expect(matches("in:message savedcount")).toBe(false);
+    expect(matches("in:fields savedcount")).toBe(true);
+    expect(matches("in:fields records")).toBe(false);
+    expect(matches("in:all records savedcount")).toBe(true);
+    expect(matches("in:all -savedcount")).toBe(false);
   });
 });
 

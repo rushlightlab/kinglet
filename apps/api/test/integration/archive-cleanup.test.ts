@@ -211,4 +211,25 @@ describe("archive cleanup route wiring", () => {
 
     for (const key of projectKeys) expect(active.hasObject(key)).toBe(true);
   });
+
+  it("leaves archived objects alone for an all-time query clear", async () => {
+    const { session: test, store: active } = current();
+    const project = await newProject("clear-query");
+    const projectKeys = seedArchivedObjects(project.id);
+
+    expect(await seedEvent(project.id, "query clear")).toBe(1);
+    cleanupCalls = [];
+
+    const response = await request(
+      test.harness.app,
+      `/v1/events?project=${project.id}&q=${encodeURIComponent('"query clear"')}`,
+      { method: "DELETE", cookies: test.adminJar },
+    );
+
+    expect(response.status).toBe(200);
+    expect((await jsonBody(response)).deleted).toBe(1);
+    expect(cleanupCalls).toEqual([]);
+
+    for (const key of projectKeys) expect(active.hasObject(key)).toBe(true);
+  });
 });

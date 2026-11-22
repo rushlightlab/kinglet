@@ -10,6 +10,7 @@ import type {
   BackupSnapshot,
   BackupStatus,
   ChannelTestResult,
+  ClearPreview,
   EventPage,
   Histogram,
   KeyType,
@@ -23,6 +24,7 @@ import type {
   ProjectMember,
   Service,
 } from "./types";
+import type { Vocabulary } from "./query";
 import { createAuthClient } from "better-auth/react";
 
 export class UnauthorizedError extends Error {}
@@ -280,20 +282,42 @@ export function fetchEvents(opts: {
 }
 
 /** Deletes events in the project, optionally within an epoch-ms range. */
-export function clearProjectLogs(
-  projectId: string,
-  range?: { from: number; to: number },
-): Promise<{ deleted: number; projectId: string; from?: number; to?: number }> {
+/** What to clear: an optional time range and an optional Trill query. */
+export interface ClearSelection {
+  range?: { from: number; to: number };
+  q?: string;
+}
+
+function clearParams(projectId: string, selection: ClearSelection): URLSearchParams {
   const params = new URLSearchParams({ project: String(projectId) });
 
-  if (range) {
-    params.set("from", String(range.from));
-    params.set("to", String(range.to));
+  if (selection.range) {
+    params.set("from", String(selection.range.from));
+    params.set("to", String(selection.range.to));
   }
 
-  return api<{ deleted: number; projectId: string; from?: number; to?: number }>(
-    `/v1/events?${params.toString()}`,
+  if (selection.q?.trim()) params.set("q", selection.q.trim());
+
+  return params;
+}
+
+export function clearProjectLogs(
+  projectId: string,
+  selection: ClearSelection = {},
+): Promise<{ deleted: number; projectId: string; from?: number; to?: number; q?: string }> {
+  return api<{ deleted: number; projectId: string; from?: number; to?: number; q?: string }>(
+    `/v1/events?${clearParams(projectId, selection).toString()}`,
     { method: "DELETE" },
+  );
+}
+
+/** Count, per-service breakdown, and newest examples of what a clear would delete. */
+export function fetchClearPreview(
+  projectId: string,
+  selection: ClearSelection = {},
+): Promise<ClearPreview> {
+  return api<ClearPreview>(
+    `/v1/events/clear/preview?${clearParams(projectId, selection).toString()}`,
   );
 }
 
@@ -302,12 +326,20 @@ export function fetchHistogram(opts: {
   from: number;
   to: number;
   buckets?: number;
+  q?: string;
 }): Promise<Histogram> {
   const params = new URLSearchParams({ from: String(opts.from), to: String(opts.to) });
 
   if (opts.buckets) params.set("buckets", String(opts.buckets));
 
+  if (opts.q?.trim()) params.set("q", opts.q);
+
   return api<Histogram>(withProject(`/v1/histogram?${params.toString()}`, opts.projectId));
+}
+
+/** Field keys, types, and common values from recent events, for query autocomplete. */
+export function fetchFieldVocabulary(projectId: string): Promise<Vocabulary> {
+  return api<Vocabulary>(withProject("/v1/fields", projectId));
 }
 
 export function fetchServices(projectId: string): Promise<{ services: Service[] }> {

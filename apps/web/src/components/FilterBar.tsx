@@ -1,9 +1,12 @@
 import { useState } from "react";
 import type { RefObject } from "react";
-import { LinkIcon, RefreshCwIcon, StarIcon } from "lucide-react";
+import { LinkIcon, RefreshCwIcon, StarIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isJsonObject, isString } from "../json";
+import { TEXT_SCOPES, textScopeOf, withTextScope } from "../query";
+import type { Vocabulary } from "../query";
+import QueryInput from "./QueryInput";
 import { LEVEL_COLORS, LEVEL_NAMES } from "../types";
 
 const SAVED_KEY = "kinglet.saved";
@@ -50,6 +53,8 @@ interface FilterBarProps {
   busy: boolean;
   error: string | null;
   inputRef: RefObject<HTMLInputElement | null>;
+  /** Field keys, services, and envs from recent events, for autocomplete. */
+  vocabulary: Vocabulary;
 }
 
 export default function FilterBar(props: FilterBarProps) {
@@ -88,6 +93,13 @@ export default function FilterBar(props: FilterBarProps) {
     });
   };
 
+  const scope = textScopeOf(props.appliedQ);
+
+  const clearSearch = (): void => {
+    props.onApplyQuery("");
+    props.inputRef.current?.focus();
+  };
+
   const copyLink = (): void => {
     props.onCopyLink();
     setCopied(true);
@@ -100,17 +112,26 @@ export default function FilterBar(props: FilterBarProps) {
         <span aria-hidden="true" className="text-gold">
           ⌕
         </span>
-        <input
-          ref={props.inputRef}
+        <QueryInput
+          inputRef={props.inputRef}
           value={props.value}
-          onChange={(e) => props.onChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") props.onEnter();
-          }}
-          spellCheck={false}
-          placeholder="level:error service:api"
-          className="min-w-0 flex-1 bg-transparent font-mono text-xs text-mist outline-none placeholder:text-mist-faint"
+          onChange={props.onChange}
+          onEnter={props.onEnter}
+          onClear={clearSearch}
+          vocabulary={props.vocabulary}
+          placeholder="level:error service:api field.status>=500"
+          className="w-full bg-transparent font-mono text-xs text-mist outline-none placeholder:text-mist-faint"
         />
+        {props.value !== "" && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="chip" size="icon-xs" onClick={clearSearch} aria-label="Clear search">
+                <XIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Clear search (Esc)</TooltipContent>
+          </Tooltip>
+        )}
         {props.appliedQ.trim() && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -166,28 +187,70 @@ export default function FilterBar(props: FilterBarProps) {
             </Tooltip>
           );
         })}
+        <span className="mx-1 h-4 w-px bg-white/[0.08]" aria-hidden="true" />
+        <span className="font-mono text-[10px] text-mist-faint">text in</span>
+        <div
+          role="radiogroup"
+          aria-label="Free text searches"
+          className="flex overflow-hidden rounded-[3px] border border-white/[0.08]"
+        >
+          {TEXT_SCOPES.map(({ scope: option, label, hint }) => {
+            const active = scope === option;
+
+            return (
+              <Tooltip key={option}>
+                <TooltipTrigger asChild>
+                  <button
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => props.onApplyQuery(withTextScope(props.appliedQ, option))}
+                    className={
+                      "px-1.5 py-0.5 font-mono text-[10px] transition-colors " +
+                      (active ? "bg-gold/15 text-gold" : "text-mist-faint hover:text-mist")
+                    }
+                  >
+                    {label}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{hint}</TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </div>
         {saved.length > 0 && <span className="mx-1 h-4 w-px bg-white/[0.08]" aria-hidden="true" />}
         {saved.map((s) => (
-          <Tooltip key={s.q}>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => props.onApplyQuery(s.q)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  removeSaved(s.q);
-                }}
-                className="rounded-[3px] border border-gold/25 bg-gold/[0.06] px-1.5 py-0.5 font-mono text-[10px] text-gold transition-colors hover:bg-gold/10"
-              >
-                {s.name}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <span className="flex flex-col gap-0.5">
-                <span>{s.q}</span>
-                <span className="text-mist-faint">right-click to remove</span>
-              </span>
-            </TooltipContent>
-          </Tooltip>
+          <span
+            key={s.q}
+            className="flex items-stretch overflow-hidden rounded-[3px] border border-gold/25 bg-gold/[0.06] font-mono text-[10px] text-gold"
+          >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => props.onApplyQuery(s.q)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    removeSaved(s.q);
+                  }}
+                  className="px-1.5 py-0.5 transition-colors hover:bg-gold/10"
+                >
+                  {s.name}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Apply {s.q}</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => removeSaved(s.q)}
+                  aria-label={`Remove saved search ${s.name}`}
+                  className="border-l border-gold/20 px-1 text-gold/60 transition-colors hover:bg-coral/15 hover:text-coral"
+                >
+                  <XIcon aria-hidden="true" className="size-2.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Remove saved search</TooltipContent>
+            </Tooltip>
+          </span>
         ))}
         <span className="ml-auto font-mono text-[10px] text-mist-faint">
           {props.error ? (

@@ -1,8 +1,17 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchEvents, fetchHistogram, fetchServices, openStream, UnauthorizedError } from "../api";
+import {
+  fetchEvents,
+  fetchFieldVocabulary,
+  fetchHistogram,
+  fetchServices,
+  openStream,
+  UnauthorizedError,
+} from "../api";
 import { useApp } from "../app-context";
 import { isString } from "../json";
+import { addTerm, EMPTY_VOCABULARY } from "../query";
+import type { Vocabulary } from "../query";
 import { isKingletEvent } from "../types";
 import type { Histogram, KingletEvent, Service } from "../types";
 import EventDrawer from "../components/EventDrawer";
@@ -13,6 +22,8 @@ import LogTable from "../components/LogTable";
 import SiteHeader from "../components/SiteHeader";
 import { DEFAULT_WINDOW_KEY, recommendedRefreshKey, refreshMsFor, WINDOWS } from "../time";
 import type { RefreshKey } from "../time";
+
+const VOCABULARY_REFRESH_MS = 5 * 60_000;
 
 export const Route = createFileRoute("/")({
   validateSearch: (search) => ({
@@ -80,6 +91,7 @@ function Explorer() {
   const [events, setEvents] = useState<KingletEvent[]>([]);
   const [histogram, setHistogram] = useState<Histogram | null>(null);
   const [services, setServices] = useState<Service[]>([]);
+  const [vocabulary, setVocabulary] = useState<Vocabulary>(EMPTY_VOCABULARY);
   const [selected, setSelected] = useState<KingletEvent | null>(null);
   const [cursorId, setCursorId] = useState<number | null>(null);
   const [live, setLive] = useState(true);
@@ -111,7 +123,7 @@ function Explorer() {
       try {
         const [page, hist] = await Promise.all([
           fetchEvents({ projectId: currentProjectId, q, from, to, limit: 500 }),
-          fetchHistogram({ projectId: currentProjectId, from, to, buckets: 90 }),
+          fetchHistogram({ projectId: currentProjectId, from, to, buckets: 90, q }),
         ]);
 
         setEvents(page.events);
@@ -152,6 +164,31 @@ function Explorer() {
     fetchServices(currentProjectId)
       .then((r) => setServices(r.services))
       .catch(() => undefined);
+  }, [currentProjectId]);
+
+  // Autocomplete vocabulary from recent events, refreshed every few minutes so
+  // new fields show up without a reload.
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = async (): Promise<void> => {
+      try {
+        const next = await fetchFieldVocabulary(currentProjectId);
+
+        if (!cancelled) setVocabulary(next);
+      } catch {
+        // Autocomplete is a convenience; the search still works without it.
+      }
+    };
+
+    setVocabulary(EMPTY_VOCABULARY);
+    void load();
+    const timer = setInterval(() => void load(), VOCABULARY_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [currentProjectId]);
 
   // Keep a ref for the SSE closure.
@@ -360,6 +397,7 @@ function Explorer() {
         busy={busy}
         error={error}
         inputRef={filterRef}
+        vocabulary={vocabulary}
       />
 
       {histogram && (
@@ -386,7 +424,13 @@ function Explorer() {
           selectedId={selected?.id ?? null}
           cursorId={cursorId}
         />
-        {selected && <EventDrawer event={selected} onClose={() => setSelected(null)} />}
+        {selected && (
+          <EventDrawer
+            event={selected}
+            onClose={() => setSelected(null)}
+            onFilter={(term) => applyQuery(addTerm(q, term))}
+          />
+        )}
       </div>
     </div>
   );

@@ -72,6 +72,108 @@ test("the event drawer shows the message, service, and fields", async ({ page })
   await expect(drawer).toHaveCount(0);
 });
 
+test("a field in the drawer filters the table by its value", async ({ page }) => {
+  await page.goto("/");
+  await expect(logRow(page, EVENT_DRAWER)).toBeVisible();
+  await expect(logRow(page, EVENT_NEEDLE)).toBeVisible();
+
+  await logRow(page, EVENT_DRAWER).click();
+  await page
+    .getByRole("complementary")
+    .getByRole("button", { name: `Filter by field.orderId:${DRAWER_ORDER_ID}` })
+    .click();
+
+  await expect(page.getByPlaceholder("level:error service:api")).toHaveValue(
+    `field.orderId:${DRAWER_ORDER_ID}`,
+  );
+  await expect(logRow(page, EVENT_DRAWER)).toBeVisible();
+  await expect(logRow(page, EVENT_NEEDLE)).toHaveCount(0);
+});
+
+test("field comparisons and the text scope switch narrow the table", async ({ page }) => {
+  await page.goto("/");
+  await expect(logRow(page, EVENT_DRAWER)).toBeVisible();
+
+  const filter = page.getByPlaceholder("level:error service:api");
+
+  await filter.fill("field.status>=500");
+  await filter.press("Enter");
+  await expect(logRow(page, EVENT_DRAWER)).toBeVisible();
+  await expect(logRow(page, EVENT_NEEDLE)).toHaveCount(0);
+
+  // "drawer payload" is only in the event's fields, not its message.
+  await filter.fill('"drawer payload"');
+  await filter.press("Enter");
+  await expect(logRow(page, EVENT_DRAWER)).toHaveCount(0);
+
+  await page.getByRole("radio", { name: "fields" }).click();
+  await expect(filter).toHaveValue('"drawer payload" in:fields');
+  await expect(logRow(page, EVENT_DRAWER)).toBeVisible();
+  await expect(logRow(page, EVENT_NEEDLE)).toHaveCount(0);
+});
+
+test("autocomplete completes a field key and then one of its values", async ({ page }) => {
+  await page.goto("/");
+  await expect(logRow(page, EVENT_DRAWER)).toBeVisible();
+
+  const filter = page.getByRole("combobox", { name: "Search logs" });
+
+  await filter.click();
+  await filter.pressSequentially("field.ord");
+  await expect(page.getByRole("option", { name: /field\.orderId/ })).toBeVisible();
+  await filter.press("Tab");
+  await expect(filter).toHaveValue("field.orderId:");
+
+  await page.getByRole("option", { name: new RegExp(DRAWER_ORDER_ID) }).click();
+  await expect(filter).toHaveValue(`field.orderId:${DRAWER_ORDER_ID} `);
+
+  await filter.press("Enter");
+  await expect(logRow(page, EVENT_DRAWER)).toBeVisible();
+  await expect(logRow(page, EVENT_NEEDLE)).toHaveCount(0);
+});
+
+test("the search clears with its button or Escape", async ({ page }) => {
+  await page.goto("/");
+  await expect(logRow(page, EVENT_CHECKOUT_OK)).toBeVisible();
+
+  const filter = page.getByRole("combobox", { name: "Search logs" });
+
+  await filter.fill(`"${EVENT_NEEDLE}"`);
+  await filter.press("Enter");
+  await expect(logRow(page, EVENT_CHECKOUT_OK)).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Clear search" }).click();
+  await expect(filter).toHaveValue("");
+  await expect(logRow(page, EVENT_CHECKOUT_OK)).toBeVisible();
+
+  await filter.fill(`"${EVENT_NEEDLE}"`);
+  await filter.press("Enter");
+  await expect(logRow(page, EVENT_CHECKOUT_OK)).toHaveCount(0);
+  await filter.press("Escape");
+  await expect(filter).toHaveValue("");
+  await expect(logRow(page, EVENT_CHECKOUT_OK)).toBeVisible();
+});
+
+test("a saved search can be applied and removed from its chip", async ({ page }) => {
+  await page.goto("/");
+
+  const filter = page.getByRole("combobox", { name: "Search logs" });
+
+  await filter.fill("level:error");
+  await filter.press("Enter");
+  await page.getByRole("button", { name: "save" }).click();
+
+  const remove = page.getByRole("button", { name: "Remove saved search level:error" });
+
+  await expect(remove).toBeVisible();
+  await page.getByRole("button", { name: "Clear search" }).click();
+  await page.getByRole("button", { name: "level:error", exact: true }).click();
+  await expect(filter).toHaveValue("level:error");
+
+  await remove.click();
+  await expect(remove).toHaveCount(0);
+});
+
 test("the live tail renders a newly ingested event", async ({ page }) => {
   const seed = readSeed();
 

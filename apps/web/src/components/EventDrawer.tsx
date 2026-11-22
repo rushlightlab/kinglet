@@ -1,17 +1,27 @@
+import { useState } from "react";
 import type { KingletEvent } from "../types";
 import { LevelBadge } from "./LevelBadge";
-import { XIcon } from "lucide-react";
+import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isString } from "../json";
+import type { JsonValue } from "../json";
+import { fieldFilterTerm, fieldLeaves } from "../query";
+import type { FieldLeaf } from "../query";
 import CopyButton from "./CopyButton";
 
 export default function EventDrawer({
   event,
   onClose,
+  onFilter,
 }: {
   event: KingletEvent;
   onClose: () => void;
+  /** Adds a filter term to the current search. */
+  onFilter: (term: string) => void;
 }) {
+  const [rawOpen, setRawOpen] = useState(false);
+
   return (
     <aside className="absolute right-0 top-0 z-10 flex h-full w-[26rem] flex-col overflow-y-auto border-l border-white/[0.08] bg-ink-900 p-4">
       <div className="flex items-center justify-between">
@@ -53,12 +63,57 @@ export default function EventDrawer({
       {event.fields && (
         <div className="mt-4">
           <div className="k-kicker">fields</div>
-          <pre className="mt-1 overflow-x-auto rounded-[5px] border border-white/[0.08] bg-ink-850 p-2 font-mono text-xs text-mist">
-            {JSON.stringify(event.fields, null, 2)}
-          </pre>
+          <dl className="mt-1 flex flex-col rounded-[5px] border border-white/[0.08] bg-ink-850 font-mono text-xs">
+            {fieldLeaves(event.fields).map((leaf) => (
+              <FieldRow key={leaf.path.join(".")} leaf={leaf} onFilter={onFilter} />
+            ))}
+          </dl>
+          <details className="mt-2" onToggle={(e) => setRawOpen(e.currentTarget.open)}>
+            <summary className="cursor-pointer font-mono text-[10px] text-mist-faint hover:text-mist">
+              raw JSON
+            </summary>
+            {/* Rendered only when open, so its text never duplicates the rows above. */}
+            {rawOpen && (
+              <pre className="mt-1 overflow-x-auto rounded-[5px] border border-white/[0.08] bg-ink-850 p-2 font-mono text-xs text-mist">
+                {JSON.stringify(event.fields, null, 2)}
+              </pre>
+            )}
+          </details>
         </div>
       )}
     </aside>
+  );
+}
+
+function leafText(value: JsonValue): string {
+  return isString(value) ? value : JSON.stringify(value);
+}
+
+/** One field with a button that adds `field.<path>:<value>` to the search. */
+function FieldRow({ leaf, onFilter }: { leaf: FieldLeaf; onFilter: (term: string) => void }) {
+  const term = fieldFilterTerm(leaf.path, leaf.value);
+
+  return (
+    <div className="group flex items-start gap-2 border-b border-white/[0.04] px-2 py-1 last:border-b-0">
+      <dt className="w-28 shrink-0 break-all text-mist-faint">{leaf.path.join(".")}</dt>
+      <dd className="min-w-0 flex-1 break-all text-mist">{leafText(leaf.value)}</dd>
+      {term && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="chip"
+              size="icon-xs"
+              className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+              onClick={() => onFilter(term)}
+              aria-label={`Filter by ${term}`}
+            >
+              <FilterIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Add {term}</TooltipContent>
+        </Tooltip>
+      )}
+    </div>
   );
 }
 
