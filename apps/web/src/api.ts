@@ -137,11 +137,19 @@ export async function fetchMe(): Promise<{ user: AppUser; permissions: string[] 
   return api<{ user: AppUser; permissions: string[] }>("/v1/me");
 }
 
-export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
-  const { error } = await authClient.changePassword({
-    currentPassword,
-    newPassword,
-    revokeOtherSessions: true,
+/**
+ * Signs out the other sessions. With `revokeApiKeys` the server also deletes
+ * the API and MCP keys this user created, so a key minted from a stolen
+ * session cannot outlive the change.
+ */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+  revokeApiKeys: boolean,
+): Promise<void> {
+  const { error } = await authClient.$fetch<unknown>("/change-password", {
+    method: "POST",
+    body: { currentPassword, newPassword, revokeOtherSessions: true, revokeApiKeys },
   });
 
   if (error) throw new Error(error.message ?? "could not change password");

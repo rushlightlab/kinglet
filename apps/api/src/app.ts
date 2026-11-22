@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { bodyLimit } from "hono/body-limit";
+import { deleteApiKeysByOwner } from "./auth/apikeys.ts";
 import { authMiddleware } from "./auth/middleware.ts";
 import type { AppEnv } from "./auth/middleware.ts";
 import type { KingletAuth } from "./auth/auth.ts";
@@ -214,7 +215,24 @@ export function createApp(options: CreateAppOptions): Hono<AppEnv> {
       if (problem) return c.json({ error: problem }, 400);
     }
 
+    // A password change that signs out the other sessions is a recovery
+    // action: keys minted from a stolen session must not outlive it, the same
+    // as an admin reset. `revokeApiKeys: false` keeps them for a routine change.
+    const revokeKeys =
+      isJsonObject(body) && body.revokeOtherSessions === true && body.revokeApiKeys !== false;
+
+    const session = revokeKeys
+      ? await auth.api.getSession({
+          headers: c.req.raw.headers,
+          query: { disableCookieCache: true },
+        })
+      : null;
+
     await next();
+
+    if (session && c.res.status === 200) {
+      await deleteApiKeysByOwner(storage, session.user.id);
+    }
   });
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
@@ -235,6 +253,7 @@ export function createApp(options: CreateAppOptions): Hono<AppEnv> {
   registerRoutes(app, storage, engines.monitor, config, auth, {
     backupStatus: () => engines.backup.status(),
     deleteArchivedObjects: options.deleteArchivedObjects,
+    fenceArchive: (projectId) => engines.archive.fenceProject(projectId),
   });
   registerNotificationRoutes(app, {
     storage,

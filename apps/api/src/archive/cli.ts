@@ -88,6 +88,7 @@ async function main(): Promise<void> {
       to: values.to,
       dataDir: config.dataDir,
       passphrase: config.backup.passphrase,
+      allowUnencrypted: config.backup.allowUnencryptedSnapshots,
       s3: store,
     });
 

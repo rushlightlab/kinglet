@@ -167,6 +167,21 @@ describe("archive cleanup route wiring", () => {
     const project = await newProject("clear-all");
     const projectKeys = seedArchivedObjects(project.id);
 
+    await test.harness.storage.db.insert(schema.archiveParts).values(
+      projectKeys.map((objectKey, index) => ({
+        id: uuidv7(),
+        projectId: project.id,
+        date: "2026-01-15",
+        firstId: index + 1,
+        lastId: index + 1,
+        eventCount: 1,
+        objectKey,
+        sha256: "c".repeat(64),
+        sizeBytes: 10,
+        createdAt: Date.now(),
+      })),
+    );
+
     expect(await seedEvent(project.id, "clear me")).toBe(1);
     cleanupCalls = [];
 
@@ -184,6 +199,14 @@ describe("archive cleanup route wiring", () => {
     expect(cleanupCalls).toEqual([{ projectId: project.id }]);
 
     for (const key of projectKeys) expect(active.hasObject(key)).toBe(false);
+
+    // The index rows for the removed parts go too.
+    const parts = await test.harness.storage.db
+      .select({ id: schema.archiveParts.id })
+      .from(schema.archiveParts)
+      .where(eq(schema.archiveParts.projectId, project.id));
+
+    expect(parts).toEqual([]);
   });
 
   it("leaves archived objects alone for a bounded range clear", async () => {

@@ -484,7 +484,26 @@ export interface DeliveryRecordInput {
   error?: string | null;
 }
 
+/** Inserts between write-time prunes, so the 1,000-row cap holds between the daily runs. */
+const PRUNE_EVERY_INSERTS = 100;
+const insertsSincePrune = new WeakMap<Storage, number>();
+
 export async function recordDelivery(storage: Storage, input: DeliveryRecordInput): Promise<void> {
+  await insertDelivery(storage, input);
+
+  const inserts = (insertsSincePrune.get(storage) ?? 0) + 1;
+
+  if (inserts < PRUNE_EVERY_INSERTS) {
+    insertsSincePrune.set(storage, inserts);
+
+    return;
+  }
+
+  insertsSincePrune.set(storage, 0);
+  await pruneDeliveries(storage);
+}
+
+async function insertDelivery(storage: Storage, input: DeliveryRecordInput): Promise<void> {
   await storage.db.insert(schema.notificationDeliveries).values({
     id: uuidv7(),
     channelId: input.channelId,

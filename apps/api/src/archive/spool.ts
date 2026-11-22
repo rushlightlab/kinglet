@@ -11,6 +11,13 @@
 export const MAX_SPOOL_BYTES = 1024 * 1024 * 1024;
 
 /**
+ * Longest NDJSON line import accepts. By the bound above a legitimate line is
+ * about 81 KiB; readline holds each line as one string, so without a cap a
+ * single line could grow toward the spool cap and past V8's string limit.
+ */
+export const MAX_LINE_BYTES = 256 * 1024;
+
+/**
  * Resolve the optional spool cap. Production passes no value and gets the
  * default. A supplied zero, negative, or non-finite value would silently
  * disable the bound, so reject it loudly instead.

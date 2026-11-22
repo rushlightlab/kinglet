@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { isBoolean, isFiniteNumber, isJsonObject, isString } from "./json.ts";
 import type { JsonValue } from "./json.ts";
+import type { KingletDb } from "./storage/db.ts";
 import { projectKeyOf } from "./storage/project-keys.ts";
 import { LEVEL_NAMES } from "./types.ts";
 import type { SearchMode } from "./types.ts";
@@ -225,29 +226,44 @@ export function parseFilters(q: string): ParsedFilters {
 }
 
 /**
- * Free-text terms, by search index:
- *  - substring (trigram): >= 3 chars use an FTS5 phrase, i.e. substring match.
- *  - words (unicode61): an FTS5 phrase whose last word is a prefix, so `time`
- *    finds `timeout` and `conn ref` finds `conn refused`.
- *  - off, short trigram terms, or terms with no word characters: LIKE with
- *    escaped wildcards over the project/time window.
+ * How free-text terms reach the database:
+ *  - "index": the FTS5 index. Its MATCH runs over every project's messages
+ *    before the project filter applies, so all eligible terms are combined
+ *    into one MATCH (one pass over the index, not one per term).
+ *  - "scan": LIKE over the caller's own project and time window, so the cost
+ *    depends only on the caller's own data. chooseTextPlan picks it in
+ *    substring mode when that window is small, where FTS work would mostly be
+ *    spent on other projects' rows.
  */
-function textClause(term: string, search: SearchMode): SQL {
+export type TextPlan = "index" | "scan";
+
+/** Own-window rows at or below which substring search scans instead of using the index. */
+export const TEXT_SCAN_MAX_ROWS = 10_000;
+
+/**
+ * Terms the FTS index can answer:
+ *  - substring (trigram): >= 3 chars, i.e. substring match.
+ *  - words (unicode61): a phrase whose last word is a prefix, so `time`
+ *    finds `timeout` and `conn ref` finds `conn refused`.
+ * Everything else (off, short trigram terms, terms with no word characters)
+ * is matched with LIKE over the project/time window.
+ */
+function ftsPhrase(term: string, search: SearchMode): string | null {
   const phrase = `"${term.replace(/"/g, '""')}"`;
 
-  if (search === "substring" && term.length >= 3) {
-    return sql`id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ${phrase})`;
-  }
+  if (search === "substring" && term.length >= 3) return phrase;
 
-  if (search === "words" && /[\p{L}\p{N}]/u.test(term)) {
-    return sql`id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ${`${phrase}*`})`;
-  }
+  if (search === "words" && /[\p{L}\p{N}]/u.test(term)) return `${phrase}*`;
 
-  return sql`message LIKE ${likePattern(term)} ESCAPE '\\'`;
+  return null;
 }
 
 function likePattern(term: string): string {
   return `%${term.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+}
+
+function messageLikeClause(term: string): SQL {
+  return sql`message LIKE ${likePattern(term)} ESCAPE '\\'`;
 }
 
 /** Free text against the stored fields JSON (keys and values). */
@@ -255,12 +271,64 @@ function fieldsTextClause(term: string): SQL {
   return sql`coalesce(fields, '') LIKE ${likePattern(term)} ESCAPE '\\'`;
 }
 
-function scopedTextClause(term: string, search: SearchMode, scope: TextScope): SQL {
-  if (scope === "fields") return fieldsTextClause(term);
+function ftsMatchClause(expression: string): SQL {
+  return sql`id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ${expression})`;
+}
 
-  if (scope === "all") return sql`(${textClause(term, search)} OR ${fieldsTextClause(term)})`;
+/**
+ * Include and exclude clauses for the free-text terms. Index-backed message
+ * terms are folded into at most one MATCH for the includes (AND) and one for
+ * the excludes (OR); other terms are per-row LIKEs.
+ */
+function textClauses(f: ParsedFilters, search: SearchMode, plan: TextPlan): SQL[] {
+  if (f.textScope === "fields") {
+    return [
+      ...f.includes.map(fieldsTextClause),
+      ...f.excludes.map((term) => sql`NOT (${fieldsTextClause(term)})`),
+    ];
+  }
 
-  return textClause(term, search);
+  const useIndex = plan === "index" && search !== "off";
+
+  if (f.textScope === "all") {
+    // Each term may match the message or the fields, which one MATCH cannot
+    // express; in words mode the index is still used per term, otherwise rows
+    // are scanned within the caller's window.
+    const clause = (term: string): SQL => {
+      const phrase = useIndex && search === "words" ? ftsPhrase(term, search) : null;
+      const message = phrase === null ? messageLikeClause(term) : ftsMatchClause(phrase);
+
+      return sql`(${message} OR ${fieldsTextClause(term)})`;
+    };
+
+    return [...f.includes.map(clause), ...f.excludes.map((term) => sql`NOT (${clause(term)})`)];
+  }
+
+  const parts: SQL[] = [];
+  const includePhrases: string[] = [];
+  const excludePhrases: string[] = [];
+
+  for (const term of f.includes) {
+    const phrase = useIndex ? ftsPhrase(term, search) : null;
+
+    if (phrase === null) parts.push(messageLikeClause(term));
+    else includePhrases.push(phrase);
+  }
+
+  for (const term of f.excludes) {
+    const phrase = useIndex ? ftsPhrase(term, search) : null;
+
+    if (phrase === null) parts.push(sql`NOT (${messageLikeClause(term)})`);
+    else excludePhrases.push(phrase);
+  }
+
+  if (includePhrases.length > 0) parts.push(ftsMatchClause(includePhrases.join(" AND ")));
+
+  if (excludePhrases.length > 0) {
+    parts.push(sql`NOT (${ftsMatchClause(excludePhrases.join(" OR "))})`);
+  }
+
+  return parts;
 }
 
 /** `$."data"."rss"`; keys are pre-validated by FIELD_TOKEN. */
@@ -295,12 +363,9 @@ export function buildWhere(
   range: EventRange,
   projectId: string,
   search: SearchMode,
+  plan: TextPlan = "index",
 ): SQL {
-  const parts: SQL[] = [
-    sql`project_key = ${projectKeyOf(projectId)}`,
-    sql`ts >= ${range.from}`,
-    sql`ts <= ${range.to}`,
-  ];
+  const parts: SQL[] = windowClauses(range, projectId);
 
   if (f.levelOp && f.levelValue !== null) {
     // Operator is a whitelisted literal; the value stays parameterized.
@@ -313,15 +378,60 @@ export function buildWhere(
 
   if (f.apiKeyId !== null) parts.push(sql`api_key_id = ${f.apiKeyId}`);
 
-  for (const term of f.includes) parts.push(scopedTextClause(term, search, f.textScope));
-
-  for (const term of f.excludes) {
-    parts.push(sql`NOT (${scopedTextClause(term, search, f.textScope)})`);
-  }
+  parts.push(...textClauses(f, search, plan));
 
   for (const filter of f.fields) parts.push(fieldClause(filter));
 
   return sql.join(parts, sql` AND `);
+}
+
+function windowClauses(range: EventRange, projectId: string): SQL[] {
+  return [
+    sql`project_key = ${projectKeyOf(projectId)}`,
+    sql`ts >= ${range.from}`,
+    sql`ts <= ${range.to}`,
+  ];
+}
+
+/**
+ * The text plan for a query: "scan" when substring search would otherwise
+ * use the shared index for a project window small enough to read directly.
+ * The count stops at the threshold, so it costs at most that many index rows.
+ */
+export async function chooseTextPlan(
+  db: KingletDb,
+  f: ParsedFilters,
+  range: EventRange,
+  projectId: string,
+  search: SearchMode,
+): Promise<TextPlan> {
+  if (search !== "substring" || f.textScope === "fields") return "index";
+
+  const indexed = [...f.includes, ...f.excludes].some((term) => ftsPhrase(term, search) !== null);
+
+  if (!indexed) return "index";
+
+  const window = sql.join(windowClauses(range, projectId), sql` AND `);
+
+  const rows = await db.all<{ n: number }>(
+    sql`SELECT count(*) AS n FROM (SELECT 1 FROM events WHERE ${window} LIMIT ${TEXT_SCAN_MAX_ROWS + 1})`,
+  );
+
+  return Number(rows[0]?.n ?? 0) <= TEXT_SCAN_MAX_ROWS ? "scan" : "index";
+}
+
+/** Parses `q` and builds the project-scoped condition with the right text plan. */
+export async function buildQueryWhere(
+  db: KingletDb,
+  q: string,
+  range: EventRange,
+  projectId: string,
+  search: SearchMode,
+): Promise<SQL> {
+  const f = parseFilters(q);
+  const plan = await chooseTextPlan(db, f, range, projectId, search);
+
+  return buildWhere(f, range, projectId, search, plan);
 }
 
 function compare(a: number, op: string, b: number): boolean {

@@ -1,7 +1,7 @@
 import { and, count, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { subscribeEvents } from "./bus.ts";
-import { buildWhere, matchesEvent, parseFilters } from "./filters.ts";
+import { buildWhere, chooseTextPlan, matchesEvent, parseFilters } from "./filters.ts";
 import type { ParsedFilters } from "./filters.ts";
 import { isJsonObject, isString } from "./json.ts";
 import type { JsonObject, JsonValue } from "./json.ts";
@@ -18,6 +18,7 @@ import {
 } from "./notifications/store.ts";
 import { secretsConfigured } from "./secrets.ts";
 import type { MonitorChannelData } from "./notifications/store.ts";
+import { createSendBudget, SEND_BUDGET_PER_MINUTE } from "./notifications/send-budget.ts";
 import { safeErrorMessage } from "./notifications/types.ts";
 import type { MonitorChannelSummary } from "./notifications/types.ts";
 import { systemStatus } from "./status.ts";
@@ -86,6 +87,16 @@ export interface AlertRecord {
 }
 
 const NOTIFY_STATUS_SET = new Set<string>(["sent", "partial", "failed", "none"]);
+
+const SEND_BUDGET_ERROR = `send budget exceeded: at most ${SEND_BUDGET_PER_MINUTE} alerts per minute per channel and project`;
+
+/** Most time one engine tick spends evaluating count monitors back to back. */
+const COUNT_TICK_BUDGET_MS = 250;
+
+/** Yield a real macrotask so other requests run between monitor evaluations. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 function isNotifyStatus(value: string | null): value is AlertRecord["notifyStatus"] {
   return value !== null && NOTIFY_STATUS_SET.has(value);
@@ -626,15 +637,16 @@ export async function pageAlerts(
   storage: Storage,
   projectId: string,
   filters: AlertListFilters,
-  page: { limit: number; offset: number; q?: string },
+  page: { limit: number; offset: number; q?: string; searchSummary: boolean },
 ): Promise<AlertPage> {
   const conditions = alertConditions(projectId, filters);
 
-  const search = tableSearchCondition(page.q, [
-    schema.monitors.name,
-    schema.alerts.summary,
-    schema.alerts.state,
-  ]);
+  const search = tableSearchCondition(
+    page.q,
+    page.searchSummary
+      ? [schema.monitors.name, schema.alerts.summary, schema.alerts.state]
+      : [schema.monitors.name, schema.alerts.state],
+  );
 
   if (search) conditions.push(search);
   const where = and(...conditions);
@@ -718,6 +730,7 @@ export function startMonitorEngine(
   const allowPrivate = opts.allowPrivateWebhooks ?? false;
   const smtp = opts.smtp ?? null;
   const maxDbBytes = opts.maxDbBytes ?? 0;
+  const sendBudget = createSendBudget();
   let monitors: Monitor[] = [];
   let projectNames = new Map<string, string>();
   const state = new Map<string, MonitorState>();
@@ -849,6 +862,17 @@ export function startMonitorEngine(
   ): Promise<{ sent: number; failed: number; errors: string[]; total: number }> {
     const outcomes = await Promise.all(
       targets.map(async (ch) => {
+        const decision = sendBudget.take(`${m.projectId}\n${ch.id ?? `${ch.type}\n${ch.url}`}`);
+
+        if (decision !== "send") {
+          if (decision === "suppress-and-record") {
+            await recordMonitorDelivery(m, ch, notice, "failed", SEND_BUDGET_ERROR);
+            console.warn(`[kinglet] notification suppressed for "${m.name}": ${SEND_BUDGET_ERROR}`);
+          }
+
+          return SEND_BUDGET_ERROR;
+        }
+
         try {
           await sendNotice(ch, notice, { allowPrivate, smtp });
         } catch (err) {
@@ -1056,12 +1080,18 @@ export function startMonitorEngine(
     try {
       const now = Date.now();
 
-      const where: SQL = buildWhere(
-        parsed(m.query),
-        { from: now - m.windowMs, to: now },
+      const filters = parsed(m.query);
+      const range = { from: now - m.windowMs, to: now };
+
+      const plan = await chooseTextPlan(
+        storage.db,
+        filters,
+        range,
         m.projectId,
         storage.searchMode,
       );
+
+      const where: SQL = buildWhere(filters, range, m.projectId, storage.searchMode, plan);
 
       const rows = await storage.db.select({ n: count() }).from(schema.events).where(where);
       const total = Number(rows[0]?.n ?? 0);
@@ -1139,15 +1169,40 @@ export function startMonitorEngine(
     });
   });
 
-  const tick = setInterval(() => {
-    const now = Date.now();
+  // Count monitors run one at a time with a macrotask between them, and a
+  // tick stops after its time budget: the local database client runs each
+  // COUNT on the main thread, so firing every due monitor at once would stall
+  // ingest, queries and live tail for every project until all of them finish.
+  // Monitors left over keep their lastEvalAt and run first on the next tick.
+  let ticking = false;
 
-    for (const m of monitors) {
-      if (!m.enabled || m.kind === "match") continue;
-      const s = getState(m.id);
+  async function runDueCountMonitors(): Promise<void> {
+    const started = Date.now();
 
-      if (now - s.lastEvalAt >= m.intervalMs) void evaluate(m);
+    // Monitors cut off by the budget are still due next tick, and the ones
+    // that ran are not, so every monitor gets its turn.
+    const due = monitors.filter(
+      (m) => m.enabled && m.kind !== "match" && started - getState(m.id).lastEvalAt >= m.intervalMs,
+    );
+
+    for (const m of due) {
+      await evaluate(m);
+      await yieldToEventLoop();
+
+      if (Date.now() - started >= COUNT_TICK_BUDGET_MS) break;
     }
+  }
+
+  const tick = setInterval(() => {
+    if (ticking) return;
+    ticking = true;
+    void runDueCountMonitors()
+      .catch((err) => {
+        console.error("[kinglet] monitor tick failed:", err);
+      })
+      .finally(() => {
+        ticking = false;
+      });
   }, 5_000);
 
   tick.unref();

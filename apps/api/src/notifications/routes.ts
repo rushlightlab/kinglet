@@ -163,6 +163,9 @@ function parseChannelInput(raw: JsonObject, partial: boolean): ChannelParse {
 const SECRET_KEY_REQUIRED =
   "set KINGLET_SECRET_KEY to add or change notification channels: their tokens and URLs are stored encrypted (generate one with: openssl rand -base64 32)";
 
+const LOCKED_LEGACY_CHANNEL =
+  "this channel is locked (KINGLET_SECRET_KEY is missing or different from the one that sealed it): restore the original key before deleting or re-pointing it, so its copies on older monitors can be removed too";
+
 function targetCheck(config: Config): TargetCheck {
   return { allowPrivate: config.allowPrivateWebhooks, smtpConfigured: config.smtp !== null };
 }
@@ -424,6 +427,10 @@ export function registerNotificationRoutes(
     }
 
     if (destinationChanged) {
+      if (existing.locked !== null && isLegacyChannelType(existing.type)) {
+        return c.json({ error: LOCKED_LEGACY_CHANNEL }, 409);
+      }
+
       // Retire the old legacy copy before the new destination is live. The
       // one-time migration marker prevents recreation, and removing the copy
       // stops the legacy fallback from delivering to the old URL.
@@ -513,8 +520,12 @@ export function registerNotificationRoutes(
     if (!channel) return c.json({ error: "channel not found" }, 404);
 
     // Remove the legacy inline copy first so the fallback cannot keep posting
-    // to a destination the admin just deleted.
+    // to a destination the admin just deleted. A locked channel's URL, and its
+    // monitors' legacy copies, cannot be read, so nothing could be scrubbed:
+    // refuse rather than leave the old URL live behind the delete.
     if (isLegacyChannelType(channel.type)) {
+      if (channel.locked !== null) return c.json({ error: LOCKED_LEGACY_CHANNEL }, 409);
+
       await scrubLegacyChannelUrl(storage, channel.type, channel.url);
     }
 
