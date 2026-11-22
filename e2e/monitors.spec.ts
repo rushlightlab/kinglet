@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { LEGACY_MONITOR_NAME } from "./support/data";
-import { cardWithText } from "./support/ui";
+import { rowAction, tableRow } from "./support/ui";
 
 test("create, pause, resume, and delete a monitor", async ({ page }) => {
   const name = `e2e monitor ${Date.now()}`;
@@ -18,24 +18,43 @@ test("create, pause, resume, and delete a monitor", async ({ page }) => {
 
   await expect(page.getByText("Monitor created")).toBeVisible();
 
-  const card = cardWithText(page, name);
+  const row = tableRow(page, name);
 
-  await expect(card).toBeVisible();
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("spike · > 10 in 5m");
 
-  await card.getByRole("switch", { name: "Pause monitor" }).click();
-  await expect(card.getByRole("switch", { name: "Enable monitor" })).toBeVisible();
-  await expect(card.getByText("paused", { exact: true })).toBeVisible();
+  await row.getByRole("switch", { name: `Pause ${name}` }).click();
+  await expect(row.getByRole("switch", { name: `Enable ${name}` })).toBeVisible();
+  await expect(row.getByText("paused", { exact: true })).toBeVisible();
 
-  await card.getByRole("switch", { name: "Enable monitor" }).click();
-  await expect(card.getByRole("switch", { name: "Pause monitor" })).toBeVisible();
-  await expect(card.getByText("paused", { exact: true })).toHaveCount(0);
+  await row.getByRole("switch", { name: `Enable ${name}` }).click();
+  await expect(row.getByRole("switch", { name: `Pause ${name}` })).toBeVisible();
+  await expect(row.getByText("paused", { exact: true })).toHaveCount(0);
 
-  await card.getByRole("button", { name: "delete", exact: true }).click();
+  await rowAction(row, "Delete");
 
   const confirm = page.getByRole("alertdialog");
 
   await expect(confirm.getByText(`Delete ${name}?`)).toBeVisible();
   await confirm.getByRole("button", { name: "Delete monitor" }).click();
 
-  await expect(card).toHaveCount(0);
+  await expect(row).toHaveCount(0);
+});
+
+test("the monitor search narrows the table and says when nothing matches", async ({ page }) => {
+  await page.goto("/monitors");
+  await expect(tableRow(page, LEGACY_MONITOR_NAME)).toBeVisible();
+
+  const search = page.getByRole("searchbox", { name: "Search monitors" });
+
+  await search.fill(LEGACY_MONITOR_NAME.toUpperCase());
+  await expect(tableRow(page, LEGACY_MONITOR_NAME)).toBeVisible();
+
+  await search.fill("zz-no-such-monitor");
+  await expect(tableRow(page, LEGACY_MONITOR_NAME)).toHaveCount(0);
+  await expect(page.getByText("No monitors match “zz-no-such-monitor”.")).toBeVisible();
+
+  await page.getByRole("button", { name: "clear search", exact: true }).click();
+  await expect(search).toHaveValue("");
+  await expect(tableRow(page, LEGACY_MONITOR_NAME)).toBeVisible();
 });

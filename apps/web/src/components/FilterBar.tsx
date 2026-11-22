@@ -256,9 +256,9 @@ export default function FilterBar(props: FilterBarProps) {
           {props.error ? (
             <span className="text-coral">{props.error}</span>
           ) : props.busy ? (
-            "…"
+            <span className="text-gold/80">searching…</span>
           ) : (
-            `${props.count.toLocaleString()} events`
+            `${props.count.toLocaleString()} ${props.count === 1 ? "event" : "events"}`
           )}
         </span>
       </div>

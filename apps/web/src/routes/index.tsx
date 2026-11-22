@@ -10,13 +10,13 @@ import {
 } from "../api";
 import { useApp } from "../app-context";
 import { isString } from "../json";
-import { addTerm, EMPTY_VOCABULARY } from "../query";
+import { addTerm, EMPTY_VOCABULARY, isIncompleteQuery } from "../query";
 import type { Vocabulary } from "../query";
 import { isKingletEvent } from "../types";
 import type { Histogram, KingletEvent, Service } from "../types";
 import EventDrawer from "../components/EventDrawer";
 import FilterBar from "../components/FilterBar";
-import HistogramChart from "../components/Histogram";
+import HistogramChart, { HistogramSkeleton } from "../components/Histogram";
 import LogControls from "../components/LogControls";
 import LogTable from "../components/LogTable";
 import SiteHeader from "../components/SiteHeader";
@@ -97,7 +97,13 @@ function Explorer() {
   const [live, setLive] = useState(true);
   const [follow, setFollow] = useState(true);
   const [busy, setBusy] = useState(false);
+  // False until the first load for this project finishes: until then the view
+  // shows placeholders instead of claiming nothing matched.
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Only the newest request may update the view; a slow earlier search must
+  // not overwrite a newer one.
+  const requestSeq = useRef(0);
 
   const windowMs = customRange
     ? customRange.to - customRange.from
@@ -105,19 +111,38 @@ function Explorer() {
 
   const refreshMs = refreshMsFor(refreshKey);
 
+  // A new search over results already on screen: fade them so they aren't
+  // mistaken for the answer.
+  const refreshing = busy && loaded;
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
   const followRef = useRef(true);
 
-  // Debounce the filter bar into the applied query.
+  // Debounce the filter bar into the applied query. A half-typed term such as
+  // `field.` or `level>=` waits until it is finished (Enter still applies it).
   useEffect(() => {
+    if (isIncompleteQuery(qDraft)) return;
     const t = setTimeout(() => setQ(qDraft), 300);
 
     return () => clearTimeout(t);
   }, [qDraft]);
 
+  // A different project starts from placeholders, not the previous project's
+  // events (reset while rendering, so the old events never paint).
+  const [shownProjectId, setShownProjectId] = useState(currentProjectId);
+
+  if (shownProjectId !== currentProjectId) {
+    setShownProjectId(currentProjectId);
+    setLoaded(false);
+    setEvents([]);
+    setHistogram(null);
+  }
+
   const loadRange = useCallback(
     async (from: number, to: number, silent = false) => {
+      const seq = ++requestSeq.current;
+
       if (!silent) setBusy(true);
 
       try {
@@ -126,14 +151,18 @@ function Explorer() {
           fetchHistogram({ projectId: currentProjectId, from, to, buckets: 90, q }),
         ]);
 
+        if (seq !== requestSeq.current) return;
         setEvents(page.events);
         setHistogram(hist);
         setError(null);
       } catch (err) {
-        if (err instanceof UnauthorizedError) return;
+        if (seq !== requestSeq.current || err instanceof UnauthorizedError) return;
         setError(err instanceof Error ? err.message : String(err));
       } finally {
-        if (!silent) setBusy(false);
+        if (seq === requestSeq.current) {
+          setBusy(false);
+          setLoaded(true);
+        }
       }
     },
     [q, currentProjectId],
@@ -394,30 +423,42 @@ function Explorer() {
         appliedQ={q}
         onApplyQuery={applyQuery}
         count={events.length}
-        busy={busy}
+        busy={busy || !loaded}
         error={error}
         inputRef={filterRef}
         vocabulary={vocabulary}
       />
 
-      {histogram && (
-        <HistogramChart
-          key={`${histogram.from}:${histogram.to}:${q}`}
-          data={histogram}
-          onSelectRange={(from, to) => {
-            setCustomRange({ from, to });
+      <div className="k-progress" data-active={busy || !loaded} aria-hidden="true" />
 
-            if (refreshKey !== "off") {
-              setRefreshKey(recommendedRefreshKey(to - from));
-            }
-          }}
-          onFilterLevel={toggleLevelFilter}
-          onReset={customRange ? clearCustomRange : undefined}
-        />
+      {histogram ? (
+        <div className={refreshing ? "opacity-40 transition-opacity" : "transition-opacity"}>
+          <HistogramChart
+            key={`${histogram.from}:${histogram.to}:${q}`}
+            data={histogram}
+            onSelectRange={(from, to) => {
+              setCustomRange({ from, to });
+
+              if (refreshKey !== "off") {
+                setRefreshKey(recommendedRefreshKey(to - from));
+              }
+            }}
+            onFilterLevel={toggleLevelFilter}
+            onReset={customRange ? clearCustomRange : undefined}
+          />
+        </div>
+      ) : (
+        !loaded && <HistogramSkeleton />
       )}
 
-      <div className="relative flex-1 overflow-hidden">
+      <div
+        className={
+          "relative flex-1 overflow-hidden transition-opacity " + (refreshing ? "opacity-40" : "")
+        }
+        aria-busy={busy || !loaded}
+      >
         <LogTable
+          loading={!loaded}
           events={events}
           scrollRef={scrollRef}
           onSelect={setSelected}

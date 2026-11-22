@@ -42,6 +42,22 @@ export function withTextScope(q: string, scope: TextScope): string {
   return (scope === "message" ? rest : [...rest, `in:${scope}`]).join(" ");
 }
 
+/**
+ * Whether the last term is still being typed: a key or operator with no value
+ * yet (`level>=`, `service:`, `field.status>`, `in:`) or a field path without
+ * an operator (`field.`, `field.imei`). Searching these mid-typing would run a
+ * literal text search and flash an empty table, so the search box waits.
+ * A trailing space means the term is finished.
+ */
+export function isIncompleteQuery(q: string): boolean {
+  if (q === "" || /\s$/.test(q)) return false;
+  const last = (terms(q).at(-1) ?? "").replace(/^-/, "");
+
+  if (/^fields?\.[A-Za-z0-9_.-]*$/.test(last)) return true;
+
+  return /^(level|service|env|key|api_key|in|fields?\.[A-Za-z0-9_.-]+)(:|=|>=|<=|>|<)$/i.test(last);
+}
+
 /** Adds a term unless the query already has it. */
 export function addTerm(q: string, term: string): string {
   const parts = terms(q);

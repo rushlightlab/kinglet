@@ -6,6 +6,10 @@ import { pad } from "../time";
 import Logo from "./Logo";
 import { LevelBadge } from "./LevelBadge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Skeleton } from "@/components/ui/skeleton";
+
+// Varied widths so the placeholder reads as log lines, not a grid.
+const SKELETON_MESSAGE_WIDTHS = ["w-[46%]", "w-[62%]", "w-[38%]", "w-[54%]", "w-[70%]", "w-[42%]"];
 
 interface LogTableProps {
   events: KingletEvent[];
@@ -13,6 +17,8 @@ interface LogTableProps {
   onSelect: (event: KingletEvent) => void;
   selectedId: number | null;
   cursorId: number | null;
+  /** The first load hasn't finished: show placeholder rows, not "no events". */
+  loading?: boolean;
 }
 
 export default function LogTable({
@@ -21,6 +27,7 @@ export default function LogTable({
   onSelect,
   selectedId,
   cursorId,
+  loading = false,
 }: LogTableProps) {
   const virtualizer = useVirtualizer({
     count: events.length,
@@ -36,6 +43,31 @@ export default function LogTable({
 
     if (index >= 0) virtualizer.scrollToIndex(index, { align: "auto" });
   }, [cursorId, events, virtualizer]);
+
+  if (events.length === 0 && loading) {
+    return (
+      <div className="h-full overflow-hidden font-mono text-xs">
+        <p role="status" className="sr-only">
+          Loading events…
+        </p>
+        {Array.from({ length: 18 }, (_, row) => (
+          <div
+            key={row}
+            aria-hidden="true"
+            className="flex h-[27px] items-center gap-3 border-b border-l-2 border-b-white/[0.04] border-l-transparent px-4"
+            style={{ opacity: 1 - row * 0.045 }}
+          >
+            <Skeleton className="h-3 w-20 shrink-0" />
+            <Skeleton className="h-3.5 w-11 shrink-0" />
+            <Skeleton className="h-3 w-24 shrink-0" />
+            <Skeleton
+              className={`h-3 ${SKELETON_MESSAGE_WIDTHS[row % SKELETON_MESSAGE_WIDTHS.length]}`}
+            />
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   if (events.length === 0) {
     return (

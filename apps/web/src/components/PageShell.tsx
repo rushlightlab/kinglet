@@ -6,12 +6,15 @@ export default function PageShell({
   title,
   description,
   headerExtra,
+  wide = false,
   children,
 }: {
   kicker: string;
   title: string;
   description?: string;
   headerExtra?: ReactNode;
+  /** Table-heavy pages get more width; forms read better narrow. */
+  wide?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -19,7 +22,7 @@ export default function PageShell({
       <SiteHeader>{headerExtra}</SiteHeader>
       <main className="relative flex-1 overflow-y-auto">
         <div className="k-bg-grid absolute inset-0" aria-hidden="true" />
-        <div className="relative mx-auto w-full max-w-3xl px-6 py-8">
+        <div className={`relative mx-auto w-full px-6 py-8 ${wide ? "max-w-5xl" : "max-w-3xl"}`}>
           <div className="k-kicker">
             <span className="text-gold">/</span> {kicker}
           </div>

@@ -9,6 +9,7 @@ import type { AppEnv } from "../auth/middleware.ts";
 import type { Config } from "../env.ts";
 import { isBoolean, isJsonObject, isString } from "../json.ts";
 import type { JsonObject, JsonValue } from "../json.ts";
+import { pageList, readPageRequest } from "../paging.ts";
 import { isChannelType, sendGeneric, validateWebhookUrl } from "../notify.ts";
 import type { ChannelType } from "../notify.ts";
 import * as schema from "../storage/schema.ts";
@@ -20,7 +21,7 @@ import {
   healthFromDelivery,
   latestDeliveryStates,
   listChannelRecords,
-  listDeliveryRecords,
+  pageDeliveryRecords,
 } from "./store.ts";
 import {
   DEFAULT_NOTIFICATION_ACTIONS,
@@ -235,9 +236,20 @@ export function registerNotificationRoutes(
 
     if (denied) return denied;
 
-    const channels = await listChannelRecords(storage);
+    // Search runs on the masked projection, so it can't probe a webhook secret.
+    const page = pageList(
+      (await listChannelRecords(storage)).map((channel) => channelDto(channel, false)),
+      readPageRequest((name) => c.req.query(name)),
+      (channel) => [
+        channel.name,
+        channel.type,
+        channel.enabled ? "enabled" : "disabled",
+        channel.url,
+        ...channel.actions,
+      ],
+    );
 
-    return c.json({ channels: channels.map((channel) => channelDto(channel, false)) });
+    return c.json({ channels: page.items, total: page.total });
   });
 
   app.post("/v1/notifications/channels", async (c) => {
@@ -558,6 +570,12 @@ export function registerNotificationRoutes(
       ? Math.min(100, Math.max(1, Math.trunc(parsedLimit)))
       : 100;
 
-    return c.json({ deliveries: await listDeliveryRecords(storage, limit) });
+    const rawOffset = Number(c.req.query("offset") ?? 0);
+
+    const offset = Number.isFinite(rawOffset)
+      ? Math.min(1_000_000, Math.max(0, Math.trunc(rawOffset)))
+      : 0;
+
+    return c.json(await pageDeliveryRecords(storage, { limit, offset, q: c.req.query("q") }));
   });
 }

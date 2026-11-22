@@ -49,6 +49,7 @@ test("clearing by service previews and deletes only that service's events", asyn
   expect(ingest.ok()).toBeTruthy();
 
   await page.goto(`/projects/${project.id}`);
+  await page.getByRole("tab", { name: "general" }).click();
   await page.getByRole("button", { name: "clear project logs" }).click();
 
   const dialog = page.getByRole("alertdialog");

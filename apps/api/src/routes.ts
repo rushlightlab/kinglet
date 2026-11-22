@@ -74,13 +74,14 @@ import type { JsonObject, JsonValue } from "./json.ts";
 import { validateQueryString } from "./query-validation.ts";
 import { eventSizeBytes } from "./storage/events.ts";
 import { projectKeyOf } from "./storage/project-keys.ts";
-import type { Monitor, MonitorEngine } from "./monitors.ts";
+import type { Monitor, MonitorEngine, MonitorKind } from "./monitors.ts";
 import {
+  alertStateByMonitor,
+  pageAlerts,
   createMonitorFromRaw,
   deleteMonitor,
   getAlert,
   getMonitor,
-  listAlerts,
   listMonitors,
   resolveMonitorNotifyTargets,
   updateMonitorFromRaw,
@@ -90,6 +91,7 @@ import { parseAlertReadFilters } from "./alerts.ts";
 import { sendNotice, validateWebhookUrl } from "./notify.ts";
 import type { AlertNotice } from "./notify.ts";
 import { systemStatus } from "./status.ts";
+import { pageList, readPageRequest } from "./paging.ts";
 import * as schema from "./storage/schema.ts";
 import type { Storage } from "./storage/index.ts";
 import { localDbBytes, invalidateDbSizeCache } from "./storage/db-size.ts";
@@ -185,6 +187,13 @@ function bumpProjectCount(projectId: string, inserted: number): void {
 
   if (cached) cached.value += inserted;
 }
+
+/** The UI's words for monitor kinds, so a table search finds "spike" or "silence". */
+const MONITOR_KIND_WORDS: Record<MonitorKind, string> = {
+  match: "instant match",
+  count_above: "spike",
+  count_below: "silence",
+};
 
 function clampInt(value: string | undefined, fallback: number, min: number, max: number): number {
   if (value === undefined) return fallback;
@@ -403,15 +412,19 @@ export function registerRoutes(
             .from(schema.projects)
             .orderBy(schema.projects.id);
 
-    return c.json({
-      projects: rows.map((r) => ({
+    const page = pageList(
+      rows.map((r) => ({
         id: r.id,
         name: r.name,
         slug: r.slug,
         createdAt: Number(r.createdAt),
         canClearLogs: Boolean(r.canClearLogs),
       })),
-    });
+      readPageRequest((name) => c.req.query(name)),
+      (project) => [project.name, project.slug],
+    );
+
+    return c.json({ projects: page.items, total: page.total });
   });
 
   app.post("/v1/projects", async (c) => {
@@ -562,7 +575,13 @@ export function registerRoutes(
 
     if (denied) return denied;
 
-    return c.json({ users: await listUsers(storage) });
+    const page = pageList(
+      await listUsers(storage),
+      readPageRequest((name) => c.req.query(name)),
+      (u) => [u.email, u.name, u.role, u.disabled ? "disabled" : "active"],
+    );
+
+    return c.json({ users: page.items, total: page.total });
   });
 
   app.post("/v1/users", async (c) => {
@@ -805,7 +824,20 @@ export function registerRoutes(
       return c.json({ error: "project not found" }, 404);
     }
 
-    return c.json({ keys: await listApiKeys(storage, projectId) });
+    // `type` splits the UI's application and MCP key tables.
+    const type = c.req.query("type");
+
+    const keys = (await listApiKeys(storage, projectId)).filter(
+      (key) => (type !== "api" && type !== "mcp") || key.keyType === type,
+    );
+
+    const page = pageList(
+      keys,
+      readPageRequest((name) => c.req.query(name)),
+      (key) => [key.name, key.prefix, key.createdByEmail, ...key.scopes],
+    );
+
+    return c.json({ keys: page.items, total: page.total });
   });
 
   app.post("/v1/projects/:id/keys", async (c) => {
@@ -1013,8 +1045,8 @@ export function registerRoutes(
       .where(eq(schema.projectMembers.projectId, projectId))
       .orderBy(schema.user.email);
 
-    return c.json({
-      members: rows
+    const page = pageList(
+      rows
         .filter((r) => r.role !== "admin")
         .map((r) => ({
           userId: String(r.userId),
@@ -1024,7 +1056,11 @@ export function registerRoutes(
           canClearLogs: Boolean(r.canClearLogs),
           addedAt: Number(r.addedAt),
         })),
-    });
+      readPageRequest((name) => c.req.query(name)),
+      (m) => [m.email, m.name, m.role, m.canClearLogs ? "can clear logs" : null],
+    );
+
+    return c.json({ members: page.items, total: page.total });
   });
 
   app.post("/v1/projects/:id/members", async (c) => {
@@ -1965,7 +2001,34 @@ export function registerRoutes(
     const projectId = await resolveProjectId(c, storage);
 
     if (projectId instanceof Response) return projectId;
-    const monitors = await listMonitors(storage, projectId);
+
+    const page = pageList(
+      await listMonitors(storage, projectId),
+      readPageRequest((name) => c.req.query(name)),
+      (m) => [
+        m.name,
+        m.query,
+        m.kind,
+        MONITOR_KIND_WORDS[m.kind],
+        m.enabled ? "enabled" : "paused",
+        ...m.resolvedChannels.map((channel) => channel.name),
+        ...m.channels.map((channel) => channel.type),
+      ],
+    );
+
+    const monitors = page.items;
+
+    const alertStates = await alertStateByMonitor(
+      storage,
+      monitors.map((m) => m.id),
+    );
+
+    const withAlerts = <T extends { id: string }>(m: T) => ({
+      ...m,
+      lastAlertAt: alertStates.get(m.id)?.lastAlertAt ?? null,
+      firing: alertStates.get(m.id)?.firing ?? false,
+    });
+
     const authInfo = getAuth(c);
     // Webhook URLs are bearer secrets and engine errors may name internal
     // hosts: only administrators who manage shared channels see them. Other
@@ -1974,17 +2037,20 @@ export function registerRoutes(
 
     return c.json({
       monitors: canSeeChannels
-        ? monitors
-        : monitors.map((m) => ({
-            ...m,
-            channels: m.channels.map((ch) => ({ type: ch.type, url: "hidden" })),
-            resolvedChannels: m.resolvedChannels.map((channel) => ({
-              ...channel,
-              health: { ...channel.health, error: null },
-            })),
-            lastError: null,
-            lastErrorAt: null,
-          })),
+        ? monitors.map(withAlerts)
+        : monitors.map((m) =>
+            withAlerts({
+              ...m,
+              channels: m.channels.map((ch) => ({ type: ch.type, url: "hidden" })),
+              resolvedChannels: m.resolvedChannels.map((channel) => ({
+                ...channel,
+                health: { ...channel.health, error: null },
+              })),
+              lastError: null,
+              lastErrorAt: null,
+            }),
+          ),
+      total: page.total,
     });
   });
 
@@ -2226,7 +2292,16 @@ export function registerRoutes(
 
     if (parsed.filters.to !== null) alertFilters.to = parsed.filters.to;
 
-    const alerts = await listAlerts(storage, limit, projectId, alertFilters);
+    // Offset paging for the UI's alert table; `q` searches monitor name,
+    // summary, and state (never delivery errors).
+    const offset = clampInt(c.req.query("offset"), 0, 0, 1_000_000);
+
+    const { alerts, total } = await pageAlerts(storage, projectId, alertFilters, {
+      limit,
+      offset,
+      q: c.req.query("q"),
+    });
+
     const authInfo = getAuth(c);
     // Delivery errors can name internal endpoints; only administrators see even
     // the sanitized text. Monitor writers and machine keys get null.
@@ -2235,6 +2310,7 @@ export function registerRoutes(
 
     return c.json({
       alerts: alerts.map((alert) => alertForAuth(alert, canSeeErrors, canSeeSamples)),
+      total,
     });
   });
 

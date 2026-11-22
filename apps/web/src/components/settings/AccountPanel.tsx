@@ -1,22 +1,95 @@
 import { useState } from "react";
+import { KeyRoundIcon } from "lucide-react";
 import { toast } from "sonner";
 import { changePassword } from "../../api";
 import { useApp } from "../../app-context";
 import { passwordProblem } from "../../lib/password";
+import type { UserRole } from "../../types";
 import ErrorAlert from "../ErrorAlert";
 import PasswordInput from "../PasswordInput";
 import PasswordRequirements from "../PasswordRequirements";
+import SettingsRow from "../SettingsRow";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, FieldLabel } from "@/components/ui/field";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+
+const ROLE_HINTS: Record<UserRole, string> = {
+  admin: "Every project, users, backups, and notification channels.",
+  member: "Logs, monitors, and keys in the projects you're assigned.",
+  viewer: "Read-only access to the projects you're assigned.",
+};
 
 export default function AccountPanel() {
   const { user } = useApp();
+  const [passwordOpen, setPasswordOpen] = useState(false);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Card>
+        <CardHeader>
+          <CardTitle>Profile</CardTitle>
+          <CardDescription>The signed-in user for this Kinglet instance.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <SettingsRow label="email">
+            <span className="break-all font-mono text-xs text-mist-dim">{user.email}</span>
+          </SettingsRow>
+          <SettingsRow label="name">
+            <span className="font-mono text-xs text-mist-dim">{user.name || "—"}</span>
+          </SettingsRow>
+          <SettingsRow label="role" description={ROLE_HINTS[user.role]}>
+            <Badge
+              variant={user.role === "admin" ? "default" : "outline"}
+              className="text-[10px] normal-case tracking-normal"
+            >
+              {user.role}
+            </Badge>
+          </SettingsRow>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Security</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SettingsRow
+            label="password"
+            description="Changing it signs out your other sessions. You need the current one."
+          >
+            <Button variant="outline" size="sm" onClick={() => setPasswordOpen(true)}>
+              <KeyRoundIcon data-icon="inline-start" />
+              change password
+            </Button>
+          </SettingsRow>
+        </CardContent>
+      </Card>
+
+      <Dialog open={passwordOpen} onOpenChange={setPasswordOpen}>
+        <DialogContent className="sm:max-w-md">
+          {passwordOpen && <PasswordForm onDone={() => setPasswordOpen(false)} />}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+/** Mounted fresh each time the dialog opens, so nothing typed lingers. */
+function PasswordForm({ onDone }: { onDone: () => void }) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const nextProblem = passwordProblem(next);
 
   const submit = async (): Promise<void> => {
@@ -34,103 +107,76 @@ export default function AccountPanel() {
       return;
     }
 
+    setSaving(true);
+
     try {
       await changePassword(current, next);
-      setError(null);
-      setCurrent("");
-      setNext("");
-      setConfirm("");
       toast.success("Password updated");
+      onDone();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
-    <div className="flex flex-col gap-3">
-      <Card>
-        <CardHeader>
-          <CardTitle>Account</CardTitle>
-          <CardDescription>The signed-in user for this Kinglet instance.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <dl className="grid items-start gap-x-6 gap-y-3 sm:grid-cols-[5rem_1fr]">
-            <dt className="font-mono text-[10px] text-mist-faint">email</dt>
-            <dd className="break-all font-mono text-xs text-mist">{user.email}</dd>
-
-            <dt className="font-mono text-[10px] text-mist-faint">role</dt>
-            <dd>
-              <Badge
-                variant={user.role === "admin" ? "default" : "outline"}
-                className="text-[10px] normal-case tracking-normal"
-              >
-                {user.role}
-              </Badge>
-            </dd>
-
-            <dt className="font-mono text-[10px] text-mist-faint">name</dt>
-            <dd className="font-mono text-xs text-mist">{user.name || "—"}</dd>
-          </dl>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Change password</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form
-            className="grid gap-3 sm:grid-cols-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submit();
-            }}
-          >
-            <Field>
-              <FieldLabel htmlFor="current-password">current</FieldLabel>
-              <PasswordInput
-                id="current-password"
-                value={current}
-                onChange={(e) => setCurrent(e.target.value)}
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="new-password">new</FieldLabel>
-              <PasswordInput
-                id="new-password"
-                value={next}
-                onChange={(e) => setNext(e.target.value)}
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="confirm-password">confirm</FieldLabel>
-              <PasswordInput
-                id="confirm-password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-              />
-              {confirm && next !== confirm && (
-                <p className="font-mono text-[10px] text-coral">passwords don&apos;t match</p>
-              )}
-            </Field>
-            <div className="sm:col-span-3">
-              <PasswordRequirements value={next} />
-            </div>
-            <div className="sm:col-span-3">
-              <ErrorAlert error={error} />
-            </div>
-            <div className="sm:col-span-3">
-              <Button
-                type="submit"
-                className="shadow-none hover:translate-y-0 hover:shadow-none"
-                disabled={!current || nextProblem !== null || next !== confirm}
-              >
-                update password
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-    </div>
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void submit();
+      }}
+    >
+      <DialogHeader>
+        <DialogTitle>Change password</DialogTitle>
+        <DialogDescription>Enter your current password, then the new one twice.</DialogDescription>
+      </DialogHeader>
+      <FieldGroup className="mt-4">
+        <Field>
+          <FieldLabel htmlFor="current-password">current</FieldLabel>
+          <PasswordInput
+            id="current-password"
+            value={current}
+            autoComplete="current-password"
+            onChange={(e) => setCurrent(e.target.value)}
+          />
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="new-password">new</FieldLabel>
+          <PasswordInput
+            id="new-password"
+            value={next}
+            autoComplete="new-password"
+            onChange={(e) => setNext(e.target.value)}
+          />
+          <PasswordRequirements value={next} />
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="confirm-password">confirm</FieldLabel>
+          <PasswordInput
+            id="confirm-password"
+            value={confirm}
+            autoComplete="new-password"
+            onChange={(e) => setConfirm(e.target.value)}
+          />
+          {confirm && next !== confirm && (
+            <p className="font-mono text-[10px] text-coral">passwords don&apos;t match</p>
+          )}
+        </Field>
+        <ErrorAlert error={error} />
+      </FieldGroup>
+      <DialogFooter className="mt-4">
+        <Button variant="outline" size="sm" type="button" onClick={onDone}>
+          Cancel
+        </Button>
+        <Button
+          type="submit"
+          size="sm"
+          disabled={saving || !current || nextProblem !== null || next !== confirm}
+        >
+          update password
+        </Button>
+      </DialogFooter>
+    </form>
   );
 }

@@ -1,7 +1,7 @@
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { ChevronDownIcon, LogOutIcon, SettingsIcon } from "lucide-react";
-import { useApp } from "../app-context";
+import { hasPermission, useApp } from "../app-context";
 import Logo from "./Logo";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -23,10 +23,27 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export default function SiteHeader({ children }: { children?: ReactNode }) {
-  const { user, projects, currentProjectId, setProjectId, signOut } = useApp();
+  const { user, projects, currentProjectId, setProjectId, signOut, permissions } = useApp();
   const navigate = useNavigate();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const onProjectSettings = pathname.startsWith("/projects/");
+  const currentProject = projects.find((project) => project.id === currentProjectId);
+
+  const canManageProject =
+    hasPermission(permissions, "projects.write") ||
+    hasPermission(permissions, "keys.read") ||
+    currentProject?.canClearLogs === true;
+
+  const switchProject = (id: string): void => {
+    setProjectId(id);
+
+    // On a project's settings, switching follows to the other project's settings.
+    if (onProjectSettings) void navigate({ to: "/projects/$projectId", params: { projectId: id } });
+  };
+
   const initials = (user.name.trim() || user.email).slice(0, 2).toUpperCase();
 
   return (
@@ -62,21 +79,47 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
       </nav>
 
       {projects.length > 0 ? (
-        <Select value={String(currentProjectId)} onValueChange={(value) => setProjectId(value)}>
-          <SelectTrigger size="sm" className="min-w-28" aria-label="Current project">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectLabel>Project</SelectLabel>
-              {projects.map((project) => (
-                <SelectItem key={project.id} value={String(project.id)}>
-                  {project.name}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
+        <div className="flex items-stretch">
+          <Select value={String(currentProjectId)} onValueChange={switchProject}>
+            <SelectTrigger
+              size="sm"
+              // On project settings the picker lights up with the cog as one control.
+              data-active={onProjectSettings}
+              className={`min-w-28 data-[active=true]:border-gold/30 data-[active=true]:bg-gold/[0.08] data-[active=true]:text-gold data-[active=true]:[&_svg]:text-gold/70 ${canManageProject ? "rounded-r-none" : ""}`}
+              aria-label="Current project"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectLabel>Project</SelectLabel>
+                {projects.map((project) => (
+                  <SelectItem key={project.id} value={String(project.id)}>
+                    {project.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          {canManageProject && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Link
+                  to="/projects/$projectId"
+                  params={{ projectId: currentProjectId }}
+                  activeOptions={{ includeSearch: false }}
+                  aria-label={`Settings for ${currentProject?.name ?? "this project"}`}
+                  className="flex w-7 items-center justify-center rounded-r-[5px] border border-l-0 border-white/[0.08] bg-ink-900 text-mist-faint transition-colors hover:bg-gold/[0.05] hover:text-gold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold/30 aria-[current=page]:border-gold/30 aria-[current=page]:bg-gold/[0.08] aria-[current=page]:text-gold"
+                  // Styled from aria-current so the lit state outranks the base colors.
+                  activeProps={{ "aria-current": "page" }}
+                >
+                  <SettingsIcon className="size-3.5" />
+                </Link>
+              </TooltipTrigger>
+              <TooltipContent>Project settings</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
       ) : (
         <span className="font-mono text-[10px] text-mist-faint">no project</span>
       )}
@@ -128,7 +171,7 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
             <DropdownMenuGroup>
               <DropdownMenuItem
                 className="px-2 py-2"
-                onSelect={() => void navigate({ to: "/account" })}
+                onSelect={() => void navigate({ to: "/settings", search: { tab: "account" } })}
               >
                 <SettingsIcon />
                 Account settings

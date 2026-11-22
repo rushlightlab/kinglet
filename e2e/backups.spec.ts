@@ -22,7 +22,10 @@ test("backups show the unconfigured setup state", async ({ page }) => {
 
   await expect(page.getByText("Connect a bucket", { exact: true })).toBeVisible();
   await expect(page.getByText("Snapshots stay off until the S3 settings")).toBeVisible();
-  await expect(page.getByText("missing right now")).toBeVisible();
-  await expect(page.getByText("KINGLET_BACKUP_S3_BUCKET", { exact: true }).first()).toBeVisible();
+  // Each required variable is listed once, marked missing until the server has it.
+  const bucketVar = page.getByRole("listitem").filter({ hasText: "KINGLET_BACKUP_S3_BUCKET" });
+
+  await expect(bucketVar).toHaveCount(1);
+  await expect(bucketVar).toContainText("missing");
   await expect(page.getByText("Connect a bucket", { exact: true })).toHaveCount(1);
 });

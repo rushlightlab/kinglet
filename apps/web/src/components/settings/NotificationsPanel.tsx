@@ -3,6 +3,7 @@ import {
   BellIcon,
   MessageCircleIcon,
   MessageSquareIcon,
+  MoreHorizontalIcon,
   PencilIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -21,6 +22,7 @@ import {
   testNotificationChannel,
   updateNotificationChannel,
 } from "../../api";
+import type { PageQuery } from "../../api";
 import { hasPermissionOrAdmin, useApp } from "../../app-context";
 import { formatRelativeTime, maskWebhookUrl, redactWebhookUrls } from "../../format";
 import type {
@@ -33,6 +35,11 @@ import type {
   NotificationDelivery,
 } from "../../types";
 import ErrorAlert from "../ErrorAlert";
+import SkeletonRows from "../SkeletonRows";
+import TablePagination from "../TablePagination";
+import TableSearch, { NoMatchesRow } from "../TableSearch";
+import { fadeWhileLoading, useServerTable } from "../../server-table";
+import type { TablePage } from "../../server-table";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -46,9 +53,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -60,6 +67,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -151,12 +165,6 @@ function findHealth(
   return match?.health ?? null;
 }
 
-function channelName(channels: NotificationChannel[], id: string): string {
-  const match = channels.find((channel) => channel.id === id);
-
-  return match?.name ?? `channel ${id.slice(0, 8)}`;
-}
-
 function healthVariant(health: NotificationChannelHealth): "ghost" | "outline" | "destructive" {
   const status = health.status.toLowerCase();
 
@@ -179,14 +187,24 @@ function healthLabel(health: NotificationChannelHealth): string {
   }
 
   if (status === "failed" || status === "error") {
-    return health.lastDeliveryAt
-      ? `last delivery failed ${formatRelativeTime(health.lastDeliveryAt)}`
-      : "last delivery failed";
+    return health.lastDeliveryAt ? `failed ${formatRelativeTime(health.lastDeliveryAt)}` : "failed";
   }
 
-  if (!health.lastDeliveryAt) return "no deliveries yet";
+  if (!health.lastDeliveryAt) return "none yet";
 
   return `${status} ${formatRelativeTime(health.lastDeliveryAt)}`;
+}
+
+function actionLabel(action: NotificationAction): string {
+  return ACTION_OPTIONS.find((option) => option.value === action)?.label ?? action;
+}
+
+function testText(channel: NotificationChannel): string {
+  if (!channel.lastTestAt) return "Never tested. Send a test from the row menu.";
+  const status = channel.lastTestStatus ?? "unknown";
+  const error = channel.lastTestError ? ` — ${redactWebhookUrls(channel.lastTestError)}` : "";
+
+  return `Last test ${formatRelativeTime(channel.lastTestAt)}: ${status}${error}`;
 }
 
 function deliveryVariant(status: string): "ghost" | "outline" | "destructive" {
@@ -197,14 +215,23 @@ function deliveryVariant(status: string): "ghost" | "outline" | "destructive" {
   return "outline";
 }
 
+async function loadChannelPage(page: PageQuery): Promise<TablePage<NotificationChannel>> {
+  const result = await fetchNotificationChannels(page);
+
+  return { rows: result.channels, total: result.total };
+}
+
+async function loadDeliveryPage(page: PageQuery): Promise<TablePage<NotificationDelivery>> {
+  const result = await fetchNotificationDeliveries(page);
+
+  return { rows: result.deliveries, total: result.total };
+}
+
 export default function NotificationsPanel() {
   const { user, permissions } = useApp();
   const canWrite = hasPermissionOrAdmin(user.role, permissions, "notifications.write");
 
-  const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [summary, setSummary] = useState<NotificationChannelSummary[]>([]);
-  const [deliveries, setDeliveries] = useState<NotificationDelivery[]>([]);
-  const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -212,38 +239,33 @@ export default function NotificationsPanel() {
   const [editing, setEditing] = useState<NotificationChannel | null>(null);
   const [pendingDelete, setPendingDelete] = useState<NotificationChannel | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const list = await fetchNotificationChannels();
-      // Summary and deliveries are secondary; an unavailable endpoint must not
-      // hide the channel list. Failures degrade to an empty section.
-      const health = await fetchNotificationChannelSummary().catch(() => ({ channels: [] }));
-      const recent = await fetchNotificationDeliveries(100).catch(() => ({ deliveries: [] }));
+  const channelTable = useServerTable("channels", loadChannelPage);
 
-      setChannels(list.channels);
-      setSummary(health.channels);
-      setDeliveries(recent.deliveries);
-      setError(null);
-    } catch (err) {
-      setError(redactWebhookUrls(err instanceof Error ? err.message : String(err)));
-    } finally {
-      setLoading(false);
-    }
+  const { reload: reloadChannels } = channelTable;
+  const deliveryTable = useServerTable("deliveries", loadDeliveryPage);
+  const { reload: reloadDeliveries } = deliveryTable;
+
+  // Health is secondary; an unavailable endpoint leaves the column blank.
+  const loadSummary = useCallback(async () => {
+    const health = await fetchNotificationChannelSummary().catch(() => ({ channels: [] }));
+
+    setSummary(health.channels);
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadSummary();
+  }, [loadSummary]);
+
+  const load = useCallback(async () => {
+    await Promise.all([reloadChannels(), reloadDeliveries(), loadSummary()]);
+  }, [reloadChannels, reloadDeliveries, loadSummary]);
 
   const toggleChannel = async (channel: NotificationChannel, enabled: boolean): Promise<void> => {
     setBusyId(channel.id);
 
     try {
-      const result = await updateNotificationChannel(channel.id, { enabled });
-
-      setChannels((prev) =>
-        prev.map((item) => (item.id === channel.id ? { ...item, ...result.channel } : item)),
-      );
+      await updateNotificationChannel(channel.id, { enabled });
+      await reloadChannels();
       toast.success(enabled ? "Channel enabled" : "Channel disabled", {
         description: channel.name,
       });
@@ -310,45 +332,16 @@ export default function NotificationsPanel() {
     }
   };
 
+  const noChannelsYet =
+    channelTable.loaded && channelTable.total === 0 && channelTable.activeQuery === "";
+
+  const loading = !channelTable.loaded;
+
   return (
     <div className="flex flex-col gap-3">
-      <ErrorAlert error={error} />
+      <ErrorAlert error={error ?? channelTable.error} />
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
-          {channels.length} channel{channels.length === 1 ? "" : "s"}
-        </span>
-        <div className="flex items-center gap-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="chip"
-                size="icon-xs"
-                onClick={() => void load()}
-                aria-label="Refresh"
-              >
-                <RefreshCwIcon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Refresh channels and deliveries</TooltipContent>
-          </Tooltip>
-          {canWrite && (
-            <Button size="sm" onClick={openCreate}>
-              <PlusIcon data-icon="inline-start" />
-              new channel
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {loading && (
-        <div className="flex items-center gap-2 py-6 font-mono text-[11px] text-mist-faint">
-          <Spinner />
-          loading channels…
-        </div>
-      )}
-
-      {!loading && channels.length === 0 && (
+      {noChannelsYet ? (
         <Card className="items-center px-4 py-10 text-center">
           <BellIcon className="size-5 text-gold/70" />
           <p className="mt-2 font-mono text-xs text-mist-dim">No notification channels yet.</p>
@@ -363,107 +356,188 @@ export default function NotificationsPanel() {
             </Button>
           )}
         </Card>
+      ) : (
+        <Card className="gap-0 py-0">
+          <div className="flex flex-wrap items-center gap-3 border-b border-white/[0.06] px-4 py-3">
+            <TableSearch
+              label="Search channels"
+              value={channelTable.query}
+              onChange={channelTable.setQuery}
+            />
+            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
+              {loading
+                ? "loading channels…"
+                : `${channelTable.total} ${channelTable.activeQuery === "" ? "" : "matching "}channel${channelTable.total === 1 ? "" : "s"}`}
+            </span>
+            <div className="ml-auto flex items-center gap-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="chip"
+                    size="icon-xs"
+                    onClick={() => void load()}
+                    aria-label="Refresh"
+                  >
+                    <RefreshCwIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Refresh channels and deliveries</TooltipContent>
+              </Tooltip>
+              {/* Hidden while loading: an empty list swaps in its own first-channel button. */}
+              {canWrite && !loading && (
+                <Button size="sm" onClick={openCreate}>
+                  <PlusIcon data-icon="inline-start" />
+                  new channel
+                </Button>
+              )}
+            </div>
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="w-12 pl-4">
+                  <span className="sr-only">enabled</span>
+                </TableHead>
+                <TableHead>channel</TableHead>
+                <TableHead className="hidden md:table-cell">destination</TableHead>
+                <TableHead className="hidden lg:table-cell">sends</TableHead>
+                <TableHead>last delivery</TableHead>
+                <TableHead className="w-10 pr-4">
+                  <span className="sr-only">actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody className={fadeWhileLoading(channelTable)}>
+              {loading && <SkeletonRows columns={6} label="Loading channels…" />}
+              {channelTable.rows.map((channel) => {
+                const Icon = CHANNEL_ICONS[channel.type];
+                const health = findHealth(summary, channel.id);
+                const busy = busyId === channel.id;
+
+                return (
+                  <TableRow
+                    key={channel.id}
+                    className={channel.enabled ? undefined : "text-mist-faint"}
+                  >
+                    <TableCell className="pl-4">
+                      <Switch
+                        checked={channel.enabled}
+                        disabled={!canWrite || busy}
+                        onCheckedChange={(checked) => void toggleChannel(channel, checked)}
+                        aria-label={
+                          channel.enabled ? `Disable ${channel.name}` : `Enable ${channel.name}`
+                        }
+                      />
+                    </TableCell>
+                    <TableCell className="max-w-56">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <Icon className="size-3.5 shrink-0 text-gold/80" aria-hidden="true" />
+                        {canWrite ? (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void openEdit(channel)}
+                            className={`truncate text-left font-medium hover:text-gold hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gold/40 ${channel.enabled ? "text-mist" : "text-mist-dim"}`}
+                          >
+                            {channel.name}
+                          </button>
+                        ) : (
+                          <span className="truncate font-medium">{channel.name}</span>
+                        )}
+                        {!channel.enabled && <Badge variant="outline">disabled</Badge>}
+                      </div>
+                      <span className="mt-0.5 block text-[10px] text-mist-faint">
+                        {channel.type}
+                      </span>
+                    </TableCell>
+                    <TableCell className="hidden max-w-52 md:table-cell">
+                      <span className="block truncate text-[11px] text-mist-dim">
+                        {maskWebhookUrl(channel.url)}
+                      </span>
+                    </TableCell>
+                    <TableCell className="hidden whitespace-nowrap lg:table-cell">
+                      {channel.actions.length === 0 ? (
+                        <span className="text-[11px] text-mist-faint">monitor alerts</span>
+                      ) : (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="text-[11px] text-mist-dim underline decoration-dotted underline-offset-2">
+                              alerts + {channel.actions.length} event
+                              {channel.actions.length === 1 ? "" : "s"}
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">
+                            Monitor alerts, plus: {channel.actions.map(actionLabel).join(", ")}
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {health ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge variant={healthVariant(health)}>{healthLabel(health)}</Badge>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">{testText(channel)}</TooltipContent>
+                        </Tooltip>
+                      ) : (
+                        <span className="text-[10px] text-mist-faint">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="pr-4 text-right">
+                      {busy ? (
+                        <Spinner className="ml-auto" />
+                      ) : (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              disabled={!canWrite}
+                              aria-label={`Actions for ${channel.name}`}
+                            >
+                              <MoreHorizontalIcon />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onSelect={() => void runTest(channel)}>
+                              <SendIcon />
+                              Send test notification
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => void openEdit(channel)}>
+                              <PencilIcon />
+                              Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant="destructive"
+                              onSelect={() => setPendingDelete(channel)}
+                            >
+                              <Trash2Icon />
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {!loading && channelTable.total === 0 && (
+                <NoMatchesRow
+                  columns={6}
+                  query={channelTable.activeQuery}
+                  noun="channels"
+                  onClear={() => channelTable.setQuery("")}
+                />
+              )}
+            </TableBody>
+          </Table>
+          <TablePagination table={channelTable} noun="channels" />
+        </Card>
       )}
 
-      <div className="flex flex-col gap-3">
-        {channels.map((channel) => {
-          const Icon = CHANNEL_ICONS[channel.type];
-          const health = findHealth(summary, channel.id);
-          const busy = busyId === channel.id;
-
-          return (
-            <Card key={channel.id} className={channel.enabled ? undefined : "opacity-60"}>
-              <CardHeader>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 flex-col gap-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Icon className="size-3.5 text-gold/80" aria-hidden="true" />
-                      <CardTitle className="truncate">{channel.name}</CardTitle>
-                      <Badge variant="secondary">{channel.type}</Badge>
-                      {!channel.enabled && <Badge variant="outline">disabled</Badge>}
-                      {health && (
-                        <Badge variant={healthVariant(health)}>{healthLabel(health)}</Badge>
-                      )}
-                    </div>
-                    <CardDescription className="font-mono text-[10px]">
-                      {maskWebhookUrl(channel.url)}
-                    </CardDescription>
-                  </div>
-                  <Switch
-                    checked={channel.enabled}
-                    disabled={!canWrite || busy}
-                    onCheckedChange={(checked) => void toggleChannel(channel, checked)}
-                    aria-label={
-                      channel.enabled ? `Disable ${channel.name}` : `Enable ${channel.name}`
-                    }
-                  />
-                </div>
-              </CardHeader>
-              <CardContent className="flex flex-wrap items-center gap-2">
-                {channel.actions.length === 0 ? (
-                  <span className="font-mono text-[10px] text-mist-faint">
-                    no system events — monitor alerts only
-                  </span>
-                ) : (
-                  channel.actions.map((action) => (
-                    <Badge key={action} variant="outline">
-                      {action}
-                    </Badge>
-                  ))
-                )}
-                <span
-                  className="ml-auto font-mono text-[10px] text-mist-faint"
-                  title={
-                    channel.lastTestError ? redactWebhookUrls(channel.lastTestError) : undefined
-                  }
-                >
-                  {channel.lastTestAt
-                    ? `last test ${formatRelativeTime(channel.lastTestAt)} · ${
-                        channel.lastTestStatus ?? "unknown"
-                      }`
-                    : "never tested"}
-                </span>
-              </CardContent>
-              <CardFooter className="gap-2">
-                <Button
-                  variant="chip"
-                  size="xs"
-                  disabled={!canWrite || busy}
-                  onClick={() => void runTest(channel)}
-                >
-                  {busy ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : (
-                    <SendIcon data-icon="inline-start" />
-                  )}
-                  test
-                </Button>
-                <Button
-                  variant="chip"
-                  size="xs"
-                  disabled={!canWrite || busy}
-                  onClick={() => void openEdit(channel)}
-                >
-                  <PencilIcon data-icon="inline-start" />
-                  edit
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="xs"
-                  className="ml-auto"
-                  disabled={!canWrite || busy}
-                  onClick={() => setPendingDelete(channel)}
-                >
-                  <Trash2Icon data-icon="inline-start" />
-                  delete
-                </Button>
-              </CardFooter>
-            </Card>
-          );
-        })}
-      </div>
-
-      {channels.length > 0 && (
+      {!noChannelsYet && (
         <div className="mt-8">
           <div className="k-kicker">
             <span className="text-gold">/</span> recent deliveries
@@ -472,28 +546,40 @@ export default function NotificationsPanel() {
             <CardHeader>
               <CardTitle>Delivery history</CardTitle>
               <CardDescription>
-                The last 100 attempts across every channel. Failed deliveries are not retried.
+                Every attempt across every channel, newest first. Failed deliveries are not retried.
               </CardDescription>
+              {(deliveryTable.total > 0 || deliveryTable.activeQuery !== "") && (
+                <CardAction className="row-span-1 self-center">
+                  <TableSearch
+                    label="Search deliveries"
+                    value={deliveryTable.query}
+                    onChange={deliveryTable.setQuery}
+                  />
+                </CardAction>
+              )}
             </CardHeader>
             <CardContent>
               <Table>
                 <TableHeader>
-                  <TableRow>
+                  <TableRow className="hover:bg-transparent">
                     <TableHead>when</TableHead>
                     <TableHead>channel</TableHead>
                     <TableHead>event</TableHead>
                     <TableHead>status</TableHead>
-                    <TableHead className="hidden md:table-cell">error</TableHead>
+                    <TableHead className="hidden w-full md:table-cell">error</TableHead>
                   </TableRow>
                 </TableHeader>
-                <TableBody>
-                  {deliveries.map((delivery) => (
+                <TableBody className={fadeWhileLoading(deliveryTable)}>
+                  {!deliveryTable.loaded && (
+                    <SkeletonRows columns={5} label="Loading deliveries…" />
+                  )}
+                  {deliveryTable.rows.map((delivery) => (
                     <TableRow key={delivery.id}>
                       <TableCell className="whitespace-nowrap text-mist-faint">
                         {formatRelativeTime(delivery.createdAt)}
                       </TableCell>
                       <TableCell className="max-w-32 truncate text-mist-dim">
-                        {channelName(channels, delivery.channelId)}
+                        {delivery.channelName ?? `channel ${delivery.channelId.slice(0, 8)}`}
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-mist-dim">
                         {delivery.event}
@@ -501,7 +587,7 @@ export default function NotificationsPanel() {
                       <TableCell>
                         <Badge variant={deliveryVariant(delivery.status)}>{delivery.status}</Badge>
                       </TableCell>
-                      <TableCell className="hidden max-w-[16rem] md:table-cell">
+                      <TableCell className="hidden w-full max-w-0 md:table-cell">
                         {delivery.error ? (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -519,16 +605,29 @@ export default function NotificationsPanel() {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {deliveries.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={5} className="py-6 text-center text-mist-faint">
-                        No deliveries yet. Test a channel to see one here.
-                      </TableCell>
-                    </TableRow>
-                  )}
+                  {deliveryTable.loaded &&
+                    deliveryTable.total === 0 &&
+                    deliveryTable.activeQuery === "" && (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell colSpan={5} className="py-6 text-center text-mist-faint">
+                          No deliveries yet. Test a channel to see one here.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  {deliveryTable.loaded &&
+                    deliveryTable.total === 0 &&
+                    deliveryTable.activeQuery !== "" && (
+                      <NoMatchesRow
+                        columns={5}
+                        query={deliveryTable.activeQuery}
+                        noun="deliveries"
+                        onClear={() => deliveryTable.setQuery("")}
+                      />
+                    )}
                 </TableBody>
               </Table>
             </CardContent>
+            <TablePagination table={deliveryTable} noun="deliveries" className="-mb-4" />
           </Card>
         </div>
       )}

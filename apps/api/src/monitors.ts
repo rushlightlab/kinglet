@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { subscribeEvents } from "./bus.ts";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.ts";
@@ -15,6 +15,7 @@ import type { MonitorChannelData } from "./notifications/store.ts";
 import { safeErrorMessage } from "./notifications/types.ts";
 import type { MonitorChannelSummary } from "./notifications/types.ts";
 import { systemStatus } from "./status.ts";
+import { tableSearchCondition } from "./table-search.ts";
 import { localDbBytes } from "./storage/db-size.ts";
 import * as schema from "./storage/schema.ts";
 import type { Storage } from "./storage/index.ts";
@@ -268,7 +269,8 @@ export async function listMonitors(storage: Storage, projectId?: string): Promis
     .select()
     .from(schema.monitors)
     .where(projectId === undefined ? undefined : eq(schema.monitors.projectId, projectId))
-    .orderBy(asc(schema.monitors.id));
+    // Newest first, so a monitor you just created is on the first page.
+    .orderBy(desc(schema.monitors.id));
 
   const channelData = await resolveMonitorChannelData(
     storage,
@@ -529,12 +531,7 @@ function mapAlertRow(row: AlertQueryRow): AlertRecord {
   };
 }
 
-export async function listAlerts(
-  storage: Storage,
-  limit: number,
-  projectId: string,
-  filters: AlertListFilters = {},
-): Promise<AlertRecord[]> {
+function alertConditions(projectId: string, filters: AlertListFilters): SQL[] {
   const conditions: SQL[] = [eq(schema.monitors.projectId, projectId)];
 
   if (filters.monitorId !== undefined) {
@@ -547,15 +544,92 @@ export async function listAlerts(
 
   if (filters.to !== undefined) conditions.push(lte(schema.alerts.firedAt, filters.to));
 
+  return conditions;
+}
+
+export interface MonitorAlertState {
+  /** When the monitor's newest alert fired. */
+  lastAlertAt: number;
+  /** The newest alert is still open. */
+  firing: boolean;
+}
+
+/** Each monitor's newest alert, for the monitors table's "last alert" column. */
+export async function alertStateByMonitor(
+  storage: Storage,
+  monitorIds: readonly string[],
+): Promise<Map<string, MonitorAlertState>> {
+  const states = new Map<string, MonitorAlertState>();
+
+  if (monitorIds.length === 0) return states;
+
+  // SQLite fills bare columns from the row that holds max(), so state and
+  // resolved_at come from each monitor's newest alert.
+  const rows = await storage.db
+    .select({
+      monitorId: schema.alerts.monitorId,
+      lastAlertAt: sql<number>`max(${schema.alerts.firedAt})`,
+      state: schema.alerts.state,
+      resolvedAt: schema.alerts.resolvedAt,
+    })
+    .from(schema.alerts)
+    .where(inArray(schema.alerts.monitorId, [...monitorIds]))
+    .groupBy(schema.alerts.monitorId);
+
+  for (const row of rows) {
+    states.set(row.monitorId, {
+      lastAlertAt: Number(row.lastAlertAt),
+      firing: row.state === "fired" && row.resolvedAt === null,
+    });
+  }
+
+  return states;
+}
+
+export interface AlertPage {
+  alerts: AlertRecord[];
+  /** Alerts matching the filters and search, across every page. */
+  total: number;
+}
+
+/**
+ * One page of a project's alerts, newest first. `q` matches the monitor name,
+ * the summary, and the state (fired/resolved); it never searches delivery
+ * errors, which only administrators may read.
+ */
+export async function pageAlerts(
+  storage: Storage,
+  projectId: string,
+  filters: AlertListFilters,
+  page: { limit: number; offset: number; q?: string },
+): Promise<AlertPage> {
+  const conditions = alertConditions(projectId, filters);
+
+  const search = tableSearchCondition(page.q, [
+    schema.monitors.name,
+    schema.alerts.summary,
+    schema.alerts.state,
+  ]);
+
+  if (search) conditions.push(search);
+  const where = and(...conditions);
+
   const rows = await storage.db
     .select(alertSelection)
     .from(schema.alerts)
     .innerJoin(schema.monitors, eq(schema.monitors.id, schema.alerts.monitorId))
-    .where(and(...conditions))
-    .orderBy(desc(schema.alerts.firedAt))
-    .limit(Math.min(500, Math.max(1, limit)));
+    .where(where)
+    .orderBy(desc(schema.alerts.firedAt), desc(schema.alerts.id))
+    .limit(Math.min(500, Math.max(1, page.limit)))
+    .offset(Math.max(0, page.offset));
 
-  return rows.map(mapAlertRow);
+  const totals = await storage.db
+    .select({ n: count() })
+    .from(schema.alerts)
+    .innerJoin(schema.monitors, eq(schema.monitors.id, schema.alerts.monitorId))
+    .where(where);
+
+  return { alerts: rows.map(mapAlertRow), total: Number(totals[0]?.n ?? 0) };
 }
 
 /** One alert by id, scoped through its monitor's project. */

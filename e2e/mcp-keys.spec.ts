@@ -13,7 +13,8 @@ test("an MCP key is shown once with the pinned client config and can be revoked"
   const projectRow = page.getByRole("row").filter({ hasText: DEFAULT_PROJECT_NAME });
 
   await projectRow.getByRole("link", { name: "manage" }).click();
-  await expect(page.getByText(`MCP keys — ${DEFAULT_PROJECT_NAME}`)).toBeVisible();
+  await expect(page.getByRole("heading", { name: `${DEFAULT_PROJECT_NAME}.` })).toBeVisible();
+  await expect(page.getByText("MCP keys", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "new MCP key" }).click();
 

@@ -1,8 +1,10 @@
-import { and, asc, desc, eq, inArray, lt, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, lt, or } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { uuidv7 } from "../auth/ids.ts";
 import { isChannelType } from "../notify.ts";
 import type { ChannelType } from "../notify.ts";
 import * as schema from "../storage/schema.ts";
+import { tableSearchCondition } from "../table-search.ts";
 import type { Storage } from "../storage/index.ts";
 import { isNotificationAction } from "./types.ts";
 import type {
@@ -320,9 +322,46 @@ export async function recordDelivery(storage: Storage, input: DeliveryRecordInpu
   });
 }
 
+export interface DeliveryPage {
+  deliveries: NotificationDelivery[];
+  /** Deliveries matching the search, across every page. */
+  total: number;
+}
+
+/**
+ * One page of the delivery log, newest first. `q` matches the channel name,
+ * event, status, and subject; delivery errors are not searched.
+ */
+export async function pageDeliveryRecords(
+  storage: Storage,
+  page: { limit: number; offset: number; q?: string },
+): Promise<DeliveryPage> {
+  const where = tableSearchCondition(page.q, [
+    schema.notificationChannels.name,
+    schema.notificationDeliveries.event,
+    schema.notificationDeliveries.status,
+    schema.notificationDeliveries.subject,
+  ]);
+
+  const deliveries = await listDeliveryRecords(storage, page.limit, page.offset, where);
+
+  const totals = await storage.db
+    .select({ n: count() })
+    .from(schema.notificationDeliveries)
+    .leftJoin(
+      schema.notificationChannels,
+      eq(schema.notificationChannels.id, schema.notificationDeliveries.channelId),
+    )
+    .where(where);
+
+  return { deliveries, total: Number(totals[0]?.n ?? 0) };
+}
+
 export async function listDeliveryRecords(
   storage: Storage,
   limit: number,
+  offset = 0,
+  where?: SQL,
 ): Promise<NotificationDelivery[]> {
   const rows = await storage.db
     .select({
@@ -341,8 +380,10 @@ export async function listDeliveryRecords(
       schema.notificationChannels,
       eq(schema.notificationChannels.id, schema.notificationDeliveries.channelId),
     )
+    .where(where)
     .orderBy(desc(schema.notificationDeliveries.createdAt), desc(schema.notificationDeliveries.id))
-    .limit(limit);
+    .limit(limit)
+    .offset(Math.max(0, offset));
 
   return rows.map((row) => ({
     id: row.id,

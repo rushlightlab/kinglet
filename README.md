@@ -245,6 +245,15 @@ Event context `before`/`after` default to 5 and cap at 20. `from`/`to` are
 clamped to the last 31 days and 5 minutes of future skew. Per-project event and
 database caps are configurable (see below).
 
+The list routes behind the UI's tables (`/v1/monitors`, `/v1/alerts`,
+`/v1/notifications/channels`, `/v1/notifications/deliveries`, `/v1/users`,
+`/v1/projects`, `/v1/projects/:id/keys`, `/v1/projects/:id/members`, and
+`/v1/backups`) accept `limit`, `offset`, and `q`, and return `total`, the
+number of matching rows across every page. `q` matches rows that contain every
+word, in any order and case; it never searches delivery errors or webhook URLs.
+Without `limit` these routes return every row, except alerts (default 100, max 500) and deliveries (max 100). Keys also take `type=api|mcp`, and monitors
+include `lastAlertAt` and `firing` from their newest alert.
+
 Alert filters and detail return `notifyError` only to administrators and hide
 event-derived text from callers without `logs.read`. When `from`/`to` are
 supplied, the alert window is clamped to 31 days; without bounds, history
