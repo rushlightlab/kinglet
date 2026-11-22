@@ -67,6 +67,20 @@ export interface EventPage {
   nextCursor: number | null;
 }
 
+/** GET /v1/events/clear/preview: what a clear with the same selection deletes. */
+export interface ClearPreview {
+  projectId: string;
+  from?: number;
+  to?: number;
+  q: string;
+  total: number;
+  services: { key: string | null; count: number }[];
+  moreServices: boolean;
+  sample: KingletEvent[];
+  /** True when the clear also deletes the project's archived logs. */
+  archive: boolean;
+}
+
 export type MonitorKind = "match" | "count_above" | "count_below";
 
 export type ChannelType = "webhook" | "discord" | "slack";

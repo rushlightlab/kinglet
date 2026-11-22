@@ -325,6 +325,10 @@ const HISTOGRAM_MAX_POINTS = 500;
  * same totals, roughly 6x faster on a busy day. Turso's MVCC engine runs those
  * hundreds of correlated subqueries an order of magnitude slower than a plain
  * GROUP BY, so it gets the grouped form.
+ *
+ * A search filter (from buildWhere, already scoped to the project and window)
+ * also takes the grouped form: the slices only use the level index, so they
+ * cannot apply arbitrary text or field conditions.
  */
 export async function histogramPoints(
   db: KingletDb,
@@ -333,12 +337,13 @@ export async function histogramPoints(
   from: number,
   to: number,
   bucketMs: number,
+  filter?: SQL,
 ): Promise<HistogramPointRow[]> {
   const start = Math.floor(from / bucketMs) * bucketMs;
 
   const map =
-    engine === "turso-mvcc"
-      ? await groupedHistogram(db, projectId, from, to, bucketMs)
+    filter !== undefined || engine === "turso-mvcc"
+      ? await groupedHistogram(db, projectId, from, to, bucketMs, filter)
       : await sliceHistogram(db, projectId, from, to, bucketMs, start);
 
   const points: HistogramPointRow[] = [];
@@ -358,6 +363,7 @@ async function groupedHistogram(
   from: number,
   to: number,
   bucketMs: number,
+  filter?: SQL,
 ): Promise<Map<number, number[]>> {
   const bucket = sql<number>`(CAST(${schema.events.ts} / ${bucketMs} AS INTEGER) * ${bucketMs})`;
 
@@ -369,6 +375,7 @@ async function groupedHistogram(
         sql`${schema.events.ts} >= ${from}`,
         sql`${schema.events.ts} <= ${to}`,
         eq(schema.events.projectKey, projectKeyOf(projectId)),
+        filter,
       ),
     )
     .groupBy(bucket, schema.events.level);
@@ -488,6 +495,26 @@ export async function deleteByProject(
 
     const result = await db.run(
       sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE project_key = ${projectKeyOf(projectId)}${rangeClause} ORDER BY id LIMIT 10000)`,
+    );
+
+    const changed = Number(result.rowsAffected ?? 0);
+    total += changed;
+
+    if (changed === 0) return total;
+    await yieldToEventLoop();
+  }
+}
+
+/**
+ * Chunked delete of the events matching a buildWhere() condition, which is
+ * always scoped to one project. Yields between chunks like deleteByProject.
+ */
+export async function deleteMatching(db: KingletDb, filter: SQL): Promise<number> {
+  let total = 0;
+
+  for (;;) {
+    const result = await db.run(
+      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ${filter} ORDER BY id LIMIT 10000)`,
     );
 
     const changed = Number(result.rowsAffected ?? 0);

@@ -63,6 +63,10 @@ export function registerEventTools(server: McpServer, client: KingletClient): vo
       description:
         "Search this project's logs with the Kinglet filter grammar, for example: " +
         '`level>=warn service:api "timeout" -healthcheck`. ' +
+        "Free text matches the message; filter structured fields with `field.<key>`: " +
+        "`field.imei:8643…` (equals), `field.status>=500` (numbers), `field.data.rss>250` " +
+        "(nested), `field.error:*` (exists), `-field.reason:dup` (negated). Add `in:fields` or " +
+        "`in:all` to make free text also search field keys and values. " +
         "Times are epoch milliseconds; the API clamps the window to 31 days and the filter to " +
         "500 characters / 32 terms. Returns newest first. Default 50 rows, max 200. " +
         "Use nextCursor with cursor to page. `fields` narrows each event to the requested keys " +
@@ -169,9 +173,11 @@ export function registerEventTools(server: McpServer, client: KingletClient): vo
     {
       title: "Get event histogram",
       description:
-        "Return bucket counts for a time range. Times are epoch milliseconds; the API clamps the " +
+        "Return per-level bucket counts for a time range, optionally only for events matching `q` " +
+        "(same filter grammar as search_events). Times are epoch milliseconds; the API clamps the " +
         "window to 31 days. Use this to find spikes before searching raw events. Max 240 buckets.",
       inputSchema: {
+        q: z.string().max(500).optional().describe("Filter expression; omit for all events."),
         ...timeRangeQuery,
         buckets: z.number().int().min(1).max(240).optional().describe("Bucket count, default 60."),
       },

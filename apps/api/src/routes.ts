@@ -1,4 +1,5 @@
 import { and, count, eq, inArray, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { bodyLimit } from "hono/body-limit";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -63,6 +64,8 @@ import {
 } from "./auth/user-admin.ts";
 import { publishEvents, subscribeEvents } from "./bus.ts";
 import { passwordProblem } from "./auth/password.ts";
+import { buildVocabulary } from "./field-vocabulary.ts";
+import type { Vocabulary } from "./field-vocabulary.ts";
 import { buildWhere, matchesEvent, parseFilters } from "./filters.ts";
 import type { Normalized } from "./ingest.ts";
 import { normalizeEvent } from "./ingest.ts";
@@ -222,6 +225,20 @@ async function readJsonStrict(
   if (!body) return { ok: false, error: "invalid JSON body" };
 
   return { ok: true, body };
+}
+
+/** Autocomplete samples at most this many of the newest events. */
+const FIELD_SAMPLE_EVENTS = 1_000;
+
+const FIELD_SAMPLE_WINDOW_MS = 24 * 3_600_000;
+
+/** DELETE /v1/events: what was cleared. `q` is present for a query clear. */
+interface ClearResponse {
+  deleted: number;
+  projectId: string;
+  from?: number;
+  to?: number;
+  q?: string;
 }
 
 interface IngestResponse {
@@ -1299,9 +1316,22 @@ export function registerRoutes(
     return c.json(response);
   });
 
-  // Destructive and project-scoped: admins, or a member explicitly granted
-  // `canClearLogs` on this project. API keys can never delete logs.
-  app.delete("/v1/events", async (c) => {
+  /**
+   * Parses and authorizes a clear-logs request (the delete and its preview):
+   * a user session with clear permission on the project, an optional
+   * `from`/`to` pair, and an optional Trill query `q`. Unlike reads, the
+   * window is not clamped to 31 days; without one, all time.
+   */
+  async function clearRequest(c: Context): Promise<
+    | Response
+    | {
+        projectId: string;
+        email: string;
+        range: { from: number; to: number } | undefined;
+        q: string;
+        filter: SQL;
+      }
+  > {
     const authInfo = getAuth(c);
 
     if (authInfo.kind !== "user") return c.json({ error: "user session required" }, 403);
@@ -1327,6 +1357,11 @@ export function registerRoutes(
       range = { from: Math.trunc(from), to: Math.trunc(to) };
     }
 
+    const q = (c.req.query("q") ?? "").trim();
+    const qError = validateQuery(q);
+
+    if (qError) return c.json({ error: qError }, 400);
+
     const projectId = await resolveProjectId(c, storage);
 
     if (projectId instanceof Response) return projectId;
@@ -1335,12 +1370,63 @@ export function registerRoutes(
       return c.json({ error: "forbidden" }, 403);
     }
 
-    const deleted = await storage.deleteByProject(projectId, range);
+    const filter = buildWhere(
+      parseFilters(q),
+      range ?? { from: 0, to: Number.MAX_SAFE_INTEGER },
+      projectId,
+      storage.searchMode,
+    );
 
-    // An all-time clear means the project's archived logs too. Range clears
-    // leave archive parts alone: deleting whole date parts for a partial range
-    // would remove events outside the requested window.
-    if (range === undefined) {
+    return { projectId, email: authInfo.user.email, range, q, filter };
+  }
+
+  // What a clear would delete, so the UI can show it before anything goes.
+  // Same parameters and permission as DELETE /v1/events.
+  app.get("/v1/events/clear/preview", async (c) => {
+    const request = await clearRequest(c);
+
+    if (request instanceof Response) return request;
+
+    const [total, byService, sample] = await Promise.all([
+      storage.countEvents(request.filter),
+      storage.groupEventCounts(request.filter, "service", 10),
+      storage.queryEvents({
+        projectId: request.projectId,
+        filter: request.filter,
+        limit: 5,
+        cursor: null,
+      }),
+    ]);
+
+    return c.json({
+      projectId: request.projectId,
+      ...request.range,
+      q: request.q,
+      total,
+      services: toAggregateGroups(byService.groups),
+      moreServices: byService.truncated,
+      sample: sample.map(toClientEvent),
+      archive: request.range === undefined && request.q === "",
+    });
+  });
+
+  // Destructive and project-scoped: admins, or a member explicitly granted
+  // `canClearLogs` on this project. API keys can never delete logs.
+  app.delete("/v1/events", async (c) => {
+    const request = await clearRequest(c);
+
+    if (request instanceof Response) return request;
+    const { projectId, range, q } = request;
+
+    const deleted =
+      q === ""
+        ? await storage.deleteByProject(projectId, range)
+        : await storage.deleteMatching(request.filter);
+
+    // An unconditional all-time clear means the project's archived logs too.
+    // Range and query clears leave archive parts alone: deleting whole date
+    // parts would remove events outside the requested selection.
+    if (range === undefined && q === "") {
       try {
         await deleteArchivedObjects(config, projectId);
       } catch (cause) {
@@ -1359,10 +1445,19 @@ export function registerRoutes(
         (range
           ? ` between ${new Date(range.from).toISOString()} and ${new Date(range.to).toISOString()}`
           : " (all time)") +
-        ` (${authInfo.user.email})`,
+        (q ? ` matching ${JSON.stringify(q)}` : "") +
+        ` (${request.email})`,
     );
 
-    return c.json({ deleted, projectId, ...range });
+    const body: ClearResponse = {
+      deleted,
+      projectId,
+      ...range,
+    };
+
+    if (q) body.q = q;
+
+    return c.json(body);
   });
 
   app.get("/v1/events", async (c) => {
@@ -1458,14 +1553,66 @@ export function registerRoutes(
     const { from, to } = range;
     const buckets = clampInt(c.req.query("buckets"), 60, 1, 240);
     const bucketMs = Math.max(1000, Math.trunc((to - from) / buckets));
+    const q = c.req.query("q") ?? "";
+    const qError = validateQuery(q);
+
+    if (qError) return c.json({ error: qError }, 400);
+
+    // Without a query the unfiltered fast path applies; buildWhere scopes the
+    // filter to this project and window.
+    const filter = q.trim()
+      ? buildWhere(parseFilters(q), { from, to }, projectId, storage.searchMode)
+      : undefined;
 
     return c.json({
       from,
       to,
       bucketMs,
-      points: await storage.histogramPoints(projectId, from, to, bucketMs),
+      points: await storage.histogramPoints(projectId, from, to, bucketMs, filter),
     });
   });
+
+  // Query autocomplete: the field keys, types, and common values in the newest
+  // events of the window (last 24 hours by default), plus services and envs.
+  app.get("/v1/fields", async (c) => {
+    const authInfo = getAuth(c);
+
+    if (!canCapability(authInfo, "logs.read")) {
+      return c.json({ error: readScopeError(authInfo) }, 403);
+    }
+
+    const projectId = await resolveProjectId(c, storage);
+
+    if (projectId instanceof Response) return projectId;
+
+    if (c.req.query("from") === undefined && c.req.query("to") === undefined) {
+      const now = Date.now();
+
+      return c.json(
+        await fieldVocabulary(projectId, { from: now - FIELD_SAMPLE_WINDOW_MS, to: now }),
+      );
+    }
+
+    const range = parseRange(c);
+
+    if (range instanceof Response) return range;
+
+    return c.json(await fieldVocabulary(projectId, range));
+  });
+
+  async function fieldVocabulary(
+    projectId: string,
+    range: { from: number; to: number },
+  ): Promise<Vocabulary & { from: number; to: number }> {
+    const rows = await storage.queryEvents({
+      projectId,
+      filter: buildWhere(parseFilters(""), range, projectId, storage.searchMode),
+      limit: FIELD_SAMPLE_EVENTS,
+      cursor: null,
+    });
+
+    return { ...range, ...buildVocabulary(rows) };
+  }
 
   app.get("/v1/services", async (c) => {
     const authInfo = getAuth(c);
