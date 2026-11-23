@@ -1,1 +1,14 @@
 * text=auto eol=lf
+
+# Composer installs rushlightlab/kinglet (the PHP SDK) from this repository, and
+# GitHub's archive of a tag is what it downloads. Ship only the SDK: the last
+# matching line wins, so everything is excluded, then the SDK is let back in.
+/* export-ignore
+/composer.json -export-ignore
+/LICENSE -export-ignore
+/packages -export-ignore
+/packages/* export-ignore
+/packages/sdk-php -export-ignore
+/packages/sdk-php/* export-ignore
+/packages/sdk-php/src -export-ignore
+/packages/sdk-php/README.md -export-ignore

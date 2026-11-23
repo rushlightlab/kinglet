@@ -1,6 +1,6 @@
 {
   "name": "kinglet",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "Small. Light. King. — a tiny self-hostable log platform.",
   "type": "module",
