@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildWhere, parseFilters } from "../../src/filters.ts";
+import { buildWhere, matchesEvent, parseFilters } from "../../src/filters.ts";
 import type { Normalized } from "../../src/ingest.ts";
+import type { JsonObject } from "../../src/json.ts";
 import type { SearchMode } from "../../src/types.ts";
 import { histogramPoints } from "../../src/storage/events.ts";
 import { createStorage } from "../../src/storage/index.ts";
@@ -249,6 +250,132 @@ async function reopen(mode: SearchMode): Promise<void> {
   await store().close();
   storage = await createStorage({ kind: "sqlite", dbPath: temp?.dbPath ?? "", search: mode });
 }
+
+const FIELD_CORPUS: Array<[string, JsonObject | null]> = [
+  [
+    "RUPTELA 864351050000101 · 3 records saved",
+    { imei: "864351050000101", savedCount: 3, durationMs: 1450, ack: true, data: { rss: 251 } },
+  ],
+  [
+    "RUPTELA 864351050000202 · nothing saved",
+    { imei: "864351050000202", savedCount: 0, durationMs: 12, ack: false, reason: "already saved" },
+  ],
+  ["GET /app/auth/check 401", { status: 401, path: "/app/auth/check", error: null }],
+  ["heartbeat without fields", null],
+];
+
+const FIELD_QUERIES = [
+  "field.imei:864351050000101",
+  "field.savedCount:0",
+  "field.savedCount>=1",
+  "field.durationMs>1000",
+  "field.ack:true",
+  "field.ack:false",
+  "field.error:null",
+  "field.data.rss>250",
+  "field.reason:*",
+  '-field.reason:"already saved"',
+  "-field.imei:*",
+  "field.status>=400 field.status<500",
+  "field.imei>1",
+  "in:fields savedcount",
+  "in:fields auth",
+  "in:all 864351050000202",
+  "in:all -saved",
+  "ruptela field.savedCount:3",
+];
+
+function histogramTotal(points: Array<{ counts: number[] }>): number {
+  return points.reduce((sum, point) => sum + point.counts.reduce((a, b) => a + b, 0), 0);
+}
+
+describe("field filters", () => {
+  beforeEach(async () => {
+    await store().insertEvents(
+      PROJECT,
+      FIELD_CORPUS.map(([message, fields], i) => ({
+        ...event(message, BASE + i),
+        fields: fields === null ? null : JSON.stringify(fields),
+      })),
+      null,
+    );
+    // Same fields in another project: must never leak into results.
+    await store().insertEvents(
+      OTHER_PROJECT,
+      [{ ...event("foreign", BASE), fields: JSON.stringify({ imei: "864351050000101" }) }],
+      null,
+    );
+  });
+
+  it.each(FIELD_QUERIES)("SQL and the live-tail matcher agree on %s", async (q) => {
+    const filter = buildWhere(
+      parseFilters(q),
+      { from: BASE - MINUTE, to: BASE + 10 * MINUTE },
+      PROJECT,
+      store().searchMode,
+    );
+
+    const rows = await store().queryEvents({ projectId: PROJECT, filter, limit: 50, cursor: null });
+
+    const all = await store().queryEvents({
+      projectId: PROJECT,
+      filter: buildWhere(
+        parseFilters(""),
+        { from: BASE - MINUTE, to: BASE + 10 * MINUTE },
+        PROJECT,
+        store().searchMode,
+      ),
+      limit: 50,
+      cursor: null,
+    });
+
+    const inMemory = all.filter((row) => matchesEvent(parseFilters(q), row));
+
+    expect(rows.map((row) => row.message)).toEqual(inMemory.map((row) => row.message));
+  });
+
+  it("finds exactly the matching events", async () => {
+    expect(await search(store().searchMode, "field.imei:864351050000101")).toEqual([
+      "RUPTELA 864351050000101 · 3 records saved",
+    ]);
+    expect(await search(store().searchMode, "field.status>=400")).toEqual([
+      "GET /app/auth/check 401",
+    ]);
+    expect(await search(store().searchMode, "-field.imei:*")).toEqual([
+      "heartbeat without fields",
+      "GET /app/auth/check 401",
+    ]);
+  });
+
+  it("restricts the histogram to events matching the query", async () => {
+    const range = { from: BASE - MINUTE, to: BASE + 10 * MINUTE };
+
+    const all = await store().histogramPoints(PROJECT, range.from, range.to, MINUTE);
+
+    const filtered = await store().histogramPoints(
+      PROJECT,
+      range.from,
+      range.to,
+      MINUTE,
+      buildWhere(parseFilters("field.savedCount:*"), range, PROJECT, store().searchMode),
+    );
+
+    expect(histogramTotal(all)).toBe(FIELD_CORPUS.length);
+    expect(histogramTotal(filtered)).toBe(2);
+    expect(filtered.map((point) => point.ts)).toEqual(all.map((point) => point.ts));
+  });
+
+  it("counts with field filters through the aggregate path", async () => {
+    const where = buildWhere(
+      parseFilters("field.savedCount>=0"),
+      { from: BASE - MINUTE, to: BASE + 10 * MINUTE },
+      PROJECT,
+      store().searchMode,
+    );
+
+    expect(await store().countEvents(where)).toBe(2);
+  });
+});
 
 describe("search modes", () => {
   const corpus = [

@@ -160,6 +160,7 @@ export async function notifyAction(
       try {
         await sendGeneric(channel, notice, {
           allowPrivate: config.allowPrivateWebhooks,
+          smtp: config.smtp,
         });
       } catch (err) {
         const message = safeErrorMessage(err instanceof Error ? err : String(err), 500);

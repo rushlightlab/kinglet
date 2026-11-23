@@ -7,10 +7,10 @@ import {
   CloudIcon,
   DatabaseIcon,
   DownloadIcon,
+  MoreHorizontalIcon,
   RefreshCwIcon,
   RotateCcwIcon,
   SaveIcon,
-  ShieldCheckIcon,
   Trash2Icon,
   TriangleAlertIcon,
 } from "lucide-react";
@@ -31,6 +31,7 @@ import {
   updateArchiveSettings,
   updateBackupSettings,
 } from "../../api";
+import type { PageQuery } from "../../api";
 import { hasPermissionOrAdmin, useApp } from "../../app-context";
 import {
   formatBytes,
@@ -51,6 +52,11 @@ import type {
   NotificationChannel,
 } from "../../types";
 import ErrorAlert from "../ErrorAlert";
+import SettingsRow from "../SettingsRow";
+import SkeletonRows from "../SkeletonRows";
+import TablePagination from "../TablePagination";
+import TableSearch, { NoMatchesRow } from "../TableSearch";
+import { useServerTable } from "../../server-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -63,7 +69,21 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -234,7 +254,6 @@ export default function BackupsPanel() {
 
   const [status, setStatus] = useState<BackupStatus | null>(null);
   const [settings, setSettings] = useState<BackupSettings | null>(null);
-  const [snapshots, setSnapshots] = useState<BackupSnapshot[]>([]);
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -247,8 +266,7 @@ export default function BackupsPanel() {
   const [draftRetention, setDraftRetention] = useState("7");
   const [preview, setPreview] = useState<BackupSchedulePreview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
-  const [savingSchedule, setSavingSchedule] = useState(false);
-  const [savingRetention, setSavingRetention] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
   const [pendingDelete, setPendingDelete] = useState<BackupSnapshot | null>(null);
@@ -259,55 +277,77 @@ export default function BackupsPanel() {
   const [projectArchive, setProjectArchiveState] = useState<Record<string, boolean>>({});
   const [archiveBusy, setArchiveBusy] = useState<string | null>(null);
 
-  const load = useCallback(async (refreshBucket = false) => {
-    if (refreshBucket) setRefreshing(true);
+  // The snapshot table pages on the server; its loader also carries the
+  // bucket warning that comes back with each page.
+  const loadSnapshotPage = useCallback(async (page: PageQuery) => {
+    const result = await fetchBackups(false, page);
 
-    try {
-      const [statusResult, settingsResult, listResult, channelResult, archiveResult] =
-        await Promise.allSettled([
-          fetchBackupStatus(),
-          fetchBackupSettings(),
-          fetchBackups(refreshBucket),
-          fetchNotificationChannels(),
-          fetchArchiveSettings(),
-        ]);
+    setWarning(result.warning ?? null);
 
-      let failure: string | null = null;
-
-      if (statusResult.status === "fulfilled") {
-        setStatus(statusResult.value.status);
-      } else {
-        failure = reasonText(statusResult.reason);
-      }
-
-      if (settingsResult.status === "fulfilled") {
-        setSettings(settingsResult.value.settings);
-      } else if (failure === null) {
-        failure = reasonText(settingsResult.reason);
-      }
-
-      if (listResult.status === "fulfilled") {
-        setSnapshots(listResult.value.snapshots);
-        setWarning(listResult.value.warning ?? null);
-      } else if (failure === null) {
-        failure = reasonText(listResult.reason);
-      }
-
-      if (channelResult.status === "fulfilled") setChannels(channelResult.value.channels);
-
-      if (archiveResult.status === "fulfilled") {
-        setArchiveSettings(archiveResult.value.settings);
-        setArchiveAvailable(true);
-      } else {
-        setArchiveAvailable(false);
-      }
-
-      setError(failure === null ? null : redactWebhookUrls(failure));
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+    return { rows: result.snapshots, total: result.total };
   }, []);
+
+  const snapshotTable = useServerTable("snapshots", loadSnapshotPage);
+
+  const { reload: reloadSnapshots } = snapshotTable;
+
+  const load = useCallback(
+    async (refreshBucket = false) => {
+      if (refreshBucket) setRefreshing(true);
+
+      try {
+        const [statusResult, settingsResult, listResult, channelResult, archiveResult] =
+          await Promise.allSettled([
+            fetchBackupStatus(),
+            fetchBackupSettings(),
+            // A refresh reconciles the cache with the bucket; one row is enough
+            // to carry its warning back.
+            refreshBucket
+              ? fetchBackups(true, { limit: 1, offset: 0, q: "" })
+              : Promise.resolve(null),
+            fetchNotificationChannels(),
+            fetchArchiveSettings(),
+          ]);
+
+        let failure: string | null = null;
+
+        if (statusResult.status === "fulfilled") {
+          setStatus(statusResult.value.status);
+        } else {
+          failure = reasonText(statusResult.reason);
+        }
+
+        if (settingsResult.status === "fulfilled") {
+          setSettings(settingsResult.value.settings);
+        } else if (failure === null) {
+          failure = reasonText(settingsResult.reason);
+        }
+
+        if (listResult.status === "fulfilled") {
+          if (listResult.value !== null) setWarning(listResult.value.warning ?? null);
+        } else if (failure === null) {
+          failure = reasonText(listResult.reason);
+        }
+
+        await reloadSnapshots();
+
+        if (channelResult.status === "fulfilled") setChannels(channelResult.value.channels);
+
+        if (archiveResult.status === "fulfilled") {
+          setArchiveSettings(archiveResult.value.settings);
+          setArchiveAvailable(true);
+        } else {
+          setArchiveAvailable(false);
+        }
+
+        setError(failure === null ? null : redactWebhookUrls(failure));
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [reloadSnapshots],
+  );
 
   const lastEpochRef = useRef(0);
   const lastRefreshRef = useRef(0);
@@ -395,7 +435,9 @@ export default function BackupsPanel() {
     setProjectArchiveState(next);
   }, [archiveAvailable, projects]);
 
-  const liveBackup = events.status?.backup ?? status;
+  // The fetched status reloads after every run; the event feed's snapshot is
+  // only sent when it connects, so it goes stale after the first backup.
+  const liveBackup = status ?? events.status?.backup ?? null;
   const liveArchive = events.status?.archive ?? null;
   const configured = liveBackup?.configured === true;
 
@@ -487,10 +529,24 @@ export default function BackupsPanel() {
     }
   };
 
-  const saveSchedule = async (): Promise<void> => {
+  const settingsDirty =
+    settings !== null &&
+    (draftEnabled !== settings.enabled ||
+      draftCron.trim() !== settings.scheduleCron ||
+      draftTimezone !== settings.scheduleTimezone ||
+      retentionCount !== settings.retentionCount);
+
+  const scheduleChanged =
+    settings !== null &&
+    (draftCron.trim() !== settings.scheduleCron || draftTimezone !== settings.scheduleTimezone);
+
+  // A changed schedule must preview as valid before it can be saved.
+  const canSaveSettings = settingsDirty && (!scheduleChanged || preview?.valid === true);
+
+  const saveSettings = async (): Promise<void> => {
     if (!settings) return;
 
-    setSavingSchedule(true);
+    setSavingSettings(true);
     setError(null);
 
     try {
@@ -498,42 +554,20 @@ export default function BackupsPanel() {
         enabled: draftEnabled,
         scheduleCron: draftCron.trim(),
         scheduleTimezone: draftTimezone,
-        retentionCount: settings.retentionCount,
-      });
-
-      setSettings(result.settings);
-      toast.success("Backup schedule saved", {
-        description: result.nextRuns[0]
-          ? `Next run ${formatDateTime(result.nextRuns[0])}`
-          : undefined,
-      });
-    } catch (err) {
-      setError(redactWebhookUrls(err instanceof Error ? err.message : String(err)));
-    } finally {
-      setSavingSchedule(false);
-    }
-  };
-
-  const saveRetention = async (): Promise<void> => {
-    if (!settings) return;
-
-    setSavingRetention(true);
-    setError(null);
-
-    try {
-      const result = await updateBackupSettings({
-        enabled: settings.enabled,
-        scheduleCron: settings.scheduleCron,
-        scheduleTimezone: settings.scheduleTimezone,
         retentionCount,
       });
 
       setSettings(result.settings);
-      toast.success("Retention saved");
+      toast.success("Backup settings saved", {
+        description:
+          result.settings.enabled && result.nextRuns[0]
+            ? `Next run ${formatDateTime(result.nextRuns[0])}`
+            : undefined,
+      });
     } catch (err) {
       setError(redactWebhookUrls(err instanceof Error ? err.message : String(err)));
     } finally {
-      setSavingRetention(false);
+      setSavingSettings(false);
     }
   };
 
@@ -696,28 +730,28 @@ export default function BackupsPanel() {
                   <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
                     required
                   </p>
+                  {/* One list: each variable says whether the server has it. */}
                   <ul className="mt-1 flex flex-col gap-0.5">
-                    {REQUIRED_ENV.map((name) => (
-                      <li key={name}>
-                        <code className="font-mono text-[10px] text-mist-dim">{name}</code>
-                      </li>
-                    ))}
+                    {REQUIRED_ENV.map((name) => {
+                      const missing = missingEnv.includes(name);
+
+                      return (
+                        <li key={name} className="flex items-center gap-2">
+                          <code
+                            className={`font-mono text-[10px] ${missing ? "text-coral" : "text-mist-dim"}`}
+                          >
+                            {name}
+                          </code>
+                          <span
+                            className={`font-mono text-[9px] uppercase tracking-[0.12em] ${missing ? "text-coral/80" : "text-mist-faint"}`}
+                          >
+                            {missing ? "missing" : "set"}
+                          </span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
-                {missingEnv.length > 0 && (
-                  <div>
-                    <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-coral">
-                      missing right now
-                    </p>
-                    <ul className="mt-1 flex flex-col gap-0.5">
-                      {missingEnv.map((name) => (
-                        <li key={name}>
-                          <code className="font-mono text-[10px] text-coral">{name}</code>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
                 <div>
                   <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
                     optional
@@ -744,8 +778,9 @@ export default function BackupsPanel() {
         <>
           <Card>
             <CardHeader>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="flex min-w-0 flex-col gap-1">
+              {/* No wrap: the actions stay top-right beside a long description. */}
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <DatabaseIcon className="size-4 text-gold/80" />
                     <CardTitle>Backup status</CardTitle>
@@ -759,20 +794,27 @@ export default function BackupsPanel() {
                     the source of truth; this list is a cache.
                   </CardDescription>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!canWrite || busyAction !== null}
-                    onClick={() => void testConnection()}
-                  >
-                    {busyAction === "test" ? (
-                      <Spinner data-icon="inline-start" />
-                    ) : (
-                      <CloudIcon data-icon="inline-start" />
-                    )}
-                    test connection
-                  </Button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="icon-sm" aria-label="More backup actions">
+                        {busyAction === "test" || refreshing ? <Spinner /> : <MoreHorizontalIcon />}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        disabled={!canWrite || busyAction !== null}
+                        onSelect={() => void testConnection()}
+                      >
+                        <CloudIcon />
+                        Test bucket connection
+                      </DropdownMenuItem>
+                      <DropdownMenuItem disabled={refreshing} onSelect={() => void load(true)}>
+                        <RefreshCwIcon />
+                        Refresh snapshots from bucket
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   <Button
                     size="sm"
                     disabled={!canWrite || running || busyAction !== null}
@@ -853,23 +895,20 @@ export default function BackupsPanel() {
 
           <Card>
             <CardHeader>
-              <div className="flex items-center gap-2">
+              <CardTitle className="flex items-center gap-2">
                 <ClockIcon className="size-4 text-gold/80" />
-                <CardTitle>Schedule</CardTitle>
-              </div>
+                Schedule and retention
+              </CardTitle>
               <CardDescription>
-                Standard 5-field cron in the selected timezone. Runs closer than 15 minutes apart
-                are rejected.
+                When snapshots run, how many are kept, and who hears about them.
               </CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              <label className="flex items-center justify-between gap-3" htmlFor="backup-enabled">
-                <span className="flex flex-col gap-0.5">
-                  <span className="font-mono text-xs text-mist">scheduled backups</span>
-                  <span className="font-mono text-[10px] text-mist-faint">
-                    Manual runs stay available when the schedule is off.
-                  </span>
-                </span>
+            <CardContent>
+              <SettingsRow
+                label="scheduled backups"
+                description="Manual runs stay available when the schedule is off."
+                htmlFor="backup-enabled"
+              >
                 <Switch
                   id="backup-enabled"
                   checked={draftEnabled}
@@ -877,199 +916,166 @@ export default function BackupsPanel() {
                   disabled={!canWrite}
                   aria-label="Enable scheduled backups"
                 />
-              </label>
+              </SettingsRow>
 
-              <div className="flex flex-wrap gap-1.5">
-                {CRON_PRESETS.map((preset) => (
-                  <Button
-                    key={preset.cron}
-                    type="button"
-                    variant={draftCron === preset.cron ? "soft" : "chip"}
-                    size="xs"
-                    disabled={!canWrite}
-                    onClick={() => setDraftCron(preset.cron)}
-                  >
-                    {preset.label}
-                  </Button>
-                ))}
-              </div>
-
-              <FieldGroup className="grid gap-3 sm:grid-cols-2">
-                <Field>
-                  <FieldLabel htmlFor="backup-cron">cron expression</FieldLabel>
-                  <Input
-                    id="backup-cron"
-                    value={draftCron}
-                    onChange={(event) => setDraftCron(event.target.value)}
-                    placeholder="0 3 * * *"
-                    spellCheck={false}
-                    disabled={!canWrite}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="backup-timezone">timezone</FieldLabel>
-                  <Select
-                    value={draftTimezone}
-                    onValueChange={setDraftTimezone}
-                    disabled={!canWrite}
-                  >
-                    <SelectTrigger id="backup-timezone" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectLabel>Timezone</SelectLabel>
-                        {timezoneOptions.map((zone) => (
-                          <SelectItem key={zone} value={zone}>
-                            {zone}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <FieldDescription>
+              <div className="flex flex-col gap-3 border-b border-white/[0.06] py-3">
+                <div className="flex flex-col gap-0.5">
+                  <span className="font-mono text-xs text-mist">schedule</span>
+                  <span className="font-mono text-[10px] text-mist-faint">
+                    Standard 5-field cron in the selected timezone. Runs closer than 15 minutes
+                    apart are rejected.
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {CRON_PRESETS.map((preset) => (
                     <Button
+                      key={preset.cron}
                       type="button"
-                      variant="link"
+                      variant={draftCron === preset.cron ? "soft" : "chip"}
                       size="xs"
-                      className="h-auto p-0 text-[10px]"
-                      onClick={() => setDraftTimezone(MY_TIMEZONE)}
+                      disabled={!canWrite}
+                      onClick={() => setDraftCron(preset.cron)}
+                    >
+                      {preset.label}
+                    </Button>
+                  ))}
+                </div>
+                <FieldGroup className="grid gap-3 sm:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor="backup-cron">cron expression</FieldLabel>
+                    <Input
+                      id="backup-cron"
+                      value={draftCron}
+                      onChange={(event) => setDraftCron(event.target.value)}
+                      placeholder="0 3 * * *"
+                      spellCheck={false}
+                      disabled={!canWrite}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="backup-timezone">timezone</FieldLabel>
+                    <Select
+                      value={draftTimezone}
+                      onValueChange={setDraftTimezone}
                       disabled={!canWrite}
                     >
-                      use my timezone ({MY_TIMEZONE})
-                    </Button>
-                  </FieldDescription>
-                </Field>
-              </FieldGroup>
-
-              <div className="min-h-12 rounded-[5px] border border-white/[0.06] px-3 py-2">
-                {previewBusy ? (
-                  <span className="flex items-center gap-2 font-mono text-[10px] text-mist-faint">
-                    <Spinner />
-                    validating…
-                  </span>
-                ) : preview?.valid ? (
-                  <div className="flex flex-col gap-1">
-                    <span className="font-mono text-[11px] text-mist">
-                      {preview.description ?? "valid schedule"}
+                      <SelectTrigger id="backup-timezone" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectLabel>Timezone</SelectLabel>
+                          {timezoneOptions.map((zone) => (
+                            <SelectItem key={zone} value={zone}>
+                              {zone}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>
+                      <Button
+                        type="button"
+                        variant="link"
+                        size="xs"
+                        className="h-auto p-0 text-[10px]"
+                        onClick={() => setDraftTimezone(MY_TIMEZONE)}
+                        disabled={!canWrite}
+                      >
+                        use my timezone ({MY_TIMEZONE})
+                      </Button>
+                    </FieldDescription>
+                  </Field>
+                </FieldGroup>
+                <div className="min-h-12 rounded-[5px] border border-white/[0.06] px-3 py-2">
+                  {previewBusy ? (
+                    <span className="flex items-center gap-2 font-mono text-[10px] text-mist-faint">
+                      <Spinner />
+                      validating…
                     </span>
-                    <span className="font-mono text-[10px] text-mist-faint">
-                      next: {(preview.nextRuns ?? []).map((run) => formatDateTime(run)).join(" · ")}
-                    </span>
-                  </div>
-                ) : (
-                  <span className="font-mono text-[10px] text-coral">
-                    {preview?.error ?? "enter a cron expression to preview the next runs"}
-                  </span>
-                )}
-              </div>
-
-              <div className="flex justify-end">
-                <Button
-                  size="sm"
-                  disabled={!canWrite || savingSchedule || preview?.valid !== true}
-                  onClick={() => void saveSchedule()}
-                >
-                  {savingSchedule ? (
-                    <Spinner data-icon="inline-start" />
+                  ) : preview?.valid ? (
+                    <div className="flex flex-col gap-1">
+                      <span className="font-mono text-[11px] text-mist">
+                        {preview.description ?? "valid schedule"}
+                      </span>
+                      <span className="font-mono text-[10px] text-mist-faint">
+                        next:{" "}
+                        {(preview.nextRuns ?? []).map((run) => formatDateTime(run)).join(" · ")}
+                      </span>
+                    </div>
                   ) : (
-                    <SaveIcon data-icon="inline-start" />
+                    <span className="font-mono text-[10px] text-coral">
+                      {preview?.error ?? "enter a cron expression to preview the next runs"}
+                    </span>
                   )}
-                  save schedule
-                </Button>
+                </div>
               </div>
-            </CardContent>
-          </Card>
 
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <ArchiveIcon className="size-4 text-gold/80" />
-                <CardTitle>Retention</CardTitle>
-              </div>
-              <CardDescription>
-                Keep the last N successful snapshots. The newest snapshot is always kept, even when
-                this is lowered.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <div className="grid gap-3 sm:grid-cols-3">
-                <Field>
-                  <FieldLabel htmlFor="backup-retention">keep last</FieldLabel>
-                  <Input
-                    id="backup-retention"
-                    type="number"
-                    min={2}
-                    max={365}
-                    value={draftRetention}
-                    onChange={(event) => setDraftRetention(event.target.value)}
-                    disabled={!canWrite}
-                  />
-                  <FieldDescription>2–365 snapshots.</FieldDescription>
-                </Field>
-                <Metric label="coverage">{formatCoverage(retentionCount, intervalMs)}</Metric>
-                <Metric label="estimated storage">
-                  {liveBackup.databaseBytes === null
+              <SettingsRow
+                label="keep last"
+                htmlFor="backup-retention"
+                description={`${formatCoverage(retentionCount, intervalMs)} · about ${
+                  liveBackup.databaseBytes === null
                     ? "unknown"
-                    : formatBytes(liveBackup.databaseBytes * retentionCount)}
-                </Metric>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="font-mono text-[10px] text-mist-faint">
-                  Estimate uses the current database size; real snapshots compress.
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!canWrite || savingRetention}
-                  onClick={() => void saveRetention()}
-                >
-                  {savingRetention ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : (
-                    <SaveIcon data-icon="inline-start" />
-                  )}
-                  save retention
+                    : formatBytes(liveBackup.databaseBytes * retentionCount)
+                } before compression. The newest snapshot is always kept.`}
+              >
+                <Input
+                  id="backup-retention"
+                  type="number"
+                  min={2}
+                  max={365}
+                  className="w-20"
+                  value={draftRetention}
+                  onChange={(event) => setDraftRetention(event.target.value)}
+                  disabled={!canWrite}
+                />
+                <span className="font-mono text-[10px] text-mist-faint">snapshots</span>
+              </SettingsRow>
+
+              <SettingsRow
+                label="notify"
+                description="Channels subscribed to backup or warning events."
+              >
+                {subscribedChannels.length === 0 ? (
+                  <span className="font-mono text-[10px] text-mist-faint">no channels yet</span>
+                ) : (
+                  subscribedChannels.map((channel) => (
+                    <Badge key={channel.id} variant="outline">
+                      {channel.name}
+                    </Badge>
+                  ))
+                )}
+                <Button variant="link" size="sm" className="h-auto px-0" asChild>
+                  <Link to="/settings" search={{ tab: "notifications" }}>
+                    manage
+                  </Link>
                 </Button>
-              </div>
+              </SettingsRow>
             </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <ShieldCheckIcon className="size-4 text-gold/80" />
-                <CardTitle>Notifications</CardTitle>
-              </div>
-              <CardDescription>
-                Channels subscribed to backup or warning events. Monitor alerts are selected per
-                monitor.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-wrap items-center gap-2">
-              {subscribedChannels.length === 0 ? (
-                <span className="font-mono text-[10px] text-mist-faint">
-                  No channel subscribes to backup events yet.
-                </span>
-              ) : (
-                subscribedChannels.map((channel) => (
-                  <Badge key={channel.id} variant="outline">
-                    {channel.name}
-                  </Badge>
-                ))
+            <CardFooter className="justify-end gap-2">
+              {settingsDirty && (
+                <span className="font-mono text-[10px] text-mist-faint">unsaved changes</span>
               )}
-              <Button variant="link" size="sm" className="ml-auto" asChild>
-                <Link to="/settings" search={{ tab: "notifications" }}>
-                  manage channels
-                </Link>
+              <Button
+                size="sm"
+                disabled={!canWrite || savingSettings || !canSaveSettings}
+                onClick={() => void saveSettings()}
+              >
+                {savingSettings ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <SaveIcon data-icon="inline-start" />
+                )}
+                save changes
               </Button>
-            </CardContent>
+            </CardFooter>
           </Card>
 
           <Card>
             <CardHeader>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="flex flex-col gap-1">
+              <div className="flex flex-wrap items-start justify-between gap-3 sm:flex-nowrap">
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <div className="flex items-center gap-2">
                     <DatabaseIcon className="size-4 text-gold/80" />
                     <CardTitle>Snapshots</CardTitle>
@@ -1079,19 +1085,14 @@ export default function BackupsPanel() {
                     reconciles local state with the bucket.
                   </CardDescription>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={refreshing}
-                  onClick={() => void load(true)}
-                >
-                  {refreshing ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : (
-                    <RefreshCwIcon data-icon="inline-start" />
-                  )}
-                  refresh from bucket
-                </Button>
+                {(snapshotTable.total > 0 || snapshotTable.activeQuery !== "") && (
+                  <TableSearch
+                    label="Search snapshots"
+                    value={snapshotTable.query}
+                    onChange={snapshotTable.setQuery}
+                    className="shrink-0"
+                  />
+                )}
               </div>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
@@ -1116,7 +1117,10 @@ export default function BackupsPanel() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {snapshots.map((snapshot) => {
+                  {!snapshotTable.loaded && (
+                    <SkeletonRows columns={7} rows={2} label="Loading snapshots…" />
+                  )}
+                  {snapshotTable.rows.map((snapshot) => {
                     const available = isSnapshotAvailable(snapshot);
                     const busy = busyAction !== null && busyAction.endsWith(snapshot.id);
 
@@ -1158,65 +1162,74 @@ export default function BackupsPanel() {
                           <SnapshotStateBadge snapshot={snapshot} />
                         </TableCell>
                         <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <Tooltip>
-                              <TooltipTrigger asChild>
+                          {busy ? (
+                            <Spinner className="ml-auto" />
+                          ) : (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
                                 <Button
-                                  variant="chip"
+                                  variant="ghost"
                                   size="icon-xs"
-                                  aria-label={`Restore ${snapshot.id}`}
-                                  disabled={!canRestore || !available || busy || running}
-                                  onClick={() => setPendingRestore(snapshot)}
+                                  aria-label={`Actions for snapshot ${snapshot.id}`}
                                 >
-                                  <RotateCcwIcon />
+                                  <MoreHorizontalIcon />
                                 </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Restore (staged)</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="chip"
-                                  size="icon-xs"
-                                  aria-label={`Download ${snapshot.id}`}
-                                  disabled={!available || busy}
-                                  onClick={() => void downloadSnapshot(snapshot)}
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem
+                                  disabled={!available}
+                                  onSelect={() => void downloadSnapshot(snapshot)}
                                 >
                                   <DownloadIcon />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Download a presigned copy</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="chip"
-                                  size="icon-xs"
-                                  aria-label={`Delete ${snapshot.id}`}
-                                  disabled={!canWrite || busy}
-                                  onClick={() => setPendingDelete(snapshot)}
+                                  Download a presigned copy
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  disabled={!canRestore || !available || running}
+                                  onSelect={() => setPendingRestore(snapshot)}
+                                >
+                                  <RotateCcwIcon />
+                                  Restore (staged)
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  variant="destructive"
+                                  disabled={!canWrite}
+                                  onSelect={() => setPendingDelete(snapshot)}
                                 >
                                   <Trash2Icon />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Delete snapshot</TooltipContent>
-                            </Tooltip>
-                          </div>
+                                  Delete snapshot
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          )}
                         </TableCell>
                       </TableRow>
                     );
                   })}
-                  {snapshots.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={7} className="py-6 text-center text-mist-faint">
-                        No snapshots yet. Run one now or wait for the next scheduled run.
-                      </TableCell>
-                    </TableRow>
-                  )}
+                  {snapshotTable.loaded &&
+                    snapshotTable.total === 0 &&
+                    snapshotTable.activeQuery !== "" && (
+                      <NoMatchesRow
+                        columns={7}
+                        query={snapshotTable.activeQuery}
+                        noun="snapshots"
+                        onClear={() => snapshotTable.setQuery("")}
+                      />
+                    )}
+                  {snapshotTable.loaded &&
+                    snapshotTable.total === 0 &&
+                    snapshotTable.activeQuery === "" && (
+                      <TableRow>
+                        <TableCell colSpan={7} className="py-6 text-center text-mist-faint">
+                          No snapshots yet. Run one now or wait for the next scheduled run.
+                        </TableCell>
+                      </TableRow>
+                    )}
                 </TableBody>
               </Table>
 
-              {snapshots.length > 0 && (
+              <TablePagination table={snapshotTable} noun="snapshots" className="-mx-4" />
+              {snapshotTable.total > 0 && (
                 <p className="font-mono text-[10px] text-mist-faint">
                   Download links are presigned, short-lived, and admin-only. Encrypted snapshots
                   download as <code>.age</code> and need the passphrase.
@@ -1277,16 +1290,11 @@ export default function BackupsPanel() {
 
               {archiveAvailable && archiveSettings ? (
                 <div className="flex flex-col gap-3">
-                  <label
-                    className="flex items-center justify-between gap-3"
+                  <SettingsRow
+                    label="global archive"
+                    description="Opt each project in below. Off by default."
                     htmlFor="archive-enabled"
                   >
-                    <span className="flex flex-col gap-0.5">
-                      <span className="font-mono text-xs text-mist">global archive</span>
-                      <span className="font-mono text-[10px] text-mist-faint">
-                        Opt each project in below. Off by default.
-                      </span>
-                    </span>
                     <Switch
                       id="archive-enabled"
                       checked={archiveSettings.enabled}
@@ -1294,21 +1302,19 @@ export default function BackupsPanel() {
                       onCheckedChange={(checked) => void toggleArchive(checked)}
                       aria-label="Enable log archive"
                     />
-                  </label>
+                  </SettingsRow>
 
-                  <div className="flex flex-col gap-1.5">
-                    <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
+                  <div className="flex flex-col">
+                    <p className="pb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
                       projects
                     </p>
                     {projects.map((project) => (
-                      <label
+                      <SettingsRow
                         key={project.id}
-                        className="flex items-center justify-between gap-3 rounded-[4px] border border-white/[0.05] px-2.5 py-2"
+                        label={project.name}
                         htmlFor={`archive-${project.id}`}
+                        className="py-2 first:pt-2"
                       >
-                        <span className="truncate font-mono text-[11px] text-mist">
-                          {project.name}
-                        </span>
                         <Switch
                           id={`archive-${project.id}`}
                           checked={projectArchive[project.id] === true}
@@ -1318,7 +1324,7 @@ export default function BackupsPanel() {
                           }
                           aria-label={`Archive ${project.name}`}
                         />
-                      </label>
+                      </SettingsRow>
                     ))}
                   </div>
                 </div>

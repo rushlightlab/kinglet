@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { bodyLimit } from "hono/body-limit";
+import { deleteApiKeysByOwner } from "./auth/apikeys.ts";
 import { authMiddleware } from "./auth/middleware.ts";
 import type { AppEnv } from "./auth/middleware.ts";
 import type { KingletAuth } from "./auth/auth.ts";
@@ -27,6 +28,7 @@ import { APP_VERSION } from "./version.ts";
 import { isJsonObject, isString } from "./json.ts";
 import type { JsonValue } from "./json.ts";
 import * as schema from "./storage/schema.ts";
+import { configureSecrets } from "./secrets.ts";
 import type { Storage } from "./storage/index.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -70,6 +72,8 @@ export interface CreateAppOptions {
  */
 export function createApp(options: CreateAppOptions): Hono<AppEnv> {
   const { storage, config, auth, engines } = options;
+  // Idempotent; tests build the app without index.ts.
+  configureSecrets(config.secretKey);
   const app = new Hono<AppEnv>();
 
   app.onError((err, c) => {
@@ -211,7 +215,24 @@ export function createApp(options: CreateAppOptions): Hono<AppEnv> {
       if (problem) return c.json({ error: problem }, 400);
     }
 
+    // A password change that signs out the other sessions is a recovery
+    // action: keys minted from a stolen session must not outlive it, the same
+    // as an admin reset. `revokeApiKeys: false` keeps them for a routine change.
+    const revokeKeys =
+      isJsonObject(body) && body.revokeOtherSessions === true && body.revokeApiKeys !== false;
+
+    const session = revokeKeys
+      ? await auth.api.getSession({
+          headers: c.req.raw.headers,
+          query: { disableCookieCache: true },
+        })
+      : null;
+
     await next();
+
+    if (session && c.res.status === 200) {
+      await deleteApiKeysByOwner(storage, session.user.id);
+    }
   });
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
@@ -232,6 +253,7 @@ export function createApp(options: CreateAppOptions): Hono<AppEnv> {
   registerRoutes(app, storage, engines.monitor, config, auth, {
     backupStatus: () => engines.backup.status(),
     deleteArchivedObjects: options.deleteArchivedObjects,
+    fenceArchive: (projectId) => engines.archive.fenceProject(projectId),
   });
   registerNotificationRoutes(app, {
     storage,

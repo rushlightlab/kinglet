@@ -17,6 +17,8 @@ services:
       # KINGLET_ADMIN_EMAIL: you@example.com
       # KINGLET_ADMIN_PASSWORD: change-me-please
       # BETTER_AUTH_SECRET: <32+ random bytes; a persisted secret is generated in /data otherwise>
+      # Encrypts notification channel secrets; required to add channels.
+      # KINGLET_SECRET_KEY: <output of: openssl rand -base64 32>
     volumes:
       - kinglet-data:/data
     restart: unless-stopped

@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Storage } from "../storage/index.ts";
 import * as schema from "../storage/schema.ts";
 import type { AnyKeyScope, KeyType } from "./roles.ts";
@@ -37,6 +37,8 @@ export interface VerifiedKey {
   name: string;
   keyType: KeyType;
   scopes: Set<AnyKeyScope>;
+  /** The user who minted the key; null for keys with no recorded owner. */
+  createdBy: string | null;
 }
 
 /** Parses stored scopes; anything invalid for the key type fails closed. */
@@ -90,7 +92,8 @@ export async function listApiKeys(storage: Storage, projectId: string): Promise<
     .from(schema.apiKeys)
     .leftJoin(schema.user, eq(schema.user.id, schema.apiKeys.createdBy))
     .where(eq(schema.apiKeys.projectId, projectId))
-    .orderBy(schema.apiKeys.id);
+    // Newest first, so a key you just created is on the first page.
+    .orderBy(desc(schema.apiKeys.id));
 
   return rows.map(({ key, email }) => toApiKey(key, email ?? null));
 }
@@ -325,6 +328,7 @@ export async function verifyApiKey(
     name: row.name,
     keyType,
     scopes: new Set(parseScopes(row.scopes, keyType)),
+    createdBy: row.createdBy ?? null,
   };
 }
 

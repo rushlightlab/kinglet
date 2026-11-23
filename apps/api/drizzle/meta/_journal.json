@@ -85,6 +85,13 @@
       "when": 1795223062962,
       "tag": "0011_project_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1795344654896,
+      "tag": "0012_channel_secrets",
+      "breakpoints": true
     }
   ]
 }

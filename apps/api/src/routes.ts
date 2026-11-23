@@ -1,8 +1,9 @@
 import { and, count, eq, inArray, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { bodyLimit } from "hono/body-limit";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import type { Context } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import type { Config } from "./env.ts";
 import {
   createApiKey,
@@ -63,7 +64,9 @@ import {
 } from "./auth/user-admin.ts";
 import { publishEvents, subscribeEvents } from "./bus.ts";
 import { passwordProblem } from "./auth/password.ts";
-import { buildWhere, matchesEvent, parseFilters } from "./filters.ts";
+import { buildVocabulary } from "./field-vocabulary.ts";
+import type { Vocabulary } from "./field-vocabulary.ts";
+import { buildQueryWhere, buildWhere, matchesEvent, parseFilters } from "./filters.ts";
 import type { Normalized } from "./ingest.ts";
 import { normalizeEvent } from "./ingest.ts";
 import { isBoolean, isJsonObject, isString } from "./json.ts";
@@ -71,13 +74,14 @@ import type { JsonObject, JsonValue } from "./json.ts";
 import { validateQueryString } from "./query-validation.ts";
 import { eventSizeBytes } from "./storage/events.ts";
 import { projectKeyOf } from "./storage/project-keys.ts";
-import type { Monitor, MonitorEngine } from "./monitors.ts";
+import type { Monitor, MonitorEngine, MonitorKind } from "./monitors.ts";
 import {
+  alertStateByMonitor,
+  pageAlerts,
   createMonitorFromRaw,
   deleteMonitor,
   getAlert,
   getMonitor,
-  listAlerts,
   listMonitors,
   resolveMonitorNotifyTargets,
   updateMonitorFromRaw,
@@ -87,6 +91,7 @@ import { parseAlertReadFilters } from "./alerts.ts";
 import { sendNotice, validateWebhookUrl } from "./notify.ts";
 import type { AlertNotice } from "./notify.ts";
 import { systemStatus } from "./status.ts";
+import { pageList, readPageRequest } from "./paging.ts";
 import * as schema from "./storage/schema.ts";
 import type { Storage } from "./storage/index.ts";
 import { localDbBytes, invalidateDbSizeCache } from "./storage/db-size.ts";
@@ -102,8 +107,14 @@ let activeStreams = 0;
 const streamsByIdentity = new Map<string, number>();
 const streamsByProject = new Map<string, number>();
 
+/**
+ * Live-tail slots are counted per person: a key's streams count against the
+ * user who minted it, so minting more keys does not buy more slots.
+ */
 function streamIdentity(auth: AuthInfo): string {
-  return auth.kind === "key" ? `key:${auth.keyId}` : `user:${auth.user.id}`;
+  if (auth.kind === "user") return `user:${auth.user.id}`;
+
+  return auth.createdBy === null ? `key:${auth.keyId}` : `user:${auth.createdBy}`;
 }
 
 /**
@@ -131,11 +142,41 @@ function validateQuery(q: string): string | null {
   return validateQueryString(q);
 }
 
+/** Keys one person may hold in one project (API and MCP keys together). */
+const MAX_KEYS_PER_USER_PER_PROJECT = 25;
+
 /** Per-identity ingest rate limit: 600 batches / minute. */
 const ingestWindows = new Map<string, { count: number; resetAt: number }>();
 
+/**
+ * Ingest bodies in flight at once, per key or session and per person (a
+ * person's keys share the second). There is no process-wide cap: it would let
+ * one person's stalled uploads hold every slot and block other tenants.
+ */
+const MAX_INGEST_IN_FLIGHT_PER_IDENTITY = 4;
+const MAX_INGEST_IN_FLIGHT_PER_PERSON = 16;
+const ingestInFlight = new Map<string, number>();
+
+/** The person a request counts against: the session user, or the key's creator. */
+function ingestPerson(auth: AuthInfo): string {
+  if (auth.kind === "user") return `user:${auth.user.id}`;
+
+  return auth.createdBy === null ? `key:${auth.keyId}` : `user:${auth.createdBy}`;
+}
+
+function releaseInFlight(id: string): void {
+  const remaining = (ingestInFlight.get(id) ?? 1) - 1;
+
+  if (remaining <= 0) ingestInFlight.delete(id);
+  else ingestInFlight.set(id, remaining);
+}
+
+function ingestIdentity(auth: AuthInfo): string {
+  return auth.kind === "key" ? `key:${auth.keyId}` : `user:${auth.user.id}`;
+}
+
 function allowIngest(auth: AuthInfo): boolean {
-  const id = auth.kind === "key" ? `key:${auth.keyId}` : `user:${auth.user.id}`;
+  const id = ingestIdentity(auth);
   const now = Date.now();
   const window = ingestWindows.get(id);
 
@@ -149,6 +190,48 @@ function allowIngest(auth: AuthInfo): boolean {
   window.count++;
 
   return true;
+}
+
+/**
+ * On-disk bytes per counted event byte, from the database's used pages over
+ * the sum of every project's counted bytes. At least 1; cached for 30 s. Below
+ * 8 MiB of events the fixed schema overhead would dominate the ratio, so 1 is
+ * used there.
+ */
+const AMPLIFICATION_MIN_COUNTED_BYTES = 8 * 1_048_576;
+let amplificationCache: { value: number; expiresAt: number } | null = null;
+
+async function storageAmplification(storage: Storage): Promise<number> {
+  const now = Date.now();
+
+  if (amplificationCache && amplificationCache.expiresAt > now) return amplificationCache.value;
+
+  let value = 1;
+
+  try {
+    const counted = await storage.db.all<{ n: number | null }>(
+      sql`SELECT sum(bytes) AS n FROM project_usage`,
+    );
+
+    const countedBytes = Number(counted[0]?.n ?? 0);
+
+    if (countedBytes >= AMPLIFICATION_MIN_COUNTED_BYTES) {
+      const pages = await storage.db.all<{ used: number; size: number }>(
+        sql`SELECT (SELECT page_count FROM pragma_page_count()) - (SELECT freelist_count FROM pragma_freelist_count()) AS used, (SELECT page_size FROM pragma_page_size()) AS size`,
+      );
+
+      const usedBytes = Number(pages[0]?.used ?? 0) * Number(pages[0]?.size ?? 0);
+
+      if (Number.isFinite(usedBytes) && usedBytes > countedBytes) value = usedBytes / countedBytes;
+    }
+  } catch {
+    // Remote databases may not expose page counts; fall back to raw bytes.
+    value = 1;
+  }
+
+  amplificationCache = { value, expiresAt: now + 30_000 };
+
+  return value;
 }
 
 /**
@@ -182,6 +265,13 @@ function bumpProjectCount(projectId: string, inserted: number): void {
 
   if (cached) cached.value += inserted;
 }
+
+/** The UI's words for monitor kinds, so a table search finds "spike" or "silence". */
+const MONITOR_KIND_WORDS: Record<MonitorKind, string> = {
+  match: "instant match",
+  count_above: "spike",
+  count_below: "silence",
+};
 
 function clampInt(value: string | undefined, fallback: number, min: number, max: number): number {
   if (value === undefined) return fallback;
@@ -222,6 +312,20 @@ async function readJsonStrict(
   if (!body) return { ok: false, error: "invalid JSON body" };
 
   return { ok: true, body };
+}
+
+/** Autocomplete samples at most this many of the newest events. */
+const FIELD_SAMPLE_EVENTS = 1_000;
+
+const FIELD_SAMPLE_WINDOW_MS = 24 * 3_600_000;
+
+/** DELETE /v1/events: what was cleared. `q` is present for a query clear. */
+interface ClearResponse {
+  deleted: number;
+  projectId: string;
+  from?: number;
+  to?: number;
+  q?: string;
 }
 
 interface IngestResponse {
@@ -320,9 +424,12 @@ export function registerRoutes(
      * undefined and uses the S3-backed implementation.
      */
     deleteArchivedObjects?: typeof deleteArchivedProjectObjects;
+    /** Holds off archive exports for a project while it is cleared or deleted. */
+    fenceArchive?: (projectId: string) => Promise<() => void>;
   },
 ): void {
   const deleteArchivedObjects = services?.deleteArchivedObjects ?? deleteArchivedProjectObjects;
+  const fenceArchive = services?.fenceArchive ?? (async () => () => {});
 
   // ================= current user =================
 
@@ -386,15 +493,19 @@ export function registerRoutes(
             .from(schema.projects)
             .orderBy(schema.projects.id);
 
-    return c.json({
-      projects: rows.map((r) => ({
+    const page = pageList(
+      rows.map((r) => ({
         id: r.id,
         name: r.name,
         slug: r.slug,
         createdAt: Number(r.createdAt),
         canClearLogs: Boolean(r.canClearLogs),
       })),
-    });
+      readPageRequest((name) => c.req.query(name)),
+      (project) => [project.name, project.slug],
+    );
+
+    return c.json({ projects: page.items, total: page.total });
   });
 
   app.post("/v1/projects", async (c) => {
@@ -499,6 +610,18 @@ export function registerRoutes(
 
     if (!(await projectExists(storage, id))) return c.json({ error: "project not found" }, 404);
 
+    // No archive part may be uploaded or recorded for this project while it is
+    // deleted, or the bucket would keep logs the delete reported as removed.
+    const releaseArchive = await fenceArchive(id);
+
+    try {
+      return await deleteProject(c, id);
+    } finally {
+      releaseArchive();
+    }
+  });
+
+  async function deleteProject(c: Context<AppEnv>, id: string): Promise<Response> {
     // Archived logs live in S3, outside the database transaction. Remove them
     // before the project row so a successful delete does not leave the
     // project's log content behind in the bucket.
@@ -536,7 +659,7 @@ export function registerRoutes(
     await engine.refresh();
 
     return c.json({ ok: true });
-  });
+  }
 
   // ================= users (admin) =================
 
@@ -545,7 +668,13 @@ export function registerRoutes(
 
     if (denied) return denied;
 
-    return c.json({ users: await listUsers(storage) });
+    const page = pageList(
+      await listUsers(storage),
+      readPageRequest((name) => c.req.query(name)),
+      (u) => [u.email, u.name, u.role, u.disabled ? "disabled" : "active"],
+    );
+
+    return c.json({ users: page.items, total: page.total });
   });
 
   app.post("/v1/users", async (c) => {
@@ -788,7 +917,20 @@ export function registerRoutes(
       return c.json({ error: "project not found" }, 404);
     }
 
-    return c.json({ keys: await listApiKeys(storage, projectId) });
+    // `type` splits the UI's application and MCP key tables.
+    const type = c.req.query("type");
+
+    const keys = (await listApiKeys(storage, projectId)).filter(
+      (key) => (type !== "api" && type !== "mcp") || key.keyType === type,
+    );
+
+    const page = pageList(
+      keys,
+      readPageRequest((name) => c.req.query(name)),
+      (key) => [key.name, key.prefix, key.createdByEmail, ...key.scopes],
+    );
+
+    return c.json({ keys: page.items, total: page.total });
   });
 
   app.post("/v1/projects/:id/keys", async (c) => {
@@ -847,6 +989,27 @@ export function registerRoutes(
 
     const me = getAuth(c);
     const createdBy = me.kind === "user" ? me.user.id : null;
+
+    // Per-key budgets (ingest batches, MCP requests) and stream slots must not
+    // be multiplied by minting keys without limit.
+    if (createdBy !== null) {
+      const owned = await storage.db
+        .select({ n: count() })
+        .from(schema.apiKeys)
+        .where(
+          and(eq(schema.apiKeys.projectId, projectId), eq(schema.apiKeys.createdBy, createdBy)),
+        );
+
+      if (Number(owned[0]?.n ?? 0) >= MAX_KEYS_PER_USER_PER_PROJECT) {
+        return c.json(
+          {
+            error: `key limit reached: ${MAX_KEYS_PER_USER_PER_PROJECT} keys per person per project — delete one you no longer use`,
+          },
+          409,
+        );
+      }
+    }
+
     const created = await createApiKey(storage, { projectId, name, keyType, scopes, createdBy });
 
     return c.json(created, 201);
@@ -996,8 +1159,8 @@ export function registerRoutes(
       .where(eq(schema.projectMembers.projectId, projectId))
       .orderBy(schema.user.email);
 
-    return c.json({
-      members: rows
+    const page = pageList(
+      rows
         .filter((r) => r.role !== "admin")
         .map((r) => ({
           userId: String(r.userId),
@@ -1007,7 +1170,11 @@ export function registerRoutes(
           canClearLogs: Boolean(r.canClearLogs),
           addedAt: Number(r.addedAt),
         })),
-    });
+      readPageRequest((name) => c.req.query(name)),
+      (m) => [m.email, m.name, m.role, m.canClearLogs ? "can clear logs" : null],
+    );
+
+    return c.json({ members: page.items, total: page.total });
   });
 
   app.post("/v1/projects/:id/members", async (c) => {
@@ -1124,7 +1291,10 @@ export function registerRoutes(
 
   // ================= events =================
 
-  app.post("/v1/events", bodyLimit({ maxSize: 8 * 1024 * 1024 }), async (c) => {
+  // Everything that can refuse an ingest request runs before the body is read,
+  // so a refused or over-budget caller never makes the server buffer up to
+  // 8 MiB, and each caller has a bounded number of bodies in flight at once.
+  const ingestAdmission: MiddlewareHandler<AppEnv> = async (c, next) => {
     const authInfo = getAuth(c);
 
     if (authInfo.kind === "key" && authInfo.keyType === "mcp") {
@@ -1178,6 +1348,32 @@ export function registerRoutes(
         );
       }
     }
+
+    const identity = `in-flight:${ingestIdentity(authInfo)}`;
+    const person = `in-flight-person:${ingestPerson(authInfo)}`;
+
+    if (
+      (ingestInFlight.get(identity) ?? 0) >= MAX_INGEST_IN_FLIGHT_PER_IDENTITY ||
+      (ingestInFlight.get(person) ?? 0) >= MAX_INGEST_IN_FLIGHT_PER_PERSON
+    ) {
+      return c.json({ error: "too many ingest requests in flight — retry shortly" }, 429);
+    }
+
+    ingestInFlight.set(identity, (ingestInFlight.get(identity) ?? 0) + 1);
+    ingestInFlight.set(person, (ingestInFlight.get(person) ?? 0) + 1);
+    c.set("ingestProjectId", projectId);
+
+    try {
+      await next();
+    } finally {
+      releaseInFlight(identity);
+      releaseInFlight(person);
+    }
+  };
+
+  app.post("/v1/events", ingestAdmission, bodyLimit({ maxSize: 8 * 1024 * 1024 }), async (c) => {
+    const authInfo = getAuth(c);
+    const projectId = c.get("ingestProjectId");
 
     const contentType = (c.req.header("content-type") ?? "").toLowerCase();
     const text = await c.req.text();
@@ -1257,9 +1453,13 @@ export function registerRoutes(
         .where(eq(schema.projectUsage.projectId, projectId))
         .limit(1);
 
-      const storedBytes = Number(usage[0]?.bytes ?? 0);
+      // Usage counts raw column bytes; the search index and the other indexes
+      // add several times that on disk. Scale by the database's measured
+      // ratio so a project at its quota cannot fill the shared database cap.
+      const amplification = await storageAmplification(storage);
+      const storedBytes = Number(usage[0]?.bytes ?? 0) * amplification;
 
-      if (storedBytes + incomingBytes > config.maxProjectBytes) {
+      if (storedBytes + incomingBytes * amplification > config.maxProjectBytes) {
         return c.json(
           {
             error:
@@ -1299,9 +1499,22 @@ export function registerRoutes(
     return c.json(response);
   });
 
-  // Destructive and project-scoped: admins, or a member explicitly granted
-  // `canClearLogs` on this project. API keys can never delete logs.
-  app.delete("/v1/events", async (c) => {
+  /**
+   * Parses and authorizes a clear-logs request (the delete and its preview):
+   * a user session with clear permission on the project, an optional
+   * `from`/`to` pair, and an optional Trill query `q`. Unlike reads, the
+   * window is not clamped to 31 days; without one, all time.
+   */
+  async function clearRequest(c: Context): Promise<
+    | Response
+    | {
+        projectId: string;
+        email: string;
+        range: { from: number; to: number } | undefined;
+        q: string;
+        filter: SQL;
+      }
+  > {
     const authInfo = getAuth(c);
 
     if (authInfo.kind !== "user") return c.json({ error: "user session required" }, 403);
@@ -1327,6 +1540,11 @@ export function registerRoutes(
       range = { from: Math.trunc(from), to: Math.trunc(to) };
     }
 
+    const q = (c.req.query("q") ?? "").trim();
+    const qError = validateQuery(q);
+
+    if (qError) return c.json({ error: qError }, 400);
+
     const projectId = await resolveProjectId(c, storage);
 
     if (projectId instanceof Response) return projectId;
@@ -1335,12 +1553,81 @@ export function registerRoutes(
       return c.json({ error: "forbidden" }, 403);
     }
 
-    const deleted = await storage.deleteByProject(projectId, range);
+    const filter = await buildQueryWhere(
+      storage.db,
+      q,
+      range ?? { from: 0, to: Number.MAX_SAFE_INTEGER },
+      projectId,
+      storage.searchMode,
+    );
 
-    // An all-time clear means the project's archived logs too. Range clears
-    // leave archive parts alone: deleting whole date parts for a partial range
-    // would remove events outside the requested window.
-    if (range === undefined) {
+    return { projectId, email: authInfo.user.email, range, q, filter };
+  }
+
+  // What a clear would delete, so the UI can show it before anything goes.
+  // Same parameters and permission as DELETE /v1/events.
+  app.get("/v1/events/clear/preview", async (c) => {
+    const request = await clearRequest(c);
+
+    if (request instanceof Response) return request;
+
+    const [total, byService, sample] = await Promise.all([
+      storage.countEvents(request.filter),
+      storage.groupEventCounts(request.filter, "service", 10),
+      storage.queryEvents({
+        projectId: request.projectId,
+        filter: request.filter,
+        limit: 5,
+        cursor: null,
+      }),
+    ]);
+
+    return c.json({
+      projectId: request.projectId,
+      ...request.range,
+      q: request.q,
+      total,
+      services: toAggregateGroups(byService.groups),
+      moreServices: byService.truncated,
+      sample: sample.map(toClientEvent),
+      archive: request.range === undefined && request.q === "",
+    });
+  });
+
+  // Destructive and project-scoped: admins, or a member explicitly granted
+  // `canClearLogs` on this project. API keys can never delete logs.
+  app.delete("/v1/events", async (c) => {
+    const request = await clearRequest(c);
+
+    if (request instanceof Response) return request;
+    const { projectId, range, q } = request;
+    const allTime = range === undefined && q === "";
+    // An all-time clear removes archived logs too, so no part may be uploaded
+    // or recorded for the project until it finishes.
+    const releaseArchive = allTime ? await fenceArchive(projectId) : () => {};
+
+    try {
+      return await clearEvents(c, request);
+    } finally {
+      releaseArchive();
+    }
+  });
+
+  async function clearEvents(
+    c: Context<AppEnv>,
+    request: Exclude<Awaited<ReturnType<typeof clearRequest>>, Response>,
+  ): Promise<Response> {
+    const { projectId, range, q } = request;
+
+    const deleted =
+      q === ""
+        ? await storage.deleteByProject(projectId, range)
+        : await storage.deleteMatching(request.filter);
+
+    // An unconditional all-time clear means the project's archived logs too.
+    // Range and query clears leave archive parts alone: deleting whole date
+    // parts would remove events outside the requested selection.
+    if (range === undefined && q === "") {
       try {
         await deleteArchivedObjects(config, projectId);
       } catch (cause) {
@@ -1350,6 +1637,11 @@ export function registerRoutes(
 
         return c.json({ error: "archived project objects could not be deleted" }, 502);
       }
+
+      // The parts are gone from the bucket; drop their index rows as well.
+      await storage.db
+        .delete(schema.archiveParts)
+        .where(eq(schema.archiveParts.projectId, projectId));
     }
 
     projectCountCache.delete(projectId);
@@ -1359,11 +1651,20 @@ export function registerRoutes(
         (range
           ? ` between ${new Date(range.from).toISOString()} and ${new Date(range.to).toISOString()}`
           : " (all time)") +
-        ` (${authInfo.user.email})`,
+        (q ? ` matching ${JSON.stringify(q)}` : "") +
+        ` (${request.email})`,
     );
 
-    return c.json({ deleted, projectId, ...range });
-  });
+    const body: ClearResponse = {
+      deleted,
+      projectId,
+      ...range,
+    };
+
+    if (q) body.q = q;
+
+    return c.json(body);
+  }
 
   app.get("/v1/events", async (c) => {
     const authInfo = getAuth(c);
@@ -1387,7 +1688,15 @@ export function registerRoutes(
     const limit = clampInt(c.req.query("limit"), 200, 1, 1000);
     const cursorRaw = Number(c.req.query("cursor"));
     const cursor = Number.isFinite(cursorRaw) && cursorRaw > 0 ? cursorRaw : null;
-    const filter = buildWhere(parseFilters(q), { from, to }, projectId, storage.searchMode);
+
+    const filter = await buildQueryWhere(
+      storage.db,
+      q,
+      { from, to },
+      projectId,
+      storage.searchMode,
+    );
+
     const rows = await storage.queryEvents({ projectId, filter, limit, cursor });
 
     return c.json({
@@ -1458,14 +1767,66 @@ export function registerRoutes(
     const { from, to } = range;
     const buckets = clampInt(c.req.query("buckets"), 60, 1, 240);
     const bucketMs = Math.max(1000, Math.trunc((to - from) / buckets));
+    const q = c.req.query("q") ?? "";
+    const qError = validateQuery(q);
+
+    if (qError) return c.json({ error: qError }, 400);
+
+    // Without a query the unfiltered fast path applies; buildWhere scopes the
+    // filter to this project and window.
+    const filter = q.trim()
+      ? await buildQueryWhere(storage.db, q, { from, to }, projectId, storage.searchMode)
+      : undefined;
 
     return c.json({
       from,
       to,
       bucketMs,
-      points: await storage.histogramPoints(projectId, from, to, bucketMs),
+      points: await storage.histogramPoints(projectId, from, to, bucketMs, filter),
     });
   });
+
+  // Query autocomplete: the field keys, types, and common values in the newest
+  // events of the window (last 24 hours by default), plus services and envs.
+  app.get("/v1/fields", async (c) => {
+    const authInfo = getAuth(c);
+
+    if (!canCapability(authInfo, "logs.read")) {
+      return c.json({ error: readScopeError(authInfo) }, 403);
+    }
+
+    const projectId = await resolveProjectId(c, storage);
+
+    if (projectId instanceof Response) return projectId;
+
+    if (c.req.query("from") === undefined && c.req.query("to") === undefined) {
+      const now = Date.now();
+
+      return c.json(
+        await fieldVocabulary(projectId, { from: now - FIELD_SAMPLE_WINDOW_MS, to: now }),
+      );
+    }
+
+    const range = parseRange(c);
+
+    if (range instanceof Response) return range;
+
+    return c.json(await fieldVocabulary(projectId, range));
+  });
+
+  async function fieldVocabulary(
+    projectId: string,
+    range: { from: number; to: number },
+  ): Promise<Vocabulary & { from: number; to: number }> {
+    const rows = await storage.queryEvents({
+      projectId,
+      filter: buildWhere(parseFilters(""), range, projectId, storage.searchMode),
+      limit: FIELD_SAMPLE_EVENTS,
+      cursor: null,
+    });
+
+    return { ...range, ...buildVocabulary(rows) };
+  }
 
   app.get("/v1/services", async (c) => {
     const authInfo = getAuth(c);
@@ -1507,7 +1868,14 @@ export function registerRoutes(
 
     if (range instanceof Response) return range;
     const { from, to } = range;
-    const filter = buildWhere(parseFilters(q), { from, to }, projectId, storage.searchMode);
+
+    const filter = await buildQueryWhere(
+      storage.db,
+      q,
+      { from, to },
+      projectId,
+      storage.searchMode,
+    );
 
     // Total and grouped counts are intentionally separate reads. A concurrent
     // ingest can make `total` differ from the sum of `groups` transiently.
@@ -1818,7 +2186,34 @@ export function registerRoutes(
     const projectId = await resolveProjectId(c, storage);
 
     if (projectId instanceof Response) return projectId;
-    const monitors = await listMonitors(storage, projectId);
+
+    const page = pageList(
+      await listMonitors(storage, projectId),
+      readPageRequest((name) => c.req.query(name)),
+      (m) => [
+        m.name,
+        m.query,
+        m.kind,
+        MONITOR_KIND_WORDS[m.kind],
+        m.enabled ? "enabled" : "paused",
+        ...m.resolvedChannels.map((channel) => channel.name),
+        ...m.channels.map((channel) => channel.type),
+      ],
+    );
+
+    const monitors = page.items;
+
+    const alertStates = await alertStateByMonitor(
+      storage,
+      monitors.map((m) => m.id),
+    );
+
+    const withAlerts = <T extends { id: string }>(m: T) => ({
+      ...m,
+      lastAlertAt: alertStates.get(m.id)?.lastAlertAt ?? null,
+      firing: alertStates.get(m.id)?.firing ?? false,
+    });
+
     const authInfo = getAuth(c);
     // Webhook URLs are bearer secrets and engine errors may name internal
     // hosts: only administrators who manage shared channels see them. Other
@@ -1827,17 +2222,20 @@ export function registerRoutes(
 
     return c.json({
       monitors: canSeeChannels
-        ? monitors
-        : monitors.map((m) => ({
-            ...m,
-            channels: m.channels.map((ch) => ({ type: ch.type, url: "hidden" })),
-            resolvedChannels: m.resolvedChannels.map((channel) => ({
-              ...channel,
-              health: { ...channel.health, error: null },
-            })),
-            lastError: null,
-            lastErrorAt: null,
-          })),
+        ? monitors.map(withAlerts)
+        : monitors.map((m) =>
+            withAlerts({
+              ...m,
+              channels: m.channels.map((ch) => ({ type: ch.type, url: "hidden" })),
+              resolvedChannels: m.resolvedChannels.map((channel) => ({
+                ...channel,
+                health: { ...channel.health, error: null },
+              })),
+              lastError: null,
+              lastErrorAt: null,
+            }),
+          ),
+      total: page.total,
     });
   });
 
@@ -2025,7 +2423,10 @@ export function registerRoutes(
     const results = await Promise.all(
       targets.map(async (channel) => {
         try {
-          await sendNotice(channel, notice, { allowPrivate: config.allowPrivateWebhooks });
+          await sendNotice(channel, notice, {
+            allowPrivate: config.allowPrivateWebhooks,
+            smtp: config.smtp,
+          });
 
           return { type: channel.type, ok: true };
         } catch (err) {
@@ -2079,15 +2480,27 @@ export function registerRoutes(
 
     if (parsed.filters.to !== null) alertFilters.to = parsed.filters.to;
 
-    const alerts = await listAlerts(storage, limit, projectId, alertFilters);
     const authInfo = getAuth(c);
     // Delivery errors can name internal endpoints; only administrators see even
     // the sanitized text. Monitor writers and machine keys get null.
     const canSeeErrors = authInfo.kind === "user" && can(authInfo, "users.write");
     const canSeeSamples = canCapability(authInfo, "logs.read");
 
+    // Offset paging for the UI's alert table; `q` searches monitor name,
+    // state, and (for callers that may read logs) the summary, which holds log
+    // text. Searching a hidden summary would turn the total into an oracle.
+    const offset = clampInt(c.req.query("offset"), 0, 0, 1_000_000);
+
+    const { alerts, total } = await pageAlerts(storage, projectId, alertFilters, {
+      limit,
+      offset,
+      q: c.req.query("q"),
+      searchSummary: canSeeSamples,
+    });
+
     return c.json({
       alerts: alerts.map((alert) => alertForAuth(alert, canSeeErrors, canSeeSamples)),
+      total,
     });
   });
 

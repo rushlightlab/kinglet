@@ -10,6 +10,7 @@ import type {
   BackupSnapshot,
   BackupStatus,
   ChannelTestResult,
+  ClearPreview,
   EventPage,
   Histogram,
   KeyType,
@@ -23,6 +24,7 @@ import type {
   ProjectMember,
   Service,
 } from "./types";
+import type { Vocabulary } from "./query";
 import { createAuthClient } from "better-auth/react";
 
 export class UnauthorizedError extends Error {}
@@ -35,6 +37,24 @@ function withProject(path: string, projectId: string): string {
   const separator = path.includes("?") ? "&" : "?";
 
   return `${path}${separator}project=${projectId}`;
+}
+
+/** One page of a table: `limit` rows from `offset`, matching `q`. */
+export interface PageQuery {
+  limit: number;
+  offset: number;
+  q: string;
+}
+
+/** Adds a table page to a list path; without one, the server returns every row. */
+function withPage(path: string, page: PageQuery | undefined): string {
+  if (page === undefined) return path;
+  const params = new URLSearchParams({ limit: String(page.limit), offset: String(page.offset) });
+  const q = page.q.trim();
+
+  if (q !== "") params.set("q", q);
+
+  return `${path}${path.includes("?") ? "&" : "?"}${params.toString()}`;
 }
 
 async function api<T>(path: string, init?: RequestInit, timeoutMs = 15_000): Promise<T> {
@@ -117,11 +137,19 @@ export async function fetchMe(): Promise<{ user: AppUser; permissions: string[] 
   return api<{ user: AppUser; permissions: string[] }>("/v1/me");
 }
 
-export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
-  const { error } = await authClient.changePassword({
-    currentPassword,
-    newPassword,
-    revokeOtherSessions: true,
+/**
+ * Signs out the other sessions. With `revokeApiKeys` the server also deletes
+ * the API and MCP keys this user created, so a key minted from a stolen
+ * session cannot outlive the change.
+ */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+  revokeApiKeys: boolean,
+): Promise<void> {
+  const { error } = await authClient.$fetch<unknown>("/change-password", {
+    method: "POST",
+    body: { currentPassword, newPassword, revokeOtherSessions: true, revokeApiKeys },
   });
 
   if (error) throw new Error(error.message ?? "could not change password");
@@ -129,8 +157,8 @@ export async function changePassword(currentPassword: string, newPassword: strin
 
 // ---------- projects ----------
 
-export function fetchProjects(): Promise<{ projects: Project[] }> {
-  return api<{ projects: Project[] }>("/v1/projects");
+export function fetchProjects(page?: PageQuery): Promise<{ projects: Project[]; total: number }> {
+  return api<{ projects: Project[]; total: number }>(withPage("/v1/projects", page));
 }
 
 export function createProject(name: string): Promise<{ project: Project }> {
@@ -153,8 +181,13 @@ export function renameProject(id: string, name: string): Promise<{ project: Proj
 
 // ---------- project members (admin) ----------
 
-export function fetchProjectMembers(projectId: string): Promise<{ members: ProjectMember[] }> {
-  return api<{ members: ProjectMember[] }>(`/v1/projects/${projectId}/members`);
+export function fetchProjectMembers(
+  projectId: string,
+  page?: PageQuery,
+): Promise<{ members: ProjectMember[]; total: number }> {
+  return api<{ members: ProjectMember[]; total: number }>(
+    withPage(`/v1/projects/${projectId}/members`, page),
+  );
 }
 
 export function addProjectMember(projectId: string, userId: string): Promise<{ ok: true }> {
@@ -183,8 +216,8 @@ export function updateProjectMember(
 
 // ---------- users (admin) ----------
 
-export function fetchUsers(): Promise<{ users: AppUser[] }> {
-  return api<{ users: AppUser[] }>("/v1/users");
+export function fetchUsers(page?: PageQuery): Promise<{ users: AppUser[]; total: number }> {
+  return api<{ users: AppUser[]; total: number }>(withPage("/v1/users", page));
 }
 
 export function createUser(input: {
@@ -199,10 +232,14 @@ export function createUser(input: {
   });
 }
 
-export function updateUser(
-  id: string,
-  patch: { name?: string; role?: string; disabled?: boolean },
-): Promise<{ user: AppUser }> {
+/** The fields an administrator can change on a user. */
+export interface UserPatch {
+  name?: string;
+  role?: string;
+  disabled?: boolean;
+}
+
+export function updateUser(id: string, patch: UserPatch): Promise<{ user: AppUser }> {
   return api<{ user: AppUser }>(`/v1/users/${id}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
@@ -219,8 +256,14 @@ export function deleteUser(id: string): Promise<{ ok: true }> {
 
 // ---------- API keys ----------
 
-export function fetchKeys(projectId: string): Promise<{ keys: ApiKeyInfo[] }> {
-  return api<{ keys: ApiKeyInfo[] }>(`/v1/projects/${projectId}/keys`);
+export function fetchKeys(
+  projectId: string,
+  type?: KeyType,
+  page?: PageQuery,
+): Promise<{ keys: ApiKeyInfo[]; total: number }> {
+  const path = `/v1/projects/${projectId}/keys${type ? `?type=${type}` : ""}`;
+
+  return api<{ keys: ApiKeyInfo[]; total: number }>(withPage(path, page));
 }
 
 export function createKey(
@@ -280,20 +323,42 @@ export function fetchEvents(opts: {
 }
 
 /** Deletes events in the project, optionally within an epoch-ms range. */
-export function clearProjectLogs(
-  projectId: string,
-  range?: { from: number; to: number },
-): Promise<{ deleted: number; projectId: string; from?: number; to?: number }> {
+/** What to clear: an optional time range and an optional Trill query. */
+export interface ClearSelection {
+  range?: { from: number; to: number };
+  q?: string;
+}
+
+function clearParams(projectId: string, selection: ClearSelection): URLSearchParams {
   const params = new URLSearchParams({ project: String(projectId) });
 
-  if (range) {
-    params.set("from", String(range.from));
-    params.set("to", String(range.to));
+  if (selection.range) {
+    params.set("from", String(selection.range.from));
+    params.set("to", String(selection.range.to));
   }
 
-  return api<{ deleted: number; projectId: string; from?: number; to?: number }>(
-    `/v1/events?${params.toString()}`,
+  if (selection.q?.trim()) params.set("q", selection.q.trim());
+
+  return params;
+}
+
+export function clearProjectLogs(
+  projectId: string,
+  selection: ClearSelection = {},
+): Promise<{ deleted: number; projectId: string; from?: number; to?: number; q?: string }> {
+  return api<{ deleted: number; projectId: string; from?: number; to?: number; q?: string }>(
+    `/v1/events?${clearParams(projectId, selection).toString()}`,
     { method: "DELETE" },
+  );
+}
+
+/** Count, per-service breakdown, and newest examples of what a clear would delete. */
+export function fetchClearPreview(
+  projectId: string,
+  selection: ClearSelection = {},
+): Promise<ClearPreview> {
+  return api<ClearPreview>(
+    `/v1/events/clear/preview?${clearParams(projectId, selection).toString()}`,
   );
 }
 
@@ -302,12 +367,20 @@ export function fetchHistogram(opts: {
   from: number;
   to: number;
   buckets?: number;
+  q?: string;
 }): Promise<Histogram> {
   const params = new URLSearchParams({ from: String(opts.from), to: String(opts.to) });
 
   if (opts.buckets) params.set("buckets", String(opts.buckets));
 
+  if (opts.q?.trim()) params.set("q", opts.q);
+
   return api<Histogram>(withProject(`/v1/histogram?${params.toString()}`, opts.projectId));
+}
+
+/** Field keys, types, and common values from recent events, for query autocomplete. */
+export function fetchFieldVocabulary(projectId: string): Promise<Vocabulary> {
+  return api<Vocabulary>(withProject("/v1/fields", projectId));
 }
 
 export function fetchServices(projectId: string): Promise<{ services: Service[] }> {
@@ -325,8 +398,13 @@ export function openStream(projectId: string, q: string): EventSource {
 
 // ---------- monitors & alerts ----------
 
-export function fetchMonitors(projectId: string): Promise<{ monitors: Monitor[] }> {
-  return api<{ monitors: Monitor[] }>(withProject("/v1/monitors", projectId));
+export function fetchMonitors(
+  projectId: string,
+  page?: PageQuery,
+): Promise<{ monitors: Monitor[]; total: number }> {
+  return api<{ monitors: Monitor[]; total: number }>(
+    withPage(withProject("/v1/monitors", projectId), page),
+  );
 }
 
 export function createMonitor(
@@ -371,8 +449,13 @@ export function testChannel(projectId: string, channel: NotifyChannel): Promise<
   });
 }
 
-export function fetchAlerts(projectId: string, limit = 100): Promise<{ alerts: AlertRecord[] }> {
-  return api<{ alerts: AlertRecord[] }>(withProject(`/v1/alerts?limit=${limit}`, projectId));
+export function fetchAlerts(
+  projectId: string,
+  page?: PageQuery,
+): Promise<{ alerts: AlertRecord[]; total: number }> {
+  return api<{ alerts: AlertRecord[]; total: number }>(
+    withPage(withProject("/v1/alerts", projectId), page),
+  );
 }
 
 // ---------- system events (SSE) ----------
@@ -392,12 +475,16 @@ export function fetchBackupStatus(): Promise<{ status: BackupStatus }> {
   return api<{ status: BackupStatus }>("/v1/backups/status");
 }
 
-export function fetchBackups(refresh = false): Promise<{
+export function fetchBackups(
+  refresh = false,
+  page?: PageQuery,
+): Promise<{
   snapshots: BackupSnapshot[];
+  total: number;
   warning?: string;
 }> {
-  return api<{ snapshots: BackupSnapshot[]; warning?: string }>(
-    refresh ? "/v1/backups?refresh=1" : "/v1/backups",
+  return api<{ snapshots: BackupSnapshot[]; total: number; warning?: string }>(
+    withPage(refresh ? "/v1/backups?refresh=1" : "/v1/backups", page),
   );
 }
 
@@ -480,8 +567,23 @@ export function setProjectArchive(
 
 // ---------- notification channels ----------
 
-export function fetchNotificationChannels(): Promise<{ channels: NotificationChannel[] }> {
-  return api<{ channels: NotificationChannel[] }>("/v1/notifications/channels");
+export function fetchNotificationChannels(
+  page?: PageQuery,
+): Promise<{ channels: NotificationChannel[]; total: number }> {
+  return api<{ channels: NotificationChannel[]; total: number }>(
+    withPage("/v1/notifications/channels", page),
+  );
+}
+
+/** What the channel form can offer: email needs an SMTP server in the env. */
+/** What the channel form can offer: email needs SMTP, every channel needs KINGLET_SECRET_KEY. */
+export interface NotificationCapabilities {
+  email: { configured: boolean; from: string | null };
+  secrets: { configured: boolean };
+}
+
+export function fetchNotificationCapabilities(): Promise<NotificationCapabilities> {
+  return api<NotificationCapabilities>("/v1/notifications/capabilities");
 }
 
 /** Admin-only read that returns the unmasked URL for the edit dialog. */
@@ -524,7 +626,9 @@ export function fetchNotificationChannelSummary(): Promise<{
 }
 
 export function fetchNotificationDeliveries(
-  limit = 100,
-): Promise<{ deliveries: NotificationDelivery[] }> {
-  return api<{ deliveries: NotificationDelivery[] }>(`/v1/notifications/deliveries?limit=${limit}`);
+  page?: PageQuery,
+): Promise<{ deliveries: NotificationDelivery[]; total: number }> {
+  return api<{ deliveries: NotificationDelivery[]; total: number }>(
+    withPage("/v1/notifications/deliveries", page),
+  );
 }

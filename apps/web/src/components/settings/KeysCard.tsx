@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import type { ReactNode } from "react";
 import {
   BarChart3Icon,
@@ -13,10 +13,16 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { createKey, deleteKey, fetchKeys, rotateKey, updateKeyScopes } from "../../api";
+import type { PageQuery } from "../../api";
 import { hasPermission, useApp } from "../../app-context";
 import type { ApiKeyInfo, KeyType } from "../../types";
 import CopyButton from "../CopyButton";
 import ErrorAlert from "../ErrorAlert";
+import SkeletonRows from "../SkeletonRows";
+import TablePagination from "../TablePagination";
+import TableSearch, { NoMatchesRow } from "../TableSearch";
+import { fadeWhileLoading, useServerTable } from "../../server-table";
+import type { ServerTable } from "../../server-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -29,7 +35,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -76,7 +89,7 @@ function mcpConfigSnippet(plaintext: string): string {
         command: "npx",
         // Keep the setup snippet on the reviewed release instead of the
         // mutable latest dist-tag.
-        args: ["-y", "@kinglet/mcp@0.4.0"],
+        args: ["-y", "@kinglet/mcp@0.5.0"],
         env: {
           KINGLET_URL: window.location.origin,
           KINGLET_MCP_KEY: plaintext,
@@ -93,13 +106,7 @@ interface CreatedSecret {
   keyType: KeyType;
 }
 
-export default function KeysCard({
-  projectId,
-  projectName,
-}: {
-  projectId: string;
-  projectName: string;
-}) {
+export default function KeysCard({ projectId }: { projectId: string }) {
   const { permissions, user } = useApp();
   const navigate = useNavigate();
   const canWriteKeys = hasPermission(permissions, "keys.write");
@@ -107,7 +114,29 @@ export default function KeysCard({
   const canManageKey = (key: ApiKeyInfo): boolean =>
     canWriteKeys && (user.role === "admin" || key.createdBy === user.id);
 
-  const [keys, setKeys] = useState<ApiKeyInfo[]>([]);
+  const loadAppKeys = useCallback(
+    async (page: PageQuery) => {
+      const result = await fetchKeys(projectId, "api", page);
+
+      return { rows: result.keys, total: result.total };
+    },
+    [projectId],
+  );
+
+  const loadMcpKeys = useCallback(
+    async (page: PageQuery) => {
+      const result = await fetchKeys(projectId, "mcp", page);
+
+      return { rows: result.keys, total: result.total };
+    },
+    [projectId],
+  );
+
+  const appTable = useServerTable("app-keys", loadAppKeys);
+
+  const { reload: reloadAppKeys } = appTable;
+  const mcpTable = useServerTable("mcp-keys", loadMcpKeys);
+  const { reload: reloadMcpKeys } = mcpTable;
   const [error, setError] = useState<string | null>(null);
 
   const [appName, setAppName] = useState("");
@@ -116,6 +145,7 @@ export default function KeysCard({
   const [creatingApp, setCreatingApp] = useState(false);
 
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [appOpen, setAppOpen] = useState(false);
   const [mcpName, setMcpName] = useState("");
   const [mcpLogs, setMcpLogs] = useState(true);
   const [mcpMonitorsRead, setMcpMonitorsRead] = useState(true);
@@ -135,20 +165,19 @@ export default function KeysCard({
   const [actionBusy, setActionBusy] = useState(false);
 
   const load = useCallback(async () => {
-    try {
-      setKeys((await fetchKeys(projectId)).keys);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }, [projectId]);
+    await Promise.all([reloadAppKeys(), reloadMcpKeys()]);
+  }, [reloadAppKeys, reloadMcpKeys]);
 
-  useEffect(() => {
+  // Another project closes open dialogs and a shown secret (reset while rendering).
+  const [shownProjectId, setShownProjectId] = useState(projectId);
+
+  if (shownProjectId !== projectId) {
+    setShownProjectId(projectId);
     setCreatedSecret(null);
     setMcpOpen(false);
+    setAppOpen(false);
     setEditKey(null);
-    void load();
-  }, [load]);
+  }
 
   const createApplicationKey = async (): Promise<void> => {
     const scopes: string[] = [];
@@ -165,6 +194,7 @@ export default function KeysCard({
 
       setCreatedSecret({ plaintext: result.plaintext, keyType: "api" });
       setAppName("");
+      setAppOpen(false);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -280,10 +310,7 @@ export default function KeysCard({
     }
   };
 
-  const applicationKeys = keys.filter((key) => keyTypeOf(key) === "api");
-  const mcpKeys = keys.filter((key) => keyTypeOf(key) === "mcp");
-
-  const renderKeyTable = (rows: ApiKeyInfo[], emptyText: string): ReactNode => (
+  const renderKeyTable = (table: ServerTable<ApiKeyInfo>, emptyText: string): ReactNode => (
     <Table>
       <TableHeader>
         <TableRow>
@@ -295,8 +322,8 @@ export default function KeysCard({
           <TableHead className="text-right">actions</TableHead>
         </TableRow>
       </TableHeader>
-      <TableBody>
-        {rows.map((key) => {
+      <TableBody className={fadeWhileLoading(table)}>
+        {table.rows.map((key) => {
           const keyType = keyTypeOf(key);
 
           return (
@@ -392,7 +419,16 @@ export default function KeysCard({
             </TableRow>
           );
         })}
-        {rows.length === 0 && (
+        {!table.loaded && <SkeletonRows columns={6} rows={2} label="Loading keys…" />}
+        {table.loaded && table.total === 0 && table.activeQuery !== "" && (
+          <NoMatchesRow
+            columns={6}
+            query={table.activeQuery}
+            noun="keys"
+            onClear={() => table.setQuery("")}
+          />
+        )}
+        {table.loaded && table.total === 0 && table.activeQuery === "" && (
           <TableRow>
             <TableCell colSpan={6} className="py-4 text-center text-mist-faint">
               {emptyText}
@@ -405,15 +441,24 @@ export default function KeysCard({
 
   return (
     <div className="flex flex-col gap-3">
-      <ErrorAlert error={error} />
+      <ErrorAlert error={error ?? appTable.error ?? mcpTable.error} />
 
       <Card>
         <CardHeader>
-          <CardTitle>Application keys — {projectName}</CardTitle>
+          <CardTitle>Application keys</CardTitle>
           <CardDescription>
             Keys are machine credentials: <span className="text-gold">ingest</span> writes logs,{" "}
             <span className="text-gold">query</span> reads them. The full key is shown once.
           </CardDescription>
+          <CardAction className="row-span-1 flex items-center gap-2 self-center">
+            <TableSearch label="Search keys" value={appTable.query} onChange={appTable.setQuery} />
+            {canWriteKeys && (
+              <Button size="sm" className="shrink-0" onClick={() => setAppOpen(true)}>
+                <PlusIcon data-icon="inline-start" />
+                new key
+              </Button>
+            )}
+          </CardAction>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           {createdSecret?.keyType === "api" && (
@@ -431,82 +476,31 @@ export default function KeysCard({
             </Alert>
           )}
 
-          {renderKeyTable(applicationKeys, "No application keys for this project yet.")}
-
-          {canWriteKeys && (
-            <form
-              className="flex flex-wrap items-end gap-3 border-t border-white/[0.06] pt-4"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void createApplicationKey();
-              }}
-            >
-              <Field className="min-w-40 flex-1">
-                <FieldLabel htmlFor="key-name">key name</FieldLabel>
-                <Input
-                  id="key-name"
-                  value={appName}
-                  onChange={(event) => setAppName(event.target.value)}
-                  placeholder="production-ingest"
-                />
-              </Field>
-              <Field orientation="horizontal" className="h-9 w-auto">
-                <Checkbox
-                  id="scope-ingest"
-                  aria-label="ingest"
-                  checked={scopeIngest}
-                  onCheckedChange={(checked) => setScopeIngest(checked === true)}
-                />
-                <FieldLabel
-                  htmlFor="scope-ingest"
-                  className="normal-case tracking-normal text-xs text-mist-dim"
-                >
-                  ingest
-                </FieldLabel>
-              </Field>
-              <Field orientation="horizontal" className="h-9 w-auto">
-                <Checkbox
-                  id="scope-query"
-                  aria-label="query"
-                  checked={scopeQuery}
-                  onCheckedChange={(checked) => setScopeQuery(checked === true)}
-                />
-                <FieldLabel
-                  htmlFor="scope-query"
-                  className="normal-case tracking-normal text-xs text-mist-dim"
-                >
-                  query
-                </FieldLabel>
-              </Field>
-              <Button
-                type="submit"
-                className="shadow-none hover:translate-y-0 hover:shadow-none"
-                disabled={creatingApp || !appName.trim() || (!scopeIngest && !scopeQuery)}
-              >
-                <PlusIcon data-icon="inline-start" />
-                create key
-              </Button>
-            </form>
-          )}
+          {renderKeyTable(appTable, "No application keys for this project yet.")}
         </CardContent>
+        <TablePagination table={appTable} noun="keys" className="-mb-4" />
       </Card>
 
       <Card>
         <CardHeader>
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2">
-                <BotIcon className="size-4 text-gold/80" />
-                <CardTitle>MCP keys — {projectName}</CardTitle>
-              </div>
-              <CardDescription>
-                AI clients use a project-scoped <span className="text-gold">km_</span> key to search
-                logs and manage monitors. It never inherits a human role.
-              </CardDescription>
-            </div>
+          <CardTitle className="flex items-center gap-2">
+            <BotIcon className="size-4 text-gold/80" />
+            MCP keys
+          </CardTitle>
+          <CardDescription>
+            AI clients use a project-scoped <span className="text-gold">km_</span> key to search
+            logs and manage monitors. It never inherits a human role.
+          </CardDescription>
+          <CardAction className="row-span-1 flex items-center gap-2 self-center">
+            <TableSearch
+              label="Search MCP keys"
+              value={mcpTable.query}
+              onChange={mcpTable.setQuery}
+            />
             {canWriteKeys && (
               <Button
                 size="sm"
+                className="shrink-0"
                 onClick={() => {
                   setMcpError(null);
                   setMcpOpen(true);
@@ -516,13 +510,14 @@ export default function KeysCard({
                 new MCP key
               </Button>
             )}
-          </div>
+          </CardAction>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           {renderKeyTable(
-            mcpKeys,
+            mcpTable,
             "No MCP keys yet. Create one for Claude Desktop, Cursor, or Codex.",
           )}
+          <TablePagination table={mcpTable} noun="MCP keys" className="-mx-4" />
 
           <p className="font-mono text-[10px] leading-relaxed text-mist-faint">
             Default scopes are <span className="text-mist-dim">logs.read</span> and{" "}
@@ -570,6 +565,81 @@ export default function KeysCard({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={appOpen} onOpenChange={setAppOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createApplicationKey();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>New application key</DialogTitle>
+              <DialogDescription>
+                For a server or script in this project. The key is shown once, so copy it into your
+                app's environment right away.
+              </DialogDescription>
+            </DialogHeader>
+            <FieldGroup className="mt-4">
+              <Field>
+                <FieldLabel htmlFor="key-name">key name</FieldLabel>
+                <Input
+                  id="key-name"
+                  value={appName}
+                  onChange={(event) => setAppName(event.target.value)}
+                  placeholder="production-ingest"
+                />
+              </Field>
+              <div className="flex flex-col gap-2 rounded-[5px] border border-white/[0.06] p-3">
+                <label className="flex items-center justify-between gap-3" htmlFor="scope-ingest">
+                  <span className="flex flex-col gap-0.5">
+                    <span className="font-mono text-xs text-mist">ingest</span>
+                    <span className="font-mono text-[10px] text-mist-faint">Send logs.</span>
+                  </span>
+                  <Checkbox
+                    id="scope-ingest"
+                    aria-label="ingest"
+                    checked={scopeIngest}
+                    onCheckedChange={(checked) => setScopeIngest(checked === true)}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3" htmlFor="scope-query">
+                  <span className="flex flex-col gap-0.5">
+                    <span className="font-mono text-xs text-mist">query</span>
+                    <span className="font-mono text-[10px] text-mist-faint">
+                      Read logs through the API.
+                    </span>
+                  </span>
+                  <Checkbox
+                    id="scope-query"
+                    aria-label="query"
+                    checked={scopeQuery}
+                    onCheckedChange={(checked) => setScopeQuery(checked === true)}
+                  />
+                </label>
+              </div>
+            </FieldGroup>
+            <DialogFooter className="mt-4">
+              <Button variant="outline" size="sm" type="button" onClick={() => setAppOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={creatingApp || !appName.trim() || (!scopeIngest && !scopeQuery)}
+              >
+                {creatingApp ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <PlusIcon data-icon="inline-start" />
+                )}
+                Create key
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={mcpOpen}

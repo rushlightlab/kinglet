@@ -378,6 +378,55 @@ describe("live stream limits", () => {
       }
     }
   });
+
+  it("counts streams from every key a person minted against that person", async () => {
+    const test = ctx();
+
+    const keys = await Promise.all(
+      ["stream-owner-a", "stream-owner-b"].map((name) =>
+        seedApiKey(test.harness.storage, {
+          projectId: test.data.projects.alpha.id,
+          name,
+          scopes: ["query"],
+          createdBy: test.data.member.id,
+        }),
+      ),
+    );
+
+    const readers: SseReader[] = [];
+
+    try {
+      for (let index = 0; index < 10; index++) {
+        const key = keys[index % 2];
+
+        if (key === undefined) throw new Error("stream suite: key missing");
+        readers.push(await openStream(streamUrl(key.plaintext)));
+      }
+
+      // A third key from the same person buys no extra slots.
+      const third = await seedApiKey(test.harness.storage, {
+        projectId: test.data.projects.alpha.id,
+        name: "stream-owner-c",
+        scopes: ["query"],
+        createdBy: test.data.member.id,
+      });
+
+      const eleventh = await request(test.harness.app, streamUrl(third.plaintext));
+
+      expect(eleventh.status).toBe(429);
+      expect(errorOf(await jsonBody(eleventh))).toBe(
+        "too many live streams for this account — close one and retry",
+      );
+    } finally {
+      for (const reader of readers) {
+        try {
+          await reader.close();
+        } catch {
+          // The server may have closed the stream first.
+        }
+      }
+    }
+  });
 });
 
 describe("live stream lifetime", () => {

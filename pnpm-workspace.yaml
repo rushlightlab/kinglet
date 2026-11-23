@@ -6,3 +6,4 @@ allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
   - lucide-react@1.76.0
+  - hono@4.13.20

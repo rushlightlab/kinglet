@@ -19,6 +19,9 @@ export function makeTestConfig(overrides: Partial<Config> = {}): Config {
     searchMode: "substring",
     baseUrl: "http://localhost:3000",
     allowPrivateWebhooks: false,
+    smtp: null,
+    // A fixed test key so channel secrets are sealed like production.
+    secretKey: Buffer.from("kinglet-test-secret-key-0123456789abcdef", "utf8"),
     mcpAllowMonitorWrites: false,
     authSecret: TEST_AUTH_SECRET,
     trustedProxies: [],

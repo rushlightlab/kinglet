@@ -13,7 +13,8 @@ test("an MCP key is shown once with the pinned client config and can be revoked"
   const projectRow = page.getByRole("row").filter({ hasText: DEFAULT_PROJECT_NAME });
 
   await projectRow.getByRole("link", { name: "manage" }).click();
-  await expect(page.getByText(`MCP keys — ${DEFAULT_PROJECT_NAME}`)).toBeVisible();
+  await expect(page.getByRole("heading", { name: `${DEFAULT_PROJECT_NAME}.` })).toBeVisible();
+  await expect(page.getByText("MCP keys", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "new MCP key" }).click();
 
@@ -32,7 +33,7 @@ test("an MCP key is shown once with the pinned client config and can be revoked"
 
   const config = await secretDialog.locator("pre").innerText();
 
-  expect(config).toContain('"@kinglet/mcp@0.4.0"');
+  expect(config).toContain('"@kinglet/mcp@0.5.0"');
   expect(config).toContain(`"KINGLET_URL": "${seed.baseURL}"`);
   expect(config).toContain(`"KINGLET_MCP_KEY": "${secret}"`);
 

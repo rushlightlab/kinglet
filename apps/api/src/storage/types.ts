@@ -91,11 +91,13 @@ export interface Storage {
    * `truncated` when another group exists.
    */
   groupEventCounts(filter: SQL, groupBy: AggregateGroupBy, limit: number): Promise<AggregateGroups>;
+  /** `filter` (from buildWhere) restricts the counts to matching events. */
   histogramPoints(
     projectId: string,
     from: number,
     to: number,
     bucketMs: number,
+    filter?: SQL,
   ): Promise<HistogramPointRow[]>;
   listServices(projectId: string): Promise<ServiceRow[]>;
   /** Chunked delete; archive-enabled projects can be excluded. */
@@ -104,6 +106,8 @@ export interface Storage {
   deleteAlertsOlderThan(ts: number): Promise<number>;
   /** Chunked delete of every event in one project; returns the count. */
   deleteByProject(projectId: string, range?: { from: number; to: number }): Promise<number>;
+  /** Chunked delete of the events matching a project-scoped buildWhere() condition. */
+  deleteMatching(filter: SQL): Promise<number>;
   /** Housekeeping after big deletes (vacuum etc.). No-op on managed backends. */
   runMaintenance(): Promise<void>;
   close(): Promise<void>;

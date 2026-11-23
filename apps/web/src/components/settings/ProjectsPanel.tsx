@@ -2,12 +2,34 @@ import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { PlusIcon } from "lucide-react";
 import { toast } from "sonner";
-import { createProject } from "../../api";
+import { createProject, fetchProjects } from "../../api";
+import type { PageQuery } from "../../api";
 import { hasPermission, useApp } from "../../app-context";
+import type { Project } from "../../types";
 import ErrorAlert from "../ErrorAlert";
+import SkeletonRows from "../SkeletonRows";
+import TablePagination from "../TablePagination";
+import TableSearch, { NoMatchesRow } from "../TableSearch";
+import { fadeWhileLoading, useServerTable } from "../../server-table";
+import type { TablePage } from "../../server-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -19,12 +41,20 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
+async function loadProjectPage(page: PageQuery): Promise<TablePage<Project>> {
+  const result = await fetchProjects(page);
+
+  return { rows: result.projects, total: result.total };
+}
+
 export default function ProjectsPanel() {
-  const { projects, currentProjectId, permissions, refreshProjects } = useApp();
+  const { currentProjectId, permissions, refreshProjects } = useApp();
   const canWriteProjects = hasPermission(permissions, "projects.write");
   const canReadKeys = hasPermission(permissions, "keys.read");
+  const projectTable = useServerTable("projects", loadProjectPage);
   const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const create = async (): Promise<void> => {
     if (!name.trim()) return;
@@ -32,16 +62,19 @@ export default function ProjectsPanel() {
     try {
       await createProject(name.trim());
       setName("");
-      await refreshProjects();
+      setFormError(null);
+      setAddOpen(false);
+      // The project switcher reads the app's list; the table reads its page.
+      await Promise.all([refreshProjects(), projectTable.reload()]);
       toast.success("Project created");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setFormError(err instanceof Error ? err.message : String(err));
     }
   };
 
   return (
     <div className="flex flex-col gap-3">
-      <ErrorAlert error={error} />
+      <ErrorAlert error={projectTable.error} />
 
       <Card>
         <CardHeader>
@@ -49,8 +82,21 @@ export default function ProjectsPanel() {
           <CardDescription>
             Each project has its own logs, keys, and monitors. Open one to manage it.
           </CardDescription>
+          <CardAction className="row-span-1 flex items-center gap-2 self-center">
+            <TableSearch
+              label="Search projects"
+              value={projectTable.query}
+              onChange={projectTable.setQuery}
+            />
+            {canWriteProjects && (
+              <Button size="sm" className="shrink-0" onClick={() => setAddOpen(true)}>
+                <PlusIcon data-icon="inline-start" />
+                new project
+              </Button>
+            )}
+          </CardAction>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
+        <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
@@ -59,8 +105,9 @@ export default function ProjectsPanel() {
                 <TableHead className="text-right">actions</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
-              {projects.map((project) => {
+            <TableBody className={fadeWhileLoading(projectTable)}>
+              {!projectTable.loaded && <SkeletonRows columns={3} label="Loading projects…" />}
+              {projectTable.rows.map((project) => {
                 const canManage = canWriteProjects || canReadKeys || project.canClearLogs;
 
                 return (
@@ -90,34 +137,67 @@ export default function ProjectsPanel() {
                   </TableRow>
                 );
               })}
+              {projectTable.loaded && projectTable.total === 0 && (
+                <NoMatchesRow
+                  columns={3}
+                  query={projectTable.activeQuery}
+                  noun="projects"
+                  onClear={() => projectTable.setQuery("")}
+                />
+              )}
             </TableBody>
           </Table>
-
-          {canWriteProjects && (
-            <form
-              className="flex flex-wrap items-end gap-3 border-t border-white/[0.06] pt-4"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void create();
-              }}
-            >
-              <Field className="min-w-40 flex-1">
-                <FieldLabel htmlFor="project-name">new project</FieldLabel>
-                <Input
-                  id="project-name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="production"
-                />
-              </Field>
-              <Button type="submit" variant="outline" disabled={!name.trim()}>
-                <PlusIcon data-icon="inline-start" />
-                add project
-              </Button>
-            </form>
-          )}
         </CardContent>
+        <TablePagination table={projectTable} noun="projects" className="-mb-4" />
       </Card>
+
+      <Dialog
+        open={addOpen}
+        onOpenChange={(open) => {
+          setAddOpen(open);
+
+          if (!open) setFormError(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void create();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>New project</DialogTitle>
+              <DialogDescription>
+                A project keeps its own logs, keys, monitors, and members.
+              </DialogDescription>
+            </DialogHeader>
+            <Field className="mt-4">
+              <FieldLabel htmlFor="project-name">name</FieldLabel>
+              <Input
+                id="project-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="production"
+              />
+            </Field>
+            {formError && (
+              <p className="mt-2 font-mono text-[11px] text-coral" role="alert">
+                {formError}
+              </p>
+            )}
+            <DialogFooter className="mt-4">
+              <Button variant="outline" size="sm" type="button" onClick={() => setAddOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={!name.trim()}>
+                <PlusIcon data-icon="inline-start" />
+                Create project
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

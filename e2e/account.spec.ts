@@ -9,13 +9,17 @@ test.describe.configure({ retries: 0 });
 test.use({ storageState: { cookies: [], origins: [] } });
 
 async function changePassword(page: Page, current: string, next: string): Promise<void> {
-  await page.getByLabel("current", { exact: true }).fill(current);
-  await page.getByLabel("new", { exact: true }).fill(next);
-  await page.getByLabel("confirm", { exact: true }).fill(next);
-  await page.getByRole("button", { name: "update password" }).click();
+  await page.getByRole("button", { name: "change password" }).click();
 
-  // The form only clears its fields after the server accepts the change.
-  await expect(page.getByLabel("current", { exact: true })).toHaveValue("");
+  const dialog = page.getByRole("dialog");
+
+  await dialog.getByLabel("current", { exact: true }).fill(current);
+  await dialog.getByLabel("new", { exact: true }).fill(next);
+  await dialog.getByLabel("confirm", { exact: true }).fill(next);
+  await dialog.getByRole("button", { name: "update password" }).click();
+
+  // The dialog only closes after the server accepts the change.
+  await expect(dialog).toHaveCount(0);
 }
 
 test("an account can change its password and sign in with the new one", async ({ page }) => {
@@ -24,7 +28,13 @@ test("an account can change its password and sign in with the new one", async ({
 
   await page.getByRole("button", { name: "Account menu" }).click();
   await page.getByRole("menuitem", { name: "Account settings" }).click();
-  await expect(page.getByRole("heading", { name: "Your account." })).toBeVisible();
+  // Account settings are the last settings tab, so the nav shows where you are.
+  await expect(page).toHaveURL(/\/settings\?tab=account/);
+  await expect(page.getByRole("tab", { name: "my account" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByRole("tabpanel").getByText(ACCOUNT_EMAIL, { exact: true })).toBeVisible();
 
   let changed = false;
 

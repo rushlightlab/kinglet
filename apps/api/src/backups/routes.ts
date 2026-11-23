@@ -7,6 +7,7 @@ import type { AppEnv } from "../auth/middleware.ts";
 import type { Config } from "../env.ts";
 import { isBoolean, isFiniteNumber, isJsonObject, isString } from "../json.ts";
 import type { JsonObject } from "../json.ts";
+import { pageList, readPageRequest } from "../paging.ts";
 import type { Storage } from "../storage/index.ts";
 import type { BackupEngine } from "./engine.ts";
 import { describeBackupError } from "./s3.ts";
@@ -27,6 +28,8 @@ interface SettingsInput {
 
 interface BackupListResponse {
   snapshots: BackupSnapshot[];
+  /** Snapshots matching the search, across every page. */
+  total: number;
   warning?: string;
 }
 
@@ -91,10 +94,21 @@ export function registerBackupRoutes(
       }
     }
 
-    const snapshots = await engine.list();
+    const page = pageList(
+      await engine.list(),
+      readPageRequest((name) => c.req.query(name)),
+      (snapshot) => [
+        new Date(snapshot.createdAt).toISOString().slice(0, 10),
+        snapshot.trigger,
+        snapshot.state,
+        snapshot.encryption,
+        `v${snapshot.appVersion}`,
+      ],
+    );
+
     const status = await engine.status();
     const warning = refreshWarning ?? status.lastRefreshError ?? status.problem ?? undefined;
-    const payload: BackupListResponse = { snapshots };
+    const payload: BackupListResponse = { snapshots: page.items, total: page.total };
 
     if (warning !== undefined && warning !== "") payload.warning = warning;
 

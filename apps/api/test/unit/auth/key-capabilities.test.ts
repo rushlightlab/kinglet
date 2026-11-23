@@ -11,6 +11,7 @@ function apiKeyAuth(scopes: AnyKeyScope[]): AuthInfo {
     projectId: "project-1",
     keyType: "api",
     scopes: new Set(scopes),
+    createdBy: null,
   };
 }
 
@@ -22,6 +23,7 @@ function mcpKeyAuth(scopes: AnyKeyScope[]): AuthInfo {
     projectId: "project-1",
     keyType: "mcp",
     scopes: new Set(scopes),
+    createdBy: null,
   };
 }
 

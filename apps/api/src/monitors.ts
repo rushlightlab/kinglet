@@ -1,20 +1,28 @@
-import { and, asc, count, desc, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { subscribeEvents } from "./bus.ts";
-import { buildWhere, matchesEvent, parseFilters } from "./filters.ts";
+import { buildWhere, chooseTextPlan, matchesEvent, parseFilters } from "./filters.ts";
 import type { ParsedFilters } from "./filters.ts";
 import { isJsonObject, isString } from "./json.ts";
 import type { JsonObject, JsonValue } from "./json.ts";
 import { validateQueryString } from "./query-validation.ts";
-import { isChannelType, sendNotice, validateWebhookUrl } from "./notify.ts";
-import type { AlertNotice, NotifyChannel } from "./notify.ts";
+import { isLegacyChannelType, sendNotice, validateWebhookUrl } from "./notify.ts";
+import type { AlertNotice, NotifyChannel, SmtpSettings } from "./notify.ts";
 import { uuidv7, isUuid } from "./auth/ids.ts";
 import type { AlertState } from "./alerts.ts";
-import { resolveMonitorChannelData, recordDelivery } from "./notifications/store.ts";
+import {
+  openMonitorChannels,
+  recordDelivery,
+  resolveMonitorChannelData,
+  sealMonitorChannels,
+} from "./notifications/store.ts";
+import { secretsConfigured } from "./secrets.ts";
 import type { MonitorChannelData } from "./notifications/store.ts";
+import { createSendBudget, SEND_BUDGET_PER_MINUTE } from "./notifications/send-budget.ts";
 import { safeErrorMessage } from "./notifications/types.ts";
 import type { MonitorChannelSummary } from "./notifications/types.ts";
 import { systemStatus } from "./status.ts";
+import { tableSearchCondition } from "./table-search.ts";
 import { localDbBytes } from "./storage/db-size.ts";
 import * as schema from "./storage/schema.ts";
 import type { Storage } from "./storage/index.ts";
@@ -79,6 +87,16 @@ export interface AlertRecord {
 }
 
 const NOTIFY_STATUS_SET = new Set<string>(["sent", "partial", "failed", "none"]);
+
+const SEND_BUDGET_ERROR = `send budget exceeded: at most ${SEND_BUDGET_PER_MINUTE} alerts per minute per channel and project`;
+
+/** Most time one engine tick spends evaluating count monitors back to back. */
+const COUNT_TICK_BUDGET_MS = 250;
+
+/** Yield a real macrotask so other requests run between monitor evaluations. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 function isNotifyStatus(value: string | null): value is AlertRecord["notifyStatus"] {
   return value !== null && NOTIFY_STATUS_SET.has(value);
@@ -178,7 +196,7 @@ export function parseMonitorInput(
     const type = c.type;
     const url = isString(c.url) ? c.url.trim() : "";
 
-    if (!isChannelType(type)) {
+    if (!isLegacyChannelType(type)) {
       return { ok: false, error: `channel ${index + 1}: type must be webhook, discord, or slack` };
     }
 
@@ -209,6 +227,9 @@ export function parseMonitorInput(
   };
 }
 
+const INLINE_SECRET_REQUIRED =
+  "set KINGLET_SECRET_KEY to add inline webhook destinations (they are stored encrypted); or use channelIds with a notification channel";
+
 function parseChannels(raw: string): NotifyChannel[] {
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -221,7 +242,7 @@ function parseChannels(raw: string): NotifyChannel[] {
       const type = value.type;
       const url = value.url;
 
-      return isChannelType(type) && isString(url) ? [{ type, url }] : [];
+      return isLegacyChannelType(type) && isString(url) ? [{ type, url }] : [];
     });
   } catch {
     return [];
@@ -251,7 +272,7 @@ function rowToMonitor(
     intervalMs: Number(row.intervalMs),
     cooldownMs: Number(row.cooldownMs),
     enabled: Number(row.enabled) === 1,
-    channels: parseChannels(row.channels),
+    channels: parseChannels(openMonitorChannels(row.id, row.channels)),
     channelIds: linked.channelIds,
     resolvedChannels: linked.summaries,
     createdAt: Number(row.createdAt),
@@ -268,7 +289,8 @@ export async function listMonitors(storage: Storage, projectId?: string): Promis
     .select()
     .from(schema.monitors)
     .where(projectId === undefined ? undefined : eq(schema.monitors.projectId, projectId))
-    .orderBy(asc(schema.monitors.id));
+    // Newest first, so a monitor you just created is on the first page.
+    .orderBy(desc(schema.monitors.id));
 
   const channelData = await resolveMonitorChannelData(
     storage,
@@ -330,13 +352,20 @@ export async function createMonitorFromRaw(
   const channelProblem = await validateChannelIds(storage, v.channelIds);
 
   if (channelProblem) return { ok: false, error: channelProblem };
+
+  // Inline destinations are webhook URLs: secrets, stored only encrypted.
+  if (v.channels.length > 0 && !secretsConfigured()) {
+    return { ok: false, error: INLINE_SECRET_REQUIRED };
+  }
+
   const now = Date.now();
+  const monitorId = uuidv7();
 
   const createdId = await storage.db.transaction(async (tx) => {
     const rows = await tx
       .insert(schema.monitors)
       .values({
-        id: uuidv7(),
+        id: monitorId,
         projectId,
         name: v.name,
         query: v.query,
@@ -346,7 +375,7 @@ export async function createMonitorFromRaw(
         intervalMs: v.intervalMs,
         cooldownMs: v.cooldownMs,
         enabled: v.enabled ? 1 : 0,
-        channels: JSON.stringify(v.channels),
+        channels: sealMonitorChannels(monitorId, JSON.stringify(v.channels)),
         createdAt: now,
         updatedAt: now,
       })
@@ -413,6 +442,15 @@ export async function updateMonitorFromRaw(
 
   if (channelProblem) return { ok: false, error: channelProblem };
 
+  const previous = JSON.stringify(
+    existing.channels.map((channel) => ({ type: channel.type, url: channel.url })),
+  );
+
+  // Unchanged inline destinations can be kept without a key; new ones can't.
+  if (v.channels.length > 0 && JSON.stringify(v.channels) !== previous && !secretsConfigured()) {
+    return { ok: false, error: INLINE_SECRET_REQUIRED };
+  }
+
   const updatedId = await storage.db.transaction(async (tx) => {
     const rows = await tx
       .update(schema.monitors)
@@ -425,7 +463,7 @@ export async function updateMonitorFromRaw(
         intervalMs: v.intervalMs,
         cooldownMs: v.cooldownMs,
         enabled: v.enabled ? 1 : 0,
-        channels: JSON.stringify(v.channels),
+        channels: sealMonitorChannels(id, JSON.stringify(v.channels)),
         updatedAt: Date.now(),
       })
       .where(and(eq(schema.monitors.id, id), eq(schema.monitors.projectId, projectId)))
@@ -529,12 +567,7 @@ function mapAlertRow(row: AlertQueryRow): AlertRecord {
   };
 }
 
-export async function listAlerts(
-  storage: Storage,
-  limit: number,
-  projectId: string,
-  filters: AlertListFilters = {},
-): Promise<AlertRecord[]> {
+function alertConditions(projectId: string, filters: AlertListFilters): SQL[] {
   const conditions: SQL[] = [eq(schema.monitors.projectId, projectId)];
 
   if (filters.monitorId !== undefined) {
@@ -547,15 +580,93 @@ export async function listAlerts(
 
   if (filters.to !== undefined) conditions.push(lte(schema.alerts.firedAt, filters.to));
 
+  return conditions;
+}
+
+export interface MonitorAlertState {
+  /** When the monitor's newest alert fired. */
+  lastAlertAt: number;
+  /** The newest alert is still open. */
+  firing: boolean;
+}
+
+/** Each monitor's newest alert, for the monitors table's "last alert" column. */
+export async function alertStateByMonitor(
+  storage: Storage,
+  monitorIds: readonly string[],
+): Promise<Map<string, MonitorAlertState>> {
+  const states = new Map<string, MonitorAlertState>();
+
+  if (monitorIds.length === 0) return states;
+
+  // SQLite fills bare columns from the row that holds max(), so state and
+  // resolved_at come from each monitor's newest alert.
+  const rows = await storage.db
+    .select({
+      monitorId: schema.alerts.monitorId,
+      lastAlertAt: sql<number>`max(${schema.alerts.firedAt})`,
+      state: schema.alerts.state,
+      resolvedAt: schema.alerts.resolvedAt,
+    })
+    .from(schema.alerts)
+    .where(inArray(schema.alerts.monitorId, [...monitorIds]))
+    .groupBy(schema.alerts.monitorId);
+
+  for (const row of rows) {
+    states.set(row.monitorId, {
+      lastAlertAt: Number(row.lastAlertAt),
+      firing: row.state === "fired" && row.resolvedAt === null,
+    });
+  }
+
+  return states;
+}
+
+export interface AlertPage {
+  alerts: AlertRecord[];
+  /** Alerts matching the filters and search, across every page. */
+  total: number;
+}
+
+/**
+ * One page of a project's alerts, newest first. `q` matches the monitor name,
+ * the summary, and the state (fired/resolved); it never searches delivery
+ * errors, which only administrators may read.
+ */
+export async function pageAlerts(
+  storage: Storage,
+  projectId: string,
+  filters: AlertListFilters,
+  page: { limit: number; offset: number; q?: string; searchSummary: boolean },
+): Promise<AlertPage> {
+  const conditions = alertConditions(projectId, filters);
+
+  const search = tableSearchCondition(
+    page.q,
+    page.searchSummary
+      ? [schema.monitors.name, schema.alerts.summary, schema.alerts.state]
+      : [schema.monitors.name, schema.alerts.state],
+  );
+
+  if (search) conditions.push(search);
+  const where = and(...conditions);
+
   const rows = await storage.db
     .select(alertSelection)
     .from(schema.alerts)
     .innerJoin(schema.monitors, eq(schema.monitors.id, schema.alerts.monitorId))
-    .where(and(...conditions))
-    .orderBy(desc(schema.alerts.firedAt))
-    .limit(Math.min(500, Math.max(1, limit)));
+    .where(where)
+    .orderBy(desc(schema.alerts.firedAt), desc(schema.alerts.id))
+    .limit(Math.min(500, Math.max(1, page.limit)))
+    .offset(Math.max(0, page.offset));
 
-  return rows.map(mapAlertRow);
+  const totals = await storage.db
+    .select({ n: count() })
+    .from(schema.alerts)
+    .innerJoin(schema.monitors, eq(schema.monitors.id, schema.alerts.monitorId))
+    .where(where);
+
+  return { alerts: rows.map(mapAlertRow), total: Number(totals[0]?.n ?? 0) };
 }
 
 /** One alert by id, scoped through its monitor's project. */
@@ -611,12 +722,15 @@ export function startMonitorEngine(
   opts: {
     baseUrl?: string;
     allowPrivateWebhooks?: boolean;
+    smtp?: SmtpSettings | null;
     dbPath?: string;
     maxDbBytes?: number;
   } = {},
 ): MonitorEngine {
   const allowPrivate = opts.allowPrivateWebhooks ?? false;
+  const smtp = opts.smtp ?? null;
   const maxDbBytes = opts.maxDbBytes ?? 0;
+  const sendBudget = createSendBudget();
   let monitors: Monitor[] = [];
   let projectNames = new Map<string, string>();
   const state = new Map<string, MonitorState>();
@@ -748,8 +862,19 @@ export function startMonitorEngine(
   ): Promise<{ sent: number; failed: number; errors: string[]; total: number }> {
     const outcomes = await Promise.all(
       targets.map(async (ch) => {
+        const decision = sendBudget.take(`${m.projectId}\n${ch.id ?? `${ch.type}\n${ch.url}`}`);
+
+        if (decision !== "send") {
+          if (decision === "suppress-and-record") {
+            await recordMonitorDelivery(m, ch, notice, "failed", SEND_BUDGET_ERROR);
+            console.warn(`[kinglet] notification suppressed for "${m.name}": ${SEND_BUDGET_ERROR}`);
+          }
+
+          return SEND_BUDGET_ERROR;
+        }
+
         try {
-          await sendNotice(ch, notice, { allowPrivate });
+          await sendNotice(ch, notice, { allowPrivate, smtp });
         } catch (err) {
           const message = safeErrorMessage(err instanceof Error ? err : String(err), 500);
 
@@ -955,12 +1080,18 @@ export function startMonitorEngine(
     try {
       const now = Date.now();
 
-      const where: SQL = buildWhere(
-        parsed(m.query),
-        { from: now - m.windowMs, to: now },
+      const filters = parsed(m.query);
+      const range = { from: now - m.windowMs, to: now };
+
+      const plan = await chooseTextPlan(
+        storage.db,
+        filters,
+        range,
         m.projectId,
         storage.searchMode,
       );
+
+      const where: SQL = buildWhere(filters, range, m.projectId, storage.searchMode, plan);
 
       const rows = await storage.db.select({ n: count() }).from(schema.events).where(where);
       const total = Number(rows[0]?.n ?? 0);
@@ -1038,15 +1169,40 @@ export function startMonitorEngine(
     });
   });
 
-  const tick = setInterval(() => {
-    const now = Date.now();
+  // Count monitors run one at a time with a macrotask between them, and a
+  // tick stops after its time budget: the local database client runs each
+  // COUNT on the main thread, so firing every due monitor at once would stall
+  // ingest, queries and live tail for every project until all of them finish.
+  // Monitors left over keep their lastEvalAt and run first on the next tick.
+  let ticking = false;
 
-    for (const m of monitors) {
-      if (!m.enabled || m.kind === "match") continue;
-      const s = getState(m.id);
+  async function runDueCountMonitors(): Promise<void> {
+    const started = Date.now();
 
-      if (now - s.lastEvalAt >= m.intervalMs) void evaluate(m);
+    // Monitors cut off by the budget are still due next tick, and the ones
+    // that ran are not, so every monitor gets its turn.
+    const due = monitors.filter(
+      (m) => m.enabled && m.kind !== "match" && started - getState(m.id).lastEvalAt >= m.intervalMs,
+    );
+
+    for (const m of due) {
+      await evaluate(m);
+      await yieldToEventLoop();
+
+      if (Date.now() - started >= COUNT_TICK_BUDGET_MS) break;
     }
+  }
+
+  const tick = setInterval(() => {
+    if (ticking) return;
+    ticking = true;
+    void runDueCountMonitors()
+      .catch((err) => {
+        console.error("[kinglet] monitor tick failed:", err);
+      })
+      .finally(() => {
+        ticking = false;
+      });
   }, 5_000);
 
   tick.unref();

@@ -708,12 +708,15 @@ export class KingletClient {
 
   async getHistogram(
     params: {
+      q?: string;
       from?: number;
       to?: number;
       buckets?: number;
     } = {},
   ): Promise<HistogramResult> {
     const query = new URLSearchParams();
+
+    if (params.q) query.set("q", params.q);
 
     if (params.from !== undefined) query.set("from", String(params.from));
 

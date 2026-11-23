@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
+import type { ChangeEvent } from "react";
 import {
   BellIcon,
+  BellRingIcon,
+  LockIcon,
+  MailIcon,
   MessageCircleIcon,
   MessageSquareIcon,
+  MoreHorizontalIcon,
   PencilIcon,
   PlusIcon,
   RefreshCwIcon,
   SendIcon,
+  SmartphoneIcon,
   Trash2Icon,
   WebhookIcon,
 } from "lucide-react";
@@ -14,6 +20,7 @@ import { toast } from "sonner";
 import {
   createNotificationChannel,
   deleteNotificationChannel,
+  fetchNotificationCapabilities,
   fetchNotificationChannel,
   fetchNotificationChannelSummary,
   fetchNotificationChannels,
@@ -21,6 +28,7 @@ import {
   testNotificationChannel,
   updateNotificationChannel,
 } from "../../api";
+import type { NotificationCapabilities, PageQuery } from "../../api";
 import { hasPermissionOrAdmin, useApp } from "../../app-context";
 import { formatRelativeTime, maskWebhookUrl, redactWebhookUrls } from "../../format";
 import type {
@@ -33,6 +41,21 @@ import type {
   NotificationDelivery,
 } from "../../types";
 import ErrorAlert from "../ErrorAlert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import PasswordInput from "../PasswordInput";
+import {
+  buildTargetUrl,
+  CHANNEL_TYPES,
+  channelTypeInfo,
+  initialValues,
+  readTargetUrl,
+} from "../../channel-targets";
+import type { TargetValues } from "../../channel-targets";
+import SkeletonRows from "../SkeletonRows";
+import TablePagination from "../TablePagination";
+import TableSearch, { NoMatchesRow } from "../TableSearch";
+import { fadeWhileLoading, useServerTable } from "../../server-table";
+import type { TablePage } from "../../server-table";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -46,9 +69,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -60,6 +83,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -87,13 +117,20 @@ const CHANNEL_ICONS: Record<ChannelType, typeof WebhookIcon> = {
   webhook: WebhookIcon,
   discord: MessageCircleIcon,
   slack: MessageSquareIcon,
+  telegram: SendIcon,
+  ntfy: BellRingIcon,
+  gotify: BellRingIcon,
+  pushover: SmartphoneIcon,
+  email: MailIcon,
+  resend: MailIcon,
+  plunk: MailIcon,
 };
 
-const CHANNEL_PLACEHOLDERS: Record<ChannelType, string> = {
-  webhook: "https://example.com/webhooks/kinglet",
-  discord: "https://discord.com/api/webhooks/…",
-  slack: "https://hooks.slack.com/services/…",
-};
+const LEGACY_TYPES: readonly ChannelType[] = ["webhook", "discord", "slack"];
+
+function isChannelTypeValue(value: string): value is ChannelType {
+  return CHANNEL_TYPES.some((info) => info.type === value);
+}
 
 interface ActionOption {
   value: NotificationAction;
@@ -151,12 +188,6 @@ function findHealth(
   return match?.health ?? null;
 }
 
-function channelName(channels: NotificationChannel[], id: string): string {
-  const match = channels.find((channel) => channel.id === id);
-
-  return match?.name ?? `channel ${id.slice(0, 8)}`;
-}
-
 function healthVariant(health: NotificationChannelHealth): "ghost" | "outline" | "destructive" {
   const status = health.status.toLowerCase();
 
@@ -179,14 +210,24 @@ function healthLabel(health: NotificationChannelHealth): string {
   }
 
   if (status === "failed" || status === "error") {
-    return health.lastDeliveryAt
-      ? `last delivery failed ${formatRelativeTime(health.lastDeliveryAt)}`
-      : "last delivery failed";
+    return health.lastDeliveryAt ? `failed ${formatRelativeTime(health.lastDeliveryAt)}` : "failed";
   }
 
-  if (!health.lastDeliveryAt) return "no deliveries yet";
+  if (!health.lastDeliveryAt) return "none yet";
 
   return `${status} ${formatRelativeTime(health.lastDeliveryAt)}`;
+}
+
+function actionLabel(action: NotificationAction): string {
+  return ACTION_OPTIONS.find((option) => option.value === action)?.label ?? action;
+}
+
+function testText(channel: NotificationChannel): string {
+  if (!channel.lastTestAt) return "Never tested. Send a test from the row menu.";
+  const status = channel.lastTestStatus ?? "unknown";
+  const error = channel.lastTestError ? ` — ${redactWebhookUrls(channel.lastTestError)}` : "";
+
+  return `Last test ${formatRelativeTime(channel.lastTestAt)}: ${status}${error}`;
 }
 
 function deliveryVariant(status: string): "ghost" | "outline" | "destructive" {
@@ -197,14 +238,24 @@ function deliveryVariant(status: string): "ghost" | "outline" | "destructive" {
   return "outline";
 }
 
+async function loadChannelPage(page: PageQuery): Promise<TablePage<NotificationChannel>> {
+  const result = await fetchNotificationChannels(page);
+
+  return { rows: result.channels, total: result.total };
+}
+
+async function loadDeliveryPage(page: PageQuery): Promise<TablePage<NotificationDelivery>> {
+  const result = await fetchNotificationDeliveries(page);
+
+  return { rows: result.deliveries, total: result.total };
+}
+
 export default function NotificationsPanel() {
   const { user, permissions } = useApp();
   const canWrite = hasPermissionOrAdmin(user.role, permissions, "notifications.write");
 
-  const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [summary, setSummary] = useState<NotificationChannelSummary[]>([]);
-  const [deliveries, setDeliveries] = useState<NotificationDelivery[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [caps, setCaps] = useState<NotificationCapabilities | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -212,38 +263,33 @@ export default function NotificationsPanel() {
   const [editing, setEditing] = useState<NotificationChannel | null>(null);
   const [pendingDelete, setPendingDelete] = useState<NotificationChannel | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const list = await fetchNotificationChannels();
-      // Summary and deliveries are secondary; an unavailable endpoint must not
-      // hide the channel list. Failures degrade to an empty section.
-      const health = await fetchNotificationChannelSummary().catch(() => ({ channels: [] }));
-      const recent = await fetchNotificationDeliveries(100).catch(() => ({ deliveries: [] }));
+  const channelTable = useServerTable("channels", loadChannelPage);
 
-      setChannels(list.channels);
-      setSummary(health.channels);
-      setDeliveries(recent.deliveries);
-      setError(null);
-    } catch (err) {
-      setError(redactWebhookUrls(err instanceof Error ? err.message : String(err)));
-    } finally {
-      setLoading(false);
-    }
+  const { reload: reloadChannels } = channelTable;
+  const deliveryTable = useServerTable("deliveries", loadDeliveryPage);
+  const { reload: reloadDeliveries } = deliveryTable;
+
+  // Health is secondary; an unavailable endpoint leaves the column blank.
+  const loadSummary = useCallback(async () => {
+    const health = await fetchNotificationChannelSummary().catch(() => ({ channels: [] }));
+
+    setSummary(health.channels);
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadSummary();
+  }, [loadSummary]);
+
+  const load = useCallback(async () => {
+    await Promise.all([reloadChannels(), reloadDeliveries(), loadSummary()]);
+  }, [reloadChannels, reloadDeliveries, loadSummary]);
 
   const toggleChannel = async (channel: NotificationChannel, enabled: boolean): Promise<void> => {
     setBusyId(channel.id);
 
     try {
-      const result = await updateNotificationChannel(channel.id, { enabled });
-
-      setChannels((prev) =>
-        prev.map((item) => (item.id === channel.id ? { ...item, ...result.channel } : item)),
-      );
+      await updateNotificationChannel(channel.id, { enabled });
+      await reloadChannels();
       toast.success(enabled ? "Channel enabled" : "Channel disabled", {
         description: channel.name,
       });
@@ -310,45 +356,51 @@ export default function NotificationsPanel() {
     }
   };
 
+  // Email needs SMTP and every new channel needs the encryption key; ask once.
+  useEffect(() => {
+    let cancelled = false;
+
+    const check = async (): Promise<void> => {
+      const next = await fetchNotificationCapabilities().catch(() => null);
+
+      if (!cancelled) setCaps(next);
+    };
+
+    void check();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Unknown until the capabilities load; don't flash a warning meanwhile.
+  const secretsReady = caps?.secrets.configured ?? true;
+  const unencrypted = channelTable.rows.filter((channel) => !channel.encrypted).length;
+
+  const noChannelsYet =
+    channelTable.loaded && channelTable.total === 0 && channelTable.activeQuery === "";
+
+  const loading = !channelTable.loaded;
+
   return (
     <div className="flex flex-col gap-3">
-      <ErrorAlert error={error} />
+      <ErrorAlert error={error ?? channelTable.error} />
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
-          {channels.length} channel{channels.length === 1 ? "" : "s"}
-        </span>
-        <div className="flex items-center gap-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="chip"
-                size="icon-xs"
-                onClick={() => void load()}
-                aria-label="Refresh"
-              >
-                <RefreshCwIcon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Refresh channels and deliveries</TooltipContent>
-          </Tooltip>
-          {canWrite && (
-            <Button size="sm" onClick={openCreate}>
-              <PlusIcon data-icon="inline-start" />
-              new channel
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {loading && (
-        <div className="flex items-center gap-2 py-6 font-mono text-[11px] text-mist-faint">
-          <Spinner />
-          loading channels…
-        </div>
+      {!secretsReady && (
+        <Alert variant="gold">
+          <LockIcon />
+          <AlertTitle>Set KINGLET_SECRET_KEY to add or change channels</AlertTitle>
+          <AlertDescription>
+            Channel tokens, keys, and webhook URLs are stored encrypted with this key. Generate one
+            with <code className="text-mist">openssl rand -base64 32</code>, add it to the server
+            environment, and restart Kinglet.
+            {unencrypted > 0 &&
+              ` Existing channels keep sending, but their secrets stay unencrypted until then.`}
+          </AlertDescription>
+        </Alert>
       )}
 
-      {!loading && channels.length === 0 && (
+      {noChannelsYet ? (
         <Card className="items-center px-4 py-10 text-center">
           <BellIcon className="size-5 text-gold/70" />
           <p className="mt-2 font-mono text-xs text-mist-dim">No notification channels yet.</p>
@@ -357,113 +409,204 @@ export default function NotificationsPanel() {
             Slack destination once and subscribe it to the events you care about.
           </p>
           {canWrite && (
-            <Button size="sm" className="mt-3" onClick={openCreate}>
+            <Button size="sm" className="mt-3" disabled={!secretsReady} onClick={openCreate}>
               <PlusIcon data-icon="inline-start" />
               add your first channel
             </Button>
           )}
         </Card>
+      ) : (
+        <Card className="gap-0 py-0">
+          <div className="flex flex-wrap items-center gap-3 border-b border-white/[0.06] px-4 py-3">
+            <TableSearch
+              label="Search channels"
+              value={channelTable.query}
+              onChange={channelTable.setQuery}
+            />
+            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-faint">
+              {loading
+                ? "loading channels…"
+                : `${channelTable.total} ${channelTable.activeQuery === "" ? "" : "matching "}channel${channelTable.total === 1 ? "" : "s"}`}
+            </span>
+            <div className="ml-auto flex items-center gap-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="chip"
+                    size="icon-xs"
+                    onClick={() => void load()}
+                    aria-label="Refresh"
+                  >
+                    <RefreshCwIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Refresh channels and deliveries</TooltipContent>
+              </Tooltip>
+              {/* Hidden while loading: an empty list swaps in its own first-channel button. */}
+              {canWrite && !loading && (
+                <Button size="sm" disabled={!secretsReady} onClick={openCreate}>
+                  <PlusIcon data-icon="inline-start" />
+                  new channel
+                </Button>
+              )}
+            </div>
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="w-12 pl-4">
+                  <span className="sr-only">enabled</span>
+                </TableHead>
+                <TableHead>channel</TableHead>
+                <TableHead className="hidden md:table-cell">destination</TableHead>
+                <TableHead className="hidden lg:table-cell">sends</TableHead>
+                <TableHead>last delivery</TableHead>
+                <TableHead className="w-10 pr-4">
+                  <span className="sr-only">actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody className={fadeWhileLoading(channelTable)}>
+              {loading && <SkeletonRows columns={6} label="Loading channels…" />}
+              {channelTable.rows.map((channel) => {
+                const Icon = CHANNEL_ICONS[channel.type];
+                const health = findHealth(summary, channel.id);
+                const busy = busyId === channel.id;
+
+                return (
+                  <TableRow
+                    key={channel.id}
+                    className={channel.enabled ? undefined : "text-mist-faint"}
+                  >
+                    <TableCell className="pl-4">
+                      <Switch
+                        checked={channel.enabled}
+                        disabled={!canWrite || busy}
+                        onCheckedChange={(checked) => void toggleChannel(channel, checked)}
+                        aria-label={
+                          channel.enabled ? `Disable ${channel.name}` : `Enable ${channel.name}`
+                        }
+                      />
+                    </TableCell>
+                    <TableCell className="max-w-56">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <Icon className="size-3.5 shrink-0 text-gold/80" aria-hidden="true" />
+                        {canWrite ? (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void openEdit(channel)}
+                            className={`truncate text-left font-medium hover:text-gold hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gold/40 ${channel.enabled ? "text-mist" : "text-mist-dim"}`}
+                          >
+                            {channel.name}
+                          </button>
+                        ) : (
+                          <span className="truncate font-medium">{channel.name}</span>
+                        )}
+                        {!channel.enabled && <Badge variant="outline">disabled</Badge>}
+                        {channel.locked && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Badge variant="destructive">locked</Badge>
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-xs">
+                              Its secret is {channel.locked}
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+                      </div>
+                      <span className="mt-0.5 block text-[10px] text-mist-faint">
+                        {channelTypeInfo(channel.type).label}
+                      </span>
+                    </TableCell>
+                    <TableCell className="hidden max-w-52 md:table-cell">
+                      <span className="block truncate text-[11px] text-mist-dim">
+                        {maskWebhookUrl(channel.url)}
+                      </span>
+                    </TableCell>
+                    <TableCell className="hidden whitespace-nowrap lg:table-cell">
+                      {channel.actions.length === 0 ? (
+                        <span className="text-[11px] text-mist-faint">monitor alerts</span>
+                      ) : (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="text-[11px] text-mist-dim underline decoration-dotted underline-offset-2">
+                              alerts + {channel.actions.length} event
+                              {channel.actions.length === 1 ? "" : "s"}
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">
+                            Monitor alerts, plus: {channel.actions.map(actionLabel).join(", ")}
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {health ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge variant={healthVariant(health)}>{healthLabel(health)}</Badge>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">{testText(channel)}</TooltipContent>
+                        </Tooltip>
+                      ) : (
+                        <span className="text-[10px] text-mist-faint">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="pr-4 text-right">
+                      {busy ? (
+                        <Spinner className="ml-auto" />
+                      ) : (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              disabled={!canWrite}
+                              aria-label={`Actions for ${channel.name}`}
+                            >
+                              <MoreHorizontalIcon />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onSelect={() => void runTest(channel)}>
+                              <SendIcon />
+                              Send test notification
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => void openEdit(channel)}>
+                              <PencilIcon />
+                              Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant="destructive"
+                              onSelect={() => setPendingDelete(channel)}
+                            >
+                              <Trash2Icon />
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {!loading && channelTable.total === 0 && (
+                <NoMatchesRow
+                  columns={6}
+                  query={channelTable.activeQuery}
+                  noun="channels"
+                  onClear={() => channelTable.setQuery("")}
+                />
+              )}
+            </TableBody>
+          </Table>
+          <TablePagination table={channelTable} noun="channels" />
+        </Card>
       )}
 
-      <div className="flex flex-col gap-3">
-        {channels.map((channel) => {
-          const Icon = CHANNEL_ICONS[channel.type];
-          const health = findHealth(summary, channel.id);
-          const busy = busyId === channel.id;
-
-          return (
-            <Card key={channel.id} className={channel.enabled ? undefined : "opacity-60"}>
-              <CardHeader>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 flex-col gap-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Icon className="size-3.5 text-gold/80" aria-hidden="true" />
-                      <CardTitle className="truncate">{channel.name}</CardTitle>
-                      <Badge variant="secondary">{channel.type}</Badge>
-                      {!channel.enabled && <Badge variant="outline">disabled</Badge>}
-                      {health && (
-                        <Badge variant={healthVariant(health)}>{healthLabel(health)}</Badge>
-                      )}
-                    </div>
-                    <CardDescription className="font-mono text-[10px]">
-                      {maskWebhookUrl(channel.url)}
-                    </CardDescription>
-                  </div>
-                  <Switch
-                    checked={channel.enabled}
-                    disabled={!canWrite || busy}
-                    onCheckedChange={(checked) => void toggleChannel(channel, checked)}
-                    aria-label={
-                      channel.enabled ? `Disable ${channel.name}` : `Enable ${channel.name}`
-                    }
-                  />
-                </div>
-              </CardHeader>
-              <CardContent className="flex flex-wrap items-center gap-2">
-                {channel.actions.length === 0 ? (
-                  <span className="font-mono text-[10px] text-mist-faint">
-                    no system events — monitor alerts only
-                  </span>
-                ) : (
-                  channel.actions.map((action) => (
-                    <Badge key={action} variant="outline">
-                      {action}
-                    </Badge>
-                  ))
-                )}
-                <span
-                  className="ml-auto font-mono text-[10px] text-mist-faint"
-                  title={
-                    channel.lastTestError ? redactWebhookUrls(channel.lastTestError) : undefined
-                  }
-                >
-                  {channel.lastTestAt
-                    ? `last test ${formatRelativeTime(channel.lastTestAt)} · ${
-                        channel.lastTestStatus ?? "unknown"
-                      }`
-                    : "never tested"}
-                </span>
-              </CardContent>
-              <CardFooter className="gap-2">
-                <Button
-                  variant="chip"
-                  size="xs"
-                  disabled={!canWrite || busy}
-                  onClick={() => void runTest(channel)}
-                >
-                  {busy ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : (
-                    <SendIcon data-icon="inline-start" />
-                  )}
-                  test
-                </Button>
-                <Button
-                  variant="chip"
-                  size="xs"
-                  disabled={!canWrite || busy}
-                  onClick={() => void openEdit(channel)}
-                >
-                  <PencilIcon data-icon="inline-start" />
-                  edit
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="xs"
-                  className="ml-auto"
-                  disabled={!canWrite || busy}
-                  onClick={() => setPendingDelete(channel)}
-                >
-                  <Trash2Icon data-icon="inline-start" />
-                  delete
-                </Button>
-              </CardFooter>
-            </Card>
-          );
-        })}
-      </div>
-
-      {channels.length > 0 && (
+      {!noChannelsYet && (
         <div className="mt-8">
           <div className="k-kicker">
             <span className="text-gold">/</span> recent deliveries
@@ -472,28 +615,40 @@ export default function NotificationsPanel() {
             <CardHeader>
               <CardTitle>Delivery history</CardTitle>
               <CardDescription>
-                The last 100 attempts across every channel. Failed deliveries are not retried.
+                Every attempt across every channel, newest first. Failed deliveries are not retried.
               </CardDescription>
+              {(deliveryTable.total > 0 || deliveryTable.activeQuery !== "") && (
+                <CardAction className="row-span-1 self-center">
+                  <TableSearch
+                    label="Search deliveries"
+                    value={deliveryTable.query}
+                    onChange={deliveryTable.setQuery}
+                  />
+                </CardAction>
+              )}
             </CardHeader>
             <CardContent>
               <Table>
                 <TableHeader>
-                  <TableRow>
+                  <TableRow className="hover:bg-transparent">
                     <TableHead>when</TableHead>
                     <TableHead>channel</TableHead>
                     <TableHead>event</TableHead>
                     <TableHead>status</TableHead>
-                    <TableHead className="hidden md:table-cell">error</TableHead>
+                    <TableHead className="hidden w-full md:table-cell">error</TableHead>
                   </TableRow>
                 </TableHeader>
-                <TableBody>
-                  {deliveries.map((delivery) => (
+                <TableBody className={fadeWhileLoading(deliveryTable)}>
+                  {!deliveryTable.loaded && (
+                    <SkeletonRows columns={5} label="Loading deliveries…" />
+                  )}
+                  {deliveryTable.rows.map((delivery) => (
                     <TableRow key={delivery.id}>
                       <TableCell className="whitespace-nowrap text-mist-faint">
                         {formatRelativeTime(delivery.createdAt)}
                       </TableCell>
                       <TableCell className="max-w-32 truncate text-mist-dim">
-                        {channelName(channels, delivery.channelId)}
+                        {delivery.channelName ?? `channel ${delivery.channelId.slice(0, 8)}`}
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-mist-dim">
                         {delivery.event}
@@ -501,7 +656,7 @@ export default function NotificationsPanel() {
                       <TableCell>
                         <Badge variant={deliveryVariant(delivery.status)}>{delivery.status}</Badge>
                       </TableCell>
-                      <TableCell className="hidden max-w-[16rem] md:table-cell">
+                      <TableCell className="hidden w-full max-w-0 md:table-cell">
                         {delivery.error ? (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -519,16 +674,29 @@ export default function NotificationsPanel() {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {deliveries.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={5} className="py-6 text-center text-mist-faint">
-                        No deliveries yet. Test a channel to see one here.
-                      </TableCell>
-                    </TableRow>
-                  )}
+                  {deliveryTable.loaded &&
+                    deliveryTable.total === 0 &&
+                    deliveryTable.activeQuery === "" && (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell colSpan={5} className="py-6 text-center text-mist-faint">
+                          No deliveries yet. Test a channel to see one here.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  {deliveryTable.loaded &&
+                    deliveryTable.total === 0 &&
+                    deliveryTable.activeQuery !== "" && (
+                      <NoMatchesRow
+                        columns={5}
+                        query={deliveryTable.activeQuery}
+                        noun="deliveries"
+                        onClear={() => deliveryTable.setQuery("")}
+                      />
+                    )}
                 </TableBody>
               </Table>
             </CardContent>
+            <TablePagination table={deliveryTable} noun="deliveries" className="-mb-4" />
           </Card>
         </div>
       )}
@@ -545,6 +713,8 @@ export default function NotificationsPanel() {
               key={editing?.id ?? "new"}
               channel={editing}
               canWrite={canWrite}
+              emailConfigured={caps?.email.configured ?? null}
+              secretsConfigured={secretsReady}
               onCancel={() => setDialogOpen(false)}
               onSaved={async () => {
                 setDialogOpen(false);
@@ -594,15 +764,25 @@ function ChannelForm({
   canWrite,
   onCancel,
   onSaved,
+  emailConfigured,
+  secretsConfigured,
 }: {
   channel: NotificationChannel | null;
   canWrite: boolean;
   onCancel: () => void;
   onSaved: () => Promise<void>;
+  /** Null until known. */
+  emailConfigured: boolean | null;
+  /** KINGLET_SECRET_KEY is set: targets can be added or changed. */
+  secretsConfigured: boolean;
 }) {
   const [name, setName] = useState(channel?.name ?? "");
-  const [url, setUrl] = useState(channel?.url ?? "");
   const [type, setType] = useState<ChannelType>(channel?.type ?? "webhook");
+
+  const [values, setValues] = useState<TargetValues>(() =>
+    channel ? readTargetUrl(channel.type, channel.url) : initialValues("webhook"),
+  );
+
   const [enabled, setEnabled] = useState(channel?.enabled ?? true);
   const [decoration, setDecoration] = useState(channel?.decoration ?? true);
   const [actions, setActions] = useState<NotificationAction[]>(channel?.actions ?? DEFAULT_ACTIONS);
@@ -622,9 +802,14 @@ function ChannelForm({
     });
   };
 
+  // Without the key, an existing channel can be renamed or re-subscribed, but
+  // not pointed somewhere new.
+  const targetLocked = !secretsConfigured && channel !== null;
+
+  const info = channelTypeInfo(type);
+
   const save = async (): Promise<void> => {
     const trimmedName = name.trim();
-    const trimmedUrl = url.trim();
 
     if (!trimmedName) {
       setError("Give the channel a name.");
@@ -632,26 +817,40 @@ function ChannelForm({
       return;
     }
 
-    if (!/^https?:\/\//i.test(trimmedUrl)) {
-      setError("Channel URLs must start with http:// or https://");
+    const target = buildTargetUrl(type, values);
+
+    if (!target.ok) {
+      setError(target.error);
 
       return;
     }
 
     const input: NotificationChannelInput = {
       name: trimmedName,
-      url: trimmedUrl,
+      url: target.url,
       type,
       enabled,
       decoration,
       actions,
     };
 
+    // Leave the stored secret alone when the target didn't change.
+    const unchanged = channel !== null && channel.type === type && channel.url === target.url;
+
+    const payload: Partial<NotificationChannelInput> = unchanged
+      ? {
+          name: input.name,
+          enabled: input.enabled,
+          decoration: input.decoration,
+          actions: input.actions,
+        }
+      : input;
+
     setSaving(true);
     setError(null);
 
     try {
-      if (channel) await updateNotificationChannel(channel.id, input);
+      if (channel) await updateNotificationChannel(channel.id, payload);
       else await createNotificationChannel(input);
 
       toast.success(channel ? "Channel updated" : "Channel created", {
@@ -691,11 +890,27 @@ function ChannelForm({
       <DialogHeader>
         <DialogTitle>{channel ? `Edit ${channel.name}` : "New notification channel"}</DialogTitle>
         <DialogDescription>
-          Webhook URLs are bearer secrets: they stay masked in lists and are only shown here.
+          Tokens, keys, and webhook URLs are secrets: lists mask them, and only this dialog shows
+          them.
         </DialogDescription>
       </DialogHeader>
 
       <FieldGroup className="mt-4">
+        {channel?.locked && (
+          <Alert variant="destructive">
+            <LockIcon />
+            <AlertTitle>This channel's secret can't be read</AlertTitle>
+            <AlertDescription>
+              It is {channel.locked}. Enter the {channelTypeInfo(channel.type).label} settings again
+              to unlock it.
+            </AlertDescription>
+          </Alert>
+        )}
+        {targetLocked && (
+          <p className="font-mono text-[10px] text-mist-faint">
+            Changing where this channel sends needs KINGLET_SECRET_KEY.
+          </p>
+        )}
         <Field>
           <FieldLabel htmlFor="channel-name">name</FieldLabel>
           <Input
@@ -710,38 +925,72 @@ function ChannelForm({
           <FieldLabel htmlFor="channel-type">type</FieldLabel>
           <Select
             value={type}
+            disabled={targetLocked}
             onValueChange={(value) => {
-              if (value === "webhook" || value === "discord" || value === "slack") setType(value);
+              if (!isChannelTypeValue(value)) return;
+              setType(value);
+              // Another service needs different settings; start them fresh.
+              setValues(
+                channel && channel.type === value
+                  ? readTargetUrl(value, channel.url)
+                  : initialValues(value),
+              );
             }}
           >
             <SelectTrigger id="channel-type" className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectGroup>
-                <SelectLabel>Destination</SelectLabel>
-                <SelectItem value="webhook">webhook</SelectItem>
-                <SelectItem value="discord">discord</SelectItem>
-                <SelectItem value="slack">slack</SelectItem>
-              </SelectGroup>
+              {(["Chat", "Push", "Email"] as const).map((group) => (
+                <SelectGroup key={group}>
+                  <SelectLabel>{group}</SelectLabel>
+                  {CHANNEL_TYPES.filter((option) => option.group === group).map((option) => (
+                    <SelectItem
+                      key={option.type}
+                      value={option.type}
+                      disabled={option.type === "email" && emailConfigured === false}
+                    >
+                      {option.label}
+                      {option.type === "email" && emailConfigured === false
+                        ? " (needs KINGLET_SMTP_*)"
+                        : ""}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
             </SelectContent>
           </Select>
+          <FieldDescription>{info.help}</FieldDescription>
         </Field>
 
-        <Field>
-          <FieldLabel htmlFor="channel-url">url</FieldLabel>
-          <Input
-            id="channel-url"
-            value={url}
-            onChange={(event) => setUrl(event.target.value)}
-            placeholder={CHANNEL_PLACEHOLDERS[type]}
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <FieldDescription>
-            Sent with SSRF protection. Private targets require the server-side escape hatch.
-          </FieldDescription>
-        </Field>
+        {info.fields.map((field) => {
+          const id = `channel-${type}-${field.key}`;
+
+          const props = {
+            id,
+            value: values[field.key] ?? "",
+            placeholder: field.placeholder,
+            spellCheck: false,
+            autoComplete: "off",
+            onChange: (event: ChangeEvent<HTMLInputElement>) =>
+              setValues((prev) => ({ ...prev, [field.key]: event.target.value })),
+          };
+
+          return (
+            <Field key={id}>
+              <FieldLabel htmlFor={id}>
+                {field.label}
+                {field.optional ? " (optional)" : ""}
+              </FieldLabel>
+              {field.secret ? (
+                <PasswordInput {...props} disabled={targetLocked} />
+              ) : (
+                <Input {...props} disabled={targetLocked} />
+              )}
+              {field.hint && <FieldDescription>{field.hint}</FieldDescription>}
+            </Field>
+          );
+        })}
 
         <div className="grid gap-3 rounded-[5px] border border-white/[0.06] p-3 sm:grid-cols-2">
           <label className="flex items-center justify-between gap-3" htmlFor="channel-enabled">
@@ -758,20 +1007,22 @@ function ChannelForm({
               aria-label="Enable channel"
             />
           </label>
-          <label className="flex items-center justify-between gap-3" htmlFor="channel-decoration">
-            <span className="flex flex-col gap-0.5">
-              <span className="font-mono text-xs text-mist">decoration</span>
-              <span className="font-mono text-[10px] text-mist-faint">
-                Add Kinglet context to the message.
+          {LEGACY_TYPES.includes(type) && (
+            <label className="flex items-center justify-between gap-3" htmlFor="channel-decoration">
+              <span className="flex flex-col gap-0.5">
+                <span className="font-mono text-xs text-mist">decoration</span>
+                <span className="font-mono text-[10px] text-mist-faint">
+                  Add Kinglet context to the message.
+                </span>
               </span>
-            </span>
-            <Switch
-              id="channel-decoration"
-              checked={decoration}
-              onCheckedChange={setDecoration}
-              aria-label="Decorate notifications"
-            />
-          </label>
+              <Switch
+                id="channel-decoration"
+                checked={decoration}
+                onCheckedChange={setDecoration}
+                aria-label="Decorate notifications"
+              />
+            </label>
+          )}
         </div>
 
         <div>

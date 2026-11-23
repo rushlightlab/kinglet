@@ -115,6 +115,8 @@ function apiEnvironment() {
     KINGLET_ADMIN_EMAIL: adminEmail,
     KINGLET_ADMIN_PASSWORD: adminPassword,
     KINGLET_TIMEZONE: "UTC",
+    // A fixed, test-only key: channel secrets are sealed like production.
+    KINGLET_SECRET_KEY: Buffer.alloc(32, 0x4b).toString("base64"),
     KINGLET_RETENTION_DAYS: "14",
     KINGLET_ALERT_RETENTION_DAYS: "90",
     KINGLET_MAX_DB_MB: "256",

@@ -67,12 +67,39 @@ export interface EventPage {
   nextCursor: number | null;
 }
 
+/** GET /v1/events/clear/preview: what a clear with the same selection deletes. */
+export interface ClearPreview {
+  projectId: string;
+  from?: number;
+  to?: number;
+  q: string;
+  total: number;
+  services: { key: string | null; count: number }[];
+  moreServices: boolean;
+  sample: KingletEvent[];
+  /** True when the clear also deletes the project's archived logs. */
+  archive: boolean;
+}
+
 export type MonitorKind = "match" | "count_above" | "count_below";
 
-export type ChannelType = "webhook" | "discord" | "slack";
+export type ChannelType =
+  | "webhook"
+  | "discord"
+  | "slack"
+  | "telegram"
+  | "ntfy"
+  | "gotify"
+  | "pushover"
+  | "email"
+  | "resend"
+  | "plunk";
+
+/** Legacy per-monitor destinations only ever used the first three types. */
+export type LegacyChannelType = "webhook" | "discord" | "slack";
 
 export interface NotifyChannel {
-  type: ChannelType;
+  type: LegacyChannelType;
   url: string;
 }
 
@@ -98,6 +125,9 @@ export interface Monitor {
   lastEvalAt: number | null;
   lastError: string | null;
   lastErrorAt: number | null;
+  /** List reads only: when the newest alert fired, and whether it is still open. */
+  lastAlertAt?: number | null;
+  firing?: boolean;
 }
 
 export interface AlertRecord {
@@ -200,6 +230,10 @@ export interface NotificationChannel {
   url: string;
   enabled: boolean;
   decoration: boolean;
+  /** Stored encrypted; false only for channels from before KINGLET_SECRET_KEY. */
+  encrypted: boolean;
+  /** Why the stored secret can't be read (changed or missing key); re-enter it. */
+  locked: string | null;
   actions: NotificationAction[];
   createdAt: number;
   updatedAt: number;
@@ -220,6 +254,8 @@ export interface NotificationChannelInput {
 export interface NotificationDelivery {
   id: string;
   channelId: string;
+  /** Null once the channel is deleted. */
+  channelName: string | null;
   scope: string;
   event: string;
   subject: string | null;

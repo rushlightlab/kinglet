@@ -16,7 +16,7 @@ import type { Storage } from "../storage/index.ts";
 import { ensureProjectKey } from "../storage/project-keys.ts";
 import * as schema from "../storage/schema.ts";
 import { archiveLevelIndex, parseArchiveLine } from "./ndjson.ts";
-import { resolveMaxSpoolBytes } from "./spool.ts";
+import { MAX_LINE_BYTES, resolveMaxSpoolBytes } from "./spool.ts";
 import { ArchiveError, isArchiveDate } from "./types.ts";
 import type { ArchiveImportResult, ArchiveLine } from "./types.ts";
 
@@ -47,6 +47,12 @@ export interface ImportArchiveOptions {
   /** Scratch directory for the verified spool file. */
   dataDir: string;
   passphrase?: string;
+  /**
+   * With a passphrase set, plaintext parts are refused unless this is true
+   * (KINGLET_BACKUP_ALLOW_UNENCRYPTED_SNAPSHOTS, for parts written before the
+   * passphrase was added).
+   */
+  allowUnencrypted?: boolean;
   s3: BackupObjectStore;
   /**
    * Decompressed spool cap. Production uses `MAX_SPOOL_BYTES`; tests inject a
@@ -150,6 +156,21 @@ async function importPart(
     );
   }
 
+  // With a passphrase set, age encryption is what proves a part came from
+  // this instance: the key suffix and its hash prefix are chosen by whoever
+  // writes to the bucket. Restore applies the same rule to snapshots.
+  if (
+    !ref.encrypted &&
+    options.passphrase !== undefined &&
+    options.passphrase !== "" &&
+    options.allowUnencrypted !== true
+  ) {
+    throw new ArchiveError(
+      "archive part is not age-encrypted; refusing it while KINGLET_BACKUP_PASSPHRASE is set (set KINGLET_BACKUP_ALLOW_UNENCRYPTED_SNAPSHOTS=1 only for parts written before the passphrase)",
+      409,
+    );
+  }
+
   const filename = ref.key.slice(ref.key.lastIndexOf("/") + 1);
   let signed: { url: string; expiresAt: number };
 
@@ -199,6 +220,7 @@ async function importPart(
   const digest = createHash("sha256");
   const maxSpoolBytes = resolveMaxSpoolBytes(options.maxSpoolBytes);
   let spooledBytes = 0;
+  let lineBytes = 0;
 
   // Count decompressed bytes before they reach the spool file. Failing inside
   // the pipeline tears down the download, so an oversized or hostile object
@@ -209,6 +231,16 @@ async function importPart(
 
       if (spooledBytes > maxSpoolBytes) {
         callback(new ArchiveError("archive part is too large to import", 413));
+
+        return;
+      }
+
+      // The line readers below hold a whole line in memory, so an over-long
+      // line is refused here, before it is spooled.
+      lineBytes = longestLineTail(chunk, lineBytes);
+
+      if (lineBytes > MAX_LINE_BYTES) {
+        callback(new ArchiveError("archive part has a line that is too long to import", 413));
 
         return;
       }
@@ -261,6 +293,23 @@ async function importPart(
       }
     }
   }
+}
+
+/**
+ * Bytes since the last newline after `chunk`, given `carry` bytes before it.
+ * Returns MAX_LINE_BYTES + 1 as soon as any line passes the cap.
+ */
+function longestLineTail(chunk: Buffer, carry: number): number {
+  let start = 0;
+  let current = carry;
+
+  for (let nl = chunk.indexOf(0x0a, start); nl !== -1; nl = chunk.indexOf(0x0a, start)) {
+    if (current + (nl - start) > MAX_LINE_BYTES) return MAX_LINE_BYTES + 1;
+    current = 0;
+    start = nl + 1;
+  }
+
+  return current + (chunk.length - start);
 }
 
 /**

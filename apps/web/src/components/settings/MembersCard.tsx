@@ -8,8 +8,13 @@ import {
   removeProjectMember,
   updateProjectMember,
 } from "../../api";
+import type { PageQuery } from "../../api";
 import type { AppUser, ProjectMember } from "../../types";
 import ErrorAlert from "../ErrorAlert";
+import SkeletonRows from "../SkeletonRows";
+import TablePagination from "../TablePagination";
+import TableSearch, { NoMatchesRow } from "../TableSearch";
+import { fadeWhileLoading, useServerTable } from "../../server-table";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,7 +28,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -44,23 +56,33 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-export default function MembersCard({
-  projectId,
-  projectName,
-}: {
-  projectId: string;
-  projectName: string;
-}) {
+export default function MembersCard({ projectId }: { projectId: string }) {
+  // Every member and user, to offer the users who aren't members yet; the
+  // table pages separately.
   const [members, setMembers] = useState<ProjectMember[]>([]);
+
+  const loadMemberPage = useCallback(
+    async (page: PageQuery) => {
+      const result = await fetchProjectMembers(projectId, page);
+
+      return { rows: result.members, total: result.total };
+    },
+    [projectId],
+  );
+
+  const memberTable = useServerTable("members", loadMemberPage);
+
+  const { reload: reloadMemberTable } = memberTable;
   const [allUsers, setAllUsers] = useState<AppUser[]>([]);
   const [memberToAdd, setMemberToAdd] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const loadMembers = useCallback(async () => {
+  const loadCandidates = useCallback(async () => {
     try {
       const [m, u] = await Promise.all([fetchProjectMembers(projectId), fetchUsers()]);
       setMembers(m.members);
       setAllUsers(u.users);
+      setMemberToAdd("");
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -68,9 +90,12 @@ export default function MembersCard({
   }, [projectId]);
 
   useEffect(() => {
-    setMemberToAdd("");
-    void loadMembers();
-  }, [loadMembers]);
+    void loadCandidates();
+  }, [loadCandidates]);
+
+  const loadMembers = useCallback(async () => {
+    await Promise.all([loadCandidates(), reloadMemberTable()]);
+  }, [loadCandidates, reloadMemberTable]);
 
   const eligibleUsers = allUsers.filter((u) => u.role !== "admin");
   const candidates = eligibleUsers.filter((u) => !members.some((m) => m.userId === u.id));
@@ -122,14 +147,21 @@ export default function MembersCard({
 
   return (
     <div className="flex flex-col gap-3">
-      <ErrorAlert error={error} />
+      <ErrorAlert error={error ?? memberTable.error} />
 
       <Card>
         <CardHeader>
-          <CardTitle>Members — {projectName}</CardTitle>
+          <CardTitle>Members</CardTitle>
           <CardDescription>
             Admins see every project. Members and viewers see only the projects assigned here.
           </CardDescription>
+          <CardAction className="row-span-1 self-center">
+            <TableSearch
+              label="Search members"
+              value={memberTable.query}
+              onChange={memberTable.setQuery}
+            />
+          </CardAction>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <Table>
@@ -141,8 +173,8 @@ export default function MembersCard({
                 <TableHead className="text-right">actions</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
-              {members.map((m) => (
+            <TableBody className={fadeWhileLoading(memberTable)}>
+              {memberTable.rows.map((m) => (
                 <TableRow key={m.userId}>
                   <TableCell className="max-w-56 truncate text-mist">{m.email}</TableCell>
                   <TableCell>
@@ -200,7 +232,16 @@ export default function MembersCard({
                   </TableCell>
                 </TableRow>
               ))}
-              {members.length === 0 && (
+              {!memberTable.loaded && <SkeletonRows columns={4} label="Loading members…" />}
+              {memberTable.loaded && memberTable.total === 0 && memberTable.activeQuery !== "" && (
+                <NoMatchesRow
+                  columns={4}
+                  query={memberTable.activeQuery}
+                  noun="members"
+                  onClear={() => memberTable.setQuery("")}
+                />
+              )}
+              {memberTable.loaded && memberTable.total === 0 && memberTable.activeQuery === "" && (
                 <TableRow>
                   <TableCell colSpan={4} className="py-4 text-center text-mist-faint">
                     {memberEmptyMessage}
@@ -209,6 +250,7 @@ export default function MembersCard({
               )}
             </TableBody>
           </Table>
+          <TablePagination table={memberTable} noun="members" className="-mx-4 -mt-4" />
 
           {candidates.length > 0 ? (
             <div className="flex flex-wrap items-center gap-2">

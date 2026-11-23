@@ -183,9 +183,14 @@ export const notificationChannels = sqliteTable(
     lastTestAt: integer("last_test_at"),
     lastTestStatus: text("last_test_status"),
     lastTestError: text("last_test_error"),
+    /**
+     * Keyed fingerprint of type + target. `url` is encrypted (random IV), so
+     * duplicate checks use this instead; null until KINGLET_SECRET_KEY is set.
+     */
+    targetHash: text("target_hash"),
   },
   (table) => [
-    uniqueIndex("uq_notification_channels_type_url").on(table.type, table.url),
+    uniqueIndex("uq_notification_channels_target_hash").on(table.targetHash),
     index("idx_notification_channels_created").on(table.createdAt),
   ],
 );

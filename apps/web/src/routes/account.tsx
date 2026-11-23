@@ -1,21 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
-import PageShell from "../components/PageShell";
-import AccountPanel from "../components/settings/AccountPanel";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
+/** Account settings live in the settings page's last tab; old links land there. */
 export const Route = createFileRoute("/account")({
-  component: AccountPage,
+  beforeLoad: () => {
+    throw redirect({ to: "/settings", search: { tab: "account" } });
+  },
 });
-
-function AccountPage() {
-  return (
-    <PageShell
-      kicker="account"
-      title="Your account."
-      description="Your profile and password for this Kinglet instance."
-    >
-      <div className="mt-6">
-        <AccountPanel />
-      </div>
-    </PageShell>
-  );
-}

@@ -12,14 +12,14 @@ Docs and landing page: **https://kinglet.rushlightlab.com**
 - **Live tail** over SSE, with follow mode
 - **Full-text search** — SQLite FTS5 with a trigram tokenizer, so substring
   matches (`"timeout"`) just work
-- **Filter grammar** — `level>=warn service:api "connection refused" -healthcheck`
-- **Monitors & alerts** — instant match, rate spikes, silence detection → webhook/Discord/Slack
+- **Trill search** — `level>=warn service:api "connection refused" -healthcheck field.status>=500`, with autocomplete
+- **Monitors & alerts** — instant match, rate spikes, silence detection → webhook, Discord, Slack, Telegram, ntfy, Gotify, Pushover, or email
 - **Team-ready auth** — Better Auth email/password login with admin / member / viewer roles, cached sessions, and per-project membership
 - **Multi-project** — every project owns its logs, monitors, and `kl_…` API keys with `ingest`/`query` scopes; non-admins see only projects they're assigned to
 - **Volume histogram** by level, drag across it to zoom into a time range
 - **Retention built in** — drop events older than N days, automatically
 - **S3 backups & restore** — optional compressed (zstd), optionally age-encrypted snapshots to R2/S3/MinIO, scheduled and restorable from Settings
-- **Notification channels** — reusable webhook/Discord/Slack channels with per-action subscriptions for backups, archive, and system warnings
+- **Notification channels** — reusable webhook, Discord, Slack, Telegram, ntfy, Gotify, Pushover, and email (SMTP, Resend, Plunk) channels with per-action subscriptions for backups, archive, and system warnings
 - **Log archive** — optional per-project NDJSON export to S3 before retention deletes events, with a re-import path
 - **MCP server** — query logs and manage monitors from Claude Desktop, Cursor, VS Code, Codex, and other MCP clients with a project-scoped `km_…` key
 - **Zero external services** — no Postgres, no Redis, no Kafka. One process; S3 is optional.
@@ -47,7 +47,7 @@ Sign in with the admin email (default `admin@kinglet.local`) and that password.
 Set `KINGLET_ADMIN_EMAIL` / `KINGLET_ADMIN_PASSWORD` on the container to choose
 your own — they only apply when no administrator exists. For a public server,
 set `KINGLET_BASE_URL` to your HTTPS origin and pin a release tag such as
-`:0.4.0` instead of `:latest`.
+`:0.5.0` instead of `:latest`.
 
 Then go to **/settings → projects & keys**, create an API key (`kl_…`, scopes
 `ingest` / `query`), and send your first log with it:
@@ -60,8 +60,9 @@ curl -X POST http://localhost:8080/v1/events \
 ```
 
 Prefer Compose, Coolify, or Dokploy? The
-[self-hosting guide](https://kinglet.rushlightlab.com/self-hosting/) has all
-three paths, TLS, backups, and configuration.
+[deploy guides](https://kinglet.rushlightlab.com/deploy/) cover each one, and the
+[self-hosting reference](https://kinglet.rushlightlab.com/self-hosting/) covers
+TLS, backups, and configuration.
 
 ## Send logs
 
@@ -115,6 +116,32 @@ Events buffer in-process and ship as one NDJSON batch (1000 events or every
 1000ms by default; at most 5000 per request). Failed batches are re-queued and reported via `onError` —
 your app never blocks on logging.
 
+### PHP
+
+```bash
+composer require rushlightlab/kinglet
+```
+
+A batching client for PHP 8.1+ with no required dependencies, plus a PSR-3
+logger and a Monolog handler for Laravel and Symfony:
+
+```php
+$kinglet = new Kinglet\Client(
+    url: 'http://localhost:8080',
+    token: getenv('KINGLET_KEY'), // API key with the ingest scope (kl_…)
+    service: 'my-app',
+    env: 'prod',
+);
+
+$kinglet->info('user signed in', ['userId' => 42]);
+$kinglet->error('payment failed', ['exception' => $e]);
+```
+
+Events batch in memory and send when the batch fills (100), every 5 seconds in
+long-running workers, and when the script ends. Logging never throws, requests
+time out after 2 s, and an unreachable Kinglet backs off. See
+[packages/sdk-php](packages/sdk-php/README.md) for Laravel and Symfony setup.
+
 ### AI clients (MCP)
 
 `@kinglet/mcp` is a local stdio MCP server for Claude Desktop, Claude Code,
@@ -160,54 +187,56 @@ are exempt. MCP keys can read logs (`logs.read`), read monitors and alerts
 (`monitors.read`), and optionally manage monitors (`monitors.write`). They can
 never ingest, manage keys/users/projects, or change backups and settings.
 
-| Route                                         | What it does                                                                     |
-| --------------------------------------------- | -------------------------------------------------------------------------------- |
-| `/api/auth/*`                                 | Better Auth endpoints (sign-in, sign-out, session, password)                     |
-| `GET /v1/me`                                  | Current user + permissions                                                       |
-| `GET/POST /v1/projects`                       | List assigned projects / create one (admin)                                      |
-| `DELETE /v1/projects/:id`                     | Delete a project and all its data (admin)                                        |
-| `GET/POST /v1/users`                          | List / create users (admin)                                                      |
-| `PATCH/DELETE /v1/users/:id`                  | Change role / delete user (admin)                                                |
-| `GET/POST /v1/projects/:id/keys`              | List / create API keys for a project                                             |
-| `DELETE /v1/keys/:id?project=`                | Revoke an API key                                                                |
-| `GET/POST /v1/projects/:id/members`           | List / assign project members (admin)                                            |
-| `DELETE /v1/projects/:id/members/:userId`     | Remove a project member (admin)                                                  |
-| `POST /v1/events`                             | Ingest a batch (NDJSON or JSON, ≤ 10k events, ≤ 8MB)                             |
-| `GET /v1/events`                              | Query. Params: `q` (filter grammar), `from`, `to` (epoch ms), `limit`, `cursor`  |
-| `GET /v1/events/:uid`                         | One event by its UUID v7 uid                                                     |
-| `GET /v1/events/:uid/context`                 | Neighbours. Params: `before`, `after` (0–20, default 5)                          |
-| `GET /v1/histogram`                           | Counts per level per bucket. Params: `from`, `to`, `buckets`                     |
-| `GET /v1/services`                            | Your known services and their event counts                                       |
-| `GET /v1/aggregate`                           | Totals for a filter; optional `groupBy=service\|level\|env`, `limit` ≤ 200       |
-| `GET /v1/stream`                              | SSE live tail. Params: `q` (cookie auth; `?key=` for headerless clients)         |
-| `GET/POST /v1/monitors`                       | List monitors / create one                                                       |
-| `PATCH/DELETE /v1/monitors/:id`               | Update / delete a monitor                                                        |
-| `POST /v1/monitors/:id/test`                  | Send a test notification through every channel                                   |
-| `GET /v1/alerts`                              | Alert history. Params: `limit`, `monitorId`, `state`, `from`, `to`               |
-| `GET /v1/alerts/:id`                          | One alert, project-scoped (same masking rules)                                   |
-| `GET /v1/context`                             | Project, key scopes, capabilities, write gate, and version for a `kl_`/`km_` key |
-| `GET /v1/backups/status`                      | Backup setup, last run, next run, and live progress (admin)                      |
-| `GET /v1/backups`                             | Cached snapshots; `?refresh=1` reconciles the bucket (admin)                     |
-| `POST /v1/backups/run`                        | Start a snapshot now (admin)                                                     |
-| `GET/PUT /v1/backups/settings`                | Schedule, timezone, retention (admin)                                            |
-| `GET /v1/backups/schedule/preview`            | Validate a cron expression and preview the next runs (admin)                     |
-| `POST /v1/backups/test-connection`            | Put/get/delete a probe object in the bucket (admin)                              |
-| `GET /v1/backups/:id/download`                | Short-lived presigned download URL (admin)                                       |
-| `POST /v1/backups/:id/restore`                | Stage a restore; apply at next boot (admin)                                      |
-| `DELETE /v1/backups/:id`                      | Delete a snapshot manifest and object (admin)                                    |
-| `GET/POST /v1/notifications/channels`         | List masked channels / create one (admin)                                        |
-| `PATCH/DELETE /v1/notifications/channels/:id` | Edit or delete a channel (admin)                                                 |
-| `POST /v1/notifications/channels/:id/test`    | Send a test notification (admin, once/minute)                                    |
-| `GET /v1/notifications/channels/summary`      | Channel names and health for monitor editors; never URLs                         |
-| `GET /v1/notifications/deliveries`            | Recent delivery log, newest first (admin)                                        |
-| `GET/PUT /v1/archive/settings`                | Global archive schedule and failure policy (admin)                               |
-| `PUT /v1/projects/:id/archive`                | Enable or disable archive for one project (admin)                                |
-| `POST /v1/archive/run`                        | Run archive now (admin)                                                          |
-| `GET /v1/archive/parts`                       | Exported archive parts (admin)                                                   |
-| `POST /v1/archive/import`                     | Re-import archived events for a project and date range (admin)                   |
-| `GET /v1/system/events`                       | SSE backup/restore/archive progress (admin, cookie auth)                         |
-| `GET /v1/system/status`                       | Operational diagnostics (admin)                                                  |
-| `GET /healthz`                                | Minimal health check (no auth)                                                   |
+| Route                                         | What it does                                                                              |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `/api/auth/*`                                 | Better Auth endpoints (sign-in, sign-out, session, password)                              |
+| `GET /v1/me`                                  | Current user + permissions                                                                |
+| `GET/POST /v1/projects`                       | List assigned projects / create one (admin)                                               |
+| `DELETE /v1/projects/:id`                     | Delete a project and all its data (admin)                                                 |
+| `GET/POST /v1/users`                          | List / create users (admin)                                                               |
+| `PATCH/DELETE /v1/users/:id`                  | Change role / delete user (admin)                                                         |
+| `GET/POST /v1/projects/:id/keys`              | List / create API keys for a project                                                      |
+| `DELETE /v1/keys/:id?project=`                | Revoke an API key                                                                         |
+| `GET/POST /v1/projects/:id/members`           | List / assign project members (admin)                                                     |
+| `DELETE /v1/projects/:id/members/:userId`     | Remove a project member (admin)                                                           |
+| `POST /v1/events`                             | Ingest a batch (NDJSON or JSON, ≤ 10k events, ≤ 8MB)                                      |
+| `GET /v1/events`                              | Query. Params: `q` (Trill), `from`, `to` (epoch ms), `limit`, `cursor`                    |
+| `GET /v1/events/:uid`                         | One event by its UUID v7 uid                                                              |
+| `GET /v1/events/:uid/context`                 | Neighbours. Params: `before`, `after` (0–20, default 5)                                   |
+| `GET /v1/histogram`                           | Counts per level per bucket for events matching `q`. Params: `q`, `from`, `to`, `buckets` |
+| `GET /v1/fields`                              | Field keys, types, and common values in recent events, for autocomplete                   |
+| `GET /v1/events/clear/preview`                | What a `DELETE /v1/events` with the same `from`/`to`/`q` would remove                     |
+| `GET /v1/services`                            | Your known services and their event counts                                                |
+| `GET /v1/aggregate`                           | Totals for a filter; optional `groupBy=service\|level\|env`, `limit` ≤ 200                |
+| `GET /v1/stream`                              | SSE live tail. Params: `q` (cookie auth; `?key=` for headerless clients)                  |
+| `GET/POST /v1/monitors`                       | List monitors / create one                                                                |
+| `PATCH/DELETE /v1/monitors/:id`               | Update / delete a monitor                                                                 |
+| `POST /v1/monitors/:id/test`                  | Send a test notification through every channel                                            |
+| `GET /v1/alerts`                              | Alert history. Params: `limit`, `monitorId`, `state`, `from`, `to`                        |
+| `GET /v1/alerts/:id`                          | One alert, project-scoped (same masking rules)                                            |
+| `GET /v1/context`                             | Project, key scopes, capabilities, write gate, and version for a `kl_`/`km_` key          |
+| `GET /v1/backups/status`                      | Backup setup, last run, next run, and live progress (admin)                               |
+| `GET /v1/backups`                             | Cached snapshots; `?refresh=1` reconciles the bucket (admin)                              |
+| `POST /v1/backups/run`                        | Start a snapshot now (admin)                                                              |
+| `GET/PUT /v1/backups/settings`                | Schedule, timezone, retention (admin)                                                     |
+| `GET /v1/backups/schedule/preview`            | Validate a cron expression and preview the next runs (admin)                              |
+| `POST /v1/backups/test-connection`            | Put/get/delete a probe object in the bucket (admin)                                       |
+| `GET /v1/backups/:id/download`                | Short-lived presigned download URL (admin)                                                |
+| `POST /v1/backups/:id/restore`                | Stage a restore; apply at next boot (admin)                                               |
+| `DELETE /v1/backups/:id`                      | Delete a snapshot manifest and object (admin)                                             |
+| `GET/POST /v1/notifications/channels`         | List masked channels / create one (admin)                                                 |
+| `PATCH/DELETE /v1/notifications/channels/:id` | Edit or delete a channel (admin)                                                          |
+| `POST /v1/notifications/channels/:id/test`    | Send a test notification (admin, once/minute)                                             |
+| `GET /v1/notifications/channels/summary`      | Channel names and health for monitor editors; never URLs                                  |
+| `GET /v1/notifications/deliveries`            | Recent delivery log, newest first (admin)                                                 |
+| `GET/PUT /v1/archive/settings`                | Global archive schedule and failure policy (admin)                                        |
+| `PUT /v1/projects/:id/archive`                | Enable or disable archive for one project (admin)                                         |
+| `POST /v1/archive/run`                        | Run archive now (admin)                                                                   |
+| `GET /v1/archive/parts`                       | Exported archive parts (admin)                                                            |
+| `POST /v1/archive/import`                     | Re-import archived events for a project and date range (admin)                            |
+| `GET /v1/system/events`                       | SSE backup/restore/archive progress (admin, cookie auth)                                  |
+| `GET /v1/system/status`                       | Operational diagnostics (admin)                                                           |
+| `GET /healthz`                                | Minimal health check (no auth)                                                            |
 
 Ingest is rate-limited to 600 batches/minute per identity. Filters are capped at
 500 characters / 32 terms, `limit` at 1000, `buckets` at 240, alerts at 500, and
@@ -215,6 +244,15 @@ monitors at 100 per project. Aggregate groups default to 50 and cap at 200.
 Event context `before`/`after` default to 5 and cap at 20. `from`/`to` are
 clamped to the last 31 days and 5 minutes of future skew. Per-project event and
 database caps are configurable (see below).
+
+The list routes behind the UI's tables (`/v1/monitors`, `/v1/alerts`,
+`/v1/notifications/channels`, `/v1/notifications/deliveries`, `/v1/users`,
+`/v1/projects`, `/v1/projects/:id/keys`, `/v1/projects/:id/members`, and
+`/v1/backups`) accept `limit`, `offset`, and `q`, and return `total`, the
+number of matching rows across every page. `q` matches rows that contain every
+word, in any order and case; it never searches delivery errors or webhook URLs.
+Without `limit` these routes return every row, except alerts (default 100, max 500) and deliveries (max 100). Keys also take `type=api|mcp`, and monitors
+include `lastAlertAt` and `firing` from their newest alert.
 
 Alert filters and detail return `notifyError` only to administrators and hide
 event-derived text from callers without `logs.read`. When `from`/`to` are
@@ -227,7 +265,11 @@ resolved project.
 groups exist. Null `service`/`env` keys are real groups for events without that
 field; `level` keys are names such as `error`.
 
-### Filter grammar
+### Search: Trill
+
+Trill is Kinglet's search syntax, used by the log view, the API's `q`
+parameter, the live tail, monitors, clearing logs, and the MCP server. Full
+reference and examples: <https://kinglet.rushlightlab.com/trill/>.
 
 ```
 level:error            level is error
@@ -235,9 +277,20 @@ level>=warn            level comparisons
 service:api env:prod   exact field matches
 "conn refused"         message contains phrase
 -healthcheck           message must NOT contain this
+field.imei:8643…       a key in the event's fields equals this (case-insensitive)
+field.status>=500      numeric comparisons on a JSON number (> >= < <=)
+field.data.rss>250     nested keys, up to 4 levels
+field.error:*          the field exists
+-field.reason:dup      negates a field filter
+in:fields timeout      free text searches field keys and values instead of the message
+in:all timeout         free text searches the message or the fields
 ```
 
-Combine freely: `level>=warn service:api -healthcheck`
+Combine freely: `level>=warn service:api -healthcheck field.status>=500`
+
+Free text uses the search index; field filters and `in:fields` scan the selected
+project and time window (about 0.1 s for a day of a 1M-event project, a few
+seconds for two weeks).
 
 ## Alerts & monitors
 
@@ -262,7 +315,8 @@ curl -X POST http://localhost:8080/v1/monitors \
 ```
 
 Channels are reusable destinations — **webhook** (JSON payload; n8n, Zapier,
-scripts), **discord**, and **slack** — managed in **Settings → Notifications**
+scripts), **discord**, **slack**, **telegram**, **ntfy**, **gotify**, **pushover**,
+and email through **SMTP**, **Resend**, or **Plunk** — managed in **Settings → Notifications**
 and subscribed to actions such as `backup.failed`, `backup.restore_staged`,
 `archive.failed`, and `system.warning`. Attach them to a monitor by id with
 `channelIds`; legacy inline `channels` are still accepted for one release. Each
@@ -270,7 +324,49 @@ monitor has a cooldown; count monitors auto-resolve when the condition clears
 and say so. `POST /v1/monitors/:id/test` sends a test notification, so wiring a
 channel is verifiable in one click. Webhook targets are SSRF-checked:
 loopback/private/metadata addresses are blocked unless
-`KINGLET_ALLOW_PRIVATE_WEBHOOKS=1` is set.
+`KINGLET_ALLOW_PRIVATE_WEBHOOKS=1` is set; that also lets a self-hosted ntfy or
+Gotify server live on a private address. Telegram, Pushover, Resend, and Plunk
+only ever reach their official API hosts. Email is HTML (React Email) with a
+plain-text copy; SMTP email uses the server set by `KINGLET_SMTP_*`.
+
+Each channel stores one secret target, masked in lists:
+
+| Type       | Target                                                                    |
+| ---------- | ------------------------------------------------------------------------- |
+| `ntfy`     | `https://ntfy.sh/<topic>`, optional `?auth=<base64url("Bearer <token>")>` |
+| `gotify`   | `https://<server>/message?token=<app token>`                              |
+| `telegram` | `https://api.telegram.org/bot<token>/sendMessage?chat_id=<chat>`          |
+| `pushover` | `https://api.pushover.net/1/messages.json?token=<app>&user=<user>`        |
+| `email`    | `mailto:<address>[,<address>…]` (up to 10)                                |
+| `resend`   | `https://api.resend.com/emails?key=<re_…>&from=<from>&to=<a,b>`           |
+| `plunk`    | `https://api.useplunk.com/v1/send?key=<sk_…>&to=<a,b>`                    |
+
+The UI builds these from per-service fields, so most people never type one.
+
+### Encrypted channel secrets
+
+Channel targets hold secrets (webhook URLs, bot tokens, API keys), so Kinglet
+stores them encrypted with `KINGLET_SECRET_KEY`: AES-256-GCM with a fresh IV
+per value, each value bound to its row, and a keyed fingerprint for duplicate
+checks. Legacy per-monitor webhook URLs are encrypted the same way. The SMTP
+and S3 credentials never reach the database; they stay in the environment.
+
+```bash
+openssl rand -base64 32   # set the output as KINGLET_SECRET_KEY, then restart
+```
+
+- **Without a key**, nothing new is stored as a secret: adding a channel,
+  pointing one somewhere new, and inline monitor webhooks are refused (the UI
+  says why). Existing channels keep sending so an upgrade can't silently stop
+  your alerts, and the UI warns that their secrets are not encrypted yet.
+- **On the first start with a key**, existing plaintext secrets are encrypted
+  in place.
+- **Keep the key safe and backed up separately.** Snapshots contain the
+  database, not the key: a leaked snapshot doesn't expose channel secrets, and
+  a restore needs the same key. If the key is lost or changed, affected
+  channels show as **locked** and need their settings entered again.
+- A key that is set but too short or malformed stops startup instead of
+  silently storing plaintext.
 
 Set `KINGLET_BASE_URL` and every notification carries a deep link back into
 your UI with the query and time range pre-filled.
@@ -312,44 +408,51 @@ the database, manifests, logs, or API responses.
 
 ## Configuration
 
-| Env var                                      | Default                                       | What it does                                                                          |
-| -------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `KINGLET_PORT`                               | `3000`                                        | HTTP port                                                                             |
-| `KINGLET_HOST`                               | _(all interfaces)_                            | Bind address; set `127.0.0.1` for a loopback-only listener                            |
-| `KINGLET_STORAGE`                            | `auto`                                        | `sqlite`, `libsql`, or `auto` (picks by db path scheme)                               |
-| `KINGLET_SEARCH`                             | `substring`                                   | Message search index: `substring` (trigram), `words` (word prefix), or `off`          |
-| `KINGLET_DB_PATH`                            | `data/kinglet.db` (image: `/data/kinglet.db`) | Plain path → SQLite; `libsql://`/`https://`/`file:` → libSQL                          |
-| `KINGLET_DB_AUTH_TOKEN`                      | —                                             | Auth token for remote libSQL/Turso databases                                          |
-| `KINGLET_ADMIN_EMAIL`                        | `admin@kinglet.local`                         | Bootstrap administrator email (when no administrator exists)                          |
-| `KINGLET_ADMIN_PASSWORD`                     | _(generated)_                                 | Bootstrap administrator password (when no administrator exists)                       |
-| `BETTER_AUTH_SECRET`                         | _(generated, persisted)_                      | Session signing secret; set explicitly for multi-instance installs                    |
-| `KINGLET_TRUSTED_PROXIES`                    | —                                             | CIDRs allowed to set `X-Forwarded-For`                                                |
-| `KINGLET_ALLOW_PRIVATE_WEBHOOKS`             | —                                             | Allow private/internal webhook targets (SSRF escape hatch)                            |
-| `KINGLET_MCP_ALLOW_MONITOR_WRITES`           | —                                             | Allow MCP keys to create/update/delete monitors; off by default                       |
-| `KINGLET_SESSION_DAYS`                       | `30`                                          | Web session lifetime                                                                  |
-| `KINGLET_BASE_URL`                           | —                                             | Public URL, used for deep links in alert notifications                                |
-| `KINGLET_TIMEZONE`                           | system TZ                                     | Default timezone for backup and archive schedules                                     |
-| `KINGLET_BACKUP_S3_BUCKET`                   | —                                             | Bucket for snapshots; backups are enabled when this and the next three are set        |
-| `KINGLET_BACKUP_S3_ENDPOINT`                 | —                                             | S3-compatible endpoint (R2/MinIO/B2); HTTPS required except loopback                  |
-| `KINGLET_BACKUP_S3_REGION`                   | `auto`                                        | Region; `auto` for Cloudflare R2                                                      |
-| `KINGLET_BACKUP_S3_ACCESS_KEY_ID`            | —                                             | Least-privilege access key                                                            |
-| `KINGLET_BACKUP_S3_SECRET_ACCESS_KEY`        | —                                             | Secret key (never stored in the database)                                             |
-| `KINGLET_BACKUP_S3_SESSION_TOKEN`            | —                                             | Optional temporary credential token                                                   |
-| `KINGLET_BACKUP_S3_PREFIX`                   | `kinglet`                                     | Object prefix inside the bucket                                                       |
-| `KINGLET_BACKUP_S3_FORCE_PATH_STYLE`         | `false`                                       | `true` for most MinIO setups                                                          |
-| `KINGLET_BACKUP_S3_SSE`                      | `AES256`                                      | Server-side encryption: `AES256`, `aws:kms`, or `none`                                |
-| `KINGLET_BACKUP_S3_KMS_KEY_ID`               | —                                             | Required when `KINGLET_BACKUP_S3_SSE=aws:kms`                                         |
-| `KINGLET_BACKUP_PASSPHRASE`                  | —                                             | Optional age passphrase; when set, restores require age-encrypted snapshots           |
-| `KINGLET_BACKUP_MANIFEST_SECRET`             | S3 secret                                     | Stable HMAC key for snapshot manifests; set a dedicated value for credential rotation |
-| `KINGLET_BACKUP_ALLOW_UNSIGNED_MANIFESTS`    | `0`                                           | Legacy compatibility for manifests written before signing; leave off for new setups   |
-| `KINGLET_BACKUP_ALLOW_UNENCRYPTED_SNAPSHOTS` | `0`                                           | Legacy compatibility for unencrypted snapshots while a passphrase is configured       |
-| `KINGLET_BACKUP_MAX_SNAPSHOT_MB`             | `8192`                                        | Absolute restore size cap in MiB; larger snapshots are rejected before download       |
-| `KINGLET_BACKUP_PART_SIZE_MB`                | `8`                                           | Multipart part size in MiB (minimum 5)                                                |
-| `KINGLET_RETENTION_DAYS`                     | `14`                                          | Delete events older than this                                                         |
-| `KINGLET_ALERT_RETENTION_DAYS`               | `90`                                          | Delete alert history older than this                                                  |
-| `KINGLET_MAX_EVENTS_PER_PROJECT`             | `1000000`                                     | Hard cap on retained events per project (`0` = unlimited)                             |
-| `KINGLET_MAX_PROJECT_DB_MB`                  | `1024`                                        | Hard cap on retained event bytes per project (`0` = unlimited)                        |
-| `KINGLET_MAX_DB_MB`                          | `4096`                                        | Hard cap on local database size in MB (`0` = unlimited)                               |
+| Env var                                       | Default                                       | What it does                                                                          |
+| --------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `KINGLET_PORT`                                | `3000`                                        | HTTP port                                                                             |
+| `KINGLET_HOST`                                | _(all interfaces)_                            | Bind address; set `127.0.0.1` for a loopback-only listener                            |
+| `KINGLET_STORAGE`                             | `auto`                                        | `sqlite`, `libsql`, or `auto` (picks by db path scheme)                               |
+| `KINGLET_SEARCH`                              | `substring`                                   | Message search index: `substring` (trigram), `words` (word prefix), or `off`          |
+| `KINGLET_DB_PATH`                             | `data/kinglet.db` (image: `/data/kinglet.db`) | Plain path or `file:` → local SQLite; `libsql://`/`https://`/`wss://` → remote libSQL |
+| `KINGLET_DB_AUTH_TOKEN`                       | —                                             | Auth token for remote libSQL/Turso databases                                          |
+| `KINGLET_ADMIN_EMAIL`                         | `admin@kinglet.local`                         | Bootstrap administrator email (when no administrator exists)                          |
+| `KINGLET_ADMIN_PASSWORD`                      | _(generated)_                                 | Bootstrap administrator password (when no administrator exists)                       |
+| `BETTER_AUTH_SECRET`                          | _(generated, persisted)_                      | Session signing secret; required with a remote database (Turso) or several instances  |
+| `KINGLET_SECRET_KEY`                          | —                                             | Encrypts stored channel secrets; required to add or change notification channels      |
+| `KINGLET_TRUSTED_PROXIES`                     | —                                             | CIDRs allowed to set `X-Forwarded-For`                                                |
+| `KINGLET_ALLOW_PRIVATE_WEBHOOKS`              | —                                             | Allow private/internal webhook targets (SSRF escape hatch)                            |
+| `KINGLET_SMTP_HOST`                           | —                                             | SMTP server for email channels; email channels are off without it                     |
+| `KINGLET_SMTP_FROM`                           | —                                             | Sender for email channels, e.g. `Kinglet <alerts@example.com>` (required with host)   |
+| `KINGLET_SMTP_PORT`                           | `587` (`465` when secure)                     | SMTP port                                                                             |
+| `KINGLET_SMTP_SECURE`                         | on for port 465                               | TLS from the first byte; otherwise STARTTLS when the server offers it                 |
+| `KINGLET_SMTP_USER` / `KINGLET_SMTP_PASSWORD` | —                                             | SMTP login (the password is env-only and never stored)                                |
+| `KINGLET_SMTP_REQUIRE_TLS`                    | on when a user is set                         | Refuse to send without TLS; set `0` for a trusted local relay                         |
+| `KINGLET_MCP_ALLOW_MONITOR_WRITES`            | —                                             | Allow MCP keys to create/update/delete monitors; off by default                       |
+| `KINGLET_SESSION_DAYS`                        | `30`                                          | Web session lifetime                                                                  |
+| `KINGLET_BASE_URL`                            | —                                             | Public URL, used for deep links in alert notifications                                |
+| `KINGLET_TIMEZONE`                            | system TZ                                     | Default timezone for backup and archive schedules                                     |
+| `KINGLET_BACKUP_S3_BUCKET`                    | —                                             | Bucket for snapshots; backups are enabled when this and the next three are set        |
+| `KINGLET_BACKUP_S3_ENDPOINT`                  | —                                             | S3-compatible endpoint (R2/MinIO/B2); HTTPS required except loopback                  |
+| `KINGLET_BACKUP_S3_REGION`                    | `auto`                                        | Region; `auto` for Cloudflare R2                                                      |
+| `KINGLET_BACKUP_S3_ACCESS_KEY_ID`             | —                                             | Least-privilege access key                                                            |
+| `KINGLET_BACKUP_S3_SECRET_ACCESS_KEY`         | —                                             | Secret key (never stored in the database)                                             |
+| `KINGLET_BACKUP_S3_SESSION_TOKEN`             | —                                             | Optional temporary credential token                                                   |
+| `KINGLET_BACKUP_S3_PREFIX`                    | `kinglet`                                     | Object prefix inside the bucket                                                       |
+| `KINGLET_BACKUP_S3_FORCE_PATH_STYLE`          | `false`                                       | `true` for most MinIO setups                                                          |
+| `KINGLET_BACKUP_S3_SSE`                       | `AES256`                                      | Server-side encryption: `AES256`, `aws:kms`, or `none`                                |
+| `KINGLET_BACKUP_S3_KMS_KEY_ID`                | —                                             | Required when `KINGLET_BACKUP_S3_SSE=aws:kms`                                         |
+| `KINGLET_BACKUP_PASSPHRASE`                   | —                                             | Optional age passphrase; when set, restores require age-encrypted snapshots           |
+| `KINGLET_BACKUP_MANIFEST_SECRET`              | S3 secret                                     | Stable HMAC key for snapshot manifests; set a dedicated value for credential rotation |
+| `KINGLET_BACKUP_ALLOW_UNSIGNED_MANIFESTS`     | `0`                                           | Legacy compatibility for manifests written before signing; leave off for new setups   |
+| `KINGLET_BACKUP_ALLOW_UNENCRYPTED_SNAPSHOTS`  | `0`                                           | Legacy: unencrypted snapshots and archive parts while a passphrase is configured      |
+| `KINGLET_BACKUP_MAX_SNAPSHOT_MB`              | `8192`                                        | Absolute restore size cap in MiB; larger snapshots are rejected before download       |
+| `KINGLET_BACKUP_PART_SIZE_MB`                 | `8`                                           | Multipart part size in MiB (minimum 5)                                                |
+| `KINGLET_RETENTION_DAYS`                      | `14`                                          | Delete events older than this                                                         |
+| `KINGLET_ALERT_RETENTION_DAYS`                | `90`                                          | Delete alert history older than this                                                  |
+| `KINGLET_MAX_EVENTS_PER_PROJECT`              | `1000000`                                     | Hard cap on retained events per project (`0` = unlimited)                             |
+| `KINGLET_MAX_PROJECT_DB_MB`                   | `1024`                                        | Cap on a project's on-disk event size, indexes included (`0` = unlimited)             |
+| `KINGLET_MAX_DB_MB`                           | `4096`                                        | Hard cap on local database size in MB (`0` = unlimited)                               |
 
 On first boot, or if the database has no administrator, Kinglet creates one from
 `KINGLET_ADMIN_EMAIL` / `KINGLET_ADMIN_PASSWORD`. If no password is set, one is
@@ -379,8 +482,8 @@ KINGLET_DB_AUTH_TOKEN=eyJ…
 ```
 
 With `KINGLET_STORAGE=auto` (the default), the driver is picked from the db
-path scheme: plain paths use the local file; `libsql://`, `https://`, `wss://`,
-and `file:` URLs use the libSQL transport. One caveat: some hosted libSQL
+path scheme: plain paths and `file:` URLs use the local file; `libsql://`,
+`http(s)://`, and `ws(s)://` URLs use the remote libSQL transport. One caveat: some hosted libSQL
 builds lack the FTS5 trigram tokenizer — Kinglet detects that and falls back to
 word-prefix search with a console warning. Turso's MVCC engine has no virtual
 tables at all; Kinglet detects that too and runs with search `off`.
@@ -404,7 +507,8 @@ implement the same `Storage` interface, so the API and UI stay untouched.
 
 - **Resources**: measured in Docker with ~200-byte events, 1 vCPU / 512 MB
   sustains 3,000 events/s with five dashboard users active (6,000 with
-  `KINGLET_SEARCH=words`; 4,000 on 2 vCPU / 2 GB), peaking at ~300–410 MB.
+  `KINGLET_SEARCH=words` on 1 vCPU / 1 GB; 4,000 on 2 vCPU / 2 GB), peaking at
+  ~300–410 MB.
   Disk is ~0.55 GB per million events (~0.42 GB with `words`); at the default
   14-day retention, raise `KINGLET_MAX_EVENTS_PER_PROJECT` for projects
   averaging more than ~0.8 events/s. See the
@@ -496,8 +600,8 @@ publish from `main`. The workflow verifies the tag, runs the build and typecheck
 and waits for approval from the `release` environment before pushing.
 
 ```bash
-git tag v0.4.0 -m "Kinglet v0.4.0"
-git push origin v0.4.0
+git tag v0.5.0 -m "Kinglet v0.5.0"
+git push origin v0.5.0
 ```
 
 The docs changelog and landing version badge are generated from GitHub

@@ -334,6 +334,67 @@ describe("archive import integrity", () => {
     expect(error.message).toBe("archive object checksum did not match its key");
     expect(await eventCount(projectId)).toBe(0);
   });
+
+  it("rejects a part with a line too long to hold in memory", async () => {
+    const { config, storage } = current();
+    const projectId = await newProject("long-line");
+    const store = new InMemoryBackupStore();
+
+    const part = storePart(store, projectId, [
+      makeLine(projectId, { message: "a".repeat(300 * 1024) }),
+    ]);
+
+    stubDownload(part.compressed);
+
+    const error = await archiveErrorOf(
+      importArchive(storage, { projectId, dataDir: config.dataDir, s3: store }),
+    );
+
+    expect(error.status).toBe(413);
+    expect(error.message).toBe("archive part has a line that is too long to import");
+    expect(await eventCount(projectId)).toBe(0);
+  });
+
+  it("refuses an unencrypted part while a passphrase is configured", async () => {
+    const { config, storage } = current();
+    const projectId = await newProject("plaintext-with-passphrase");
+    const store = new InMemoryBackupStore();
+    const part = storePart(store, projectId, [makeLine(projectId)]);
+
+    stubDownload(part.compressed);
+
+    const error = await archiveErrorOf(
+      importArchive(storage, {
+        projectId,
+        dataDir: config.dataDir,
+        passphrase: "dummy-operator-passphrase",
+        s3: store,
+      }),
+    );
+
+    expect(error.status).toBe(409);
+    expect(error.message).toMatch(/not age-encrypted/);
+    expect(await eventCount(projectId)).toBe(0);
+  });
+
+  it("imports an unencrypted legacy part when the operator allows it", async () => {
+    const { config, storage } = current();
+    const projectId = await newProject("plaintext-allowed");
+    const store = new InMemoryBackupStore();
+    const part = storePart(store, projectId, [makeLine(projectId)]);
+
+    stubDownload(part.compressed);
+
+    const result = await importArchive(storage, {
+      projectId,
+      dataDir: config.dataDir,
+      passphrase: "dummy-operator-passphrase",
+      allowUnencrypted: true,
+      s3: store,
+    });
+
+    expect(result.imported).toBe(1);
+  });
 });
 
 describe("archive import locking", () => {

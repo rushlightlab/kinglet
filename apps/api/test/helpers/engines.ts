@@ -199,6 +199,7 @@ export function createNoopArchiveEngine(overrides: Partial<ArchiveEngine> = {}):
     listParts: async () => [],
     importEvents: async () => archiveUnavailable(),
     run: async () => archiveUnavailable(),
+    fenceProject: async () => () => {},
     stop: () => {},
   };
 

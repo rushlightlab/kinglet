@@ -5,12 +5,14 @@ import { serve } from "@hono/node-server";
 import { createApp } from "./app.ts";
 import { createAuth } from "./auth/auth.ts";
 import { ensureBootstrapAdmin, ensureSchemaExtras } from "./auth/setup.ts";
-import { loadConfig } from "./env.ts";
+import { isRemoteDbPath, loadConfig } from "./env.ts";
 import type { Config } from "./env.ts";
 import { startArchiveEngine } from "./archive/engine.ts";
 import { listArchiveEnabledProjectIds } from "./archive/settings.ts";
 import { startBackupEngine } from "./backups/engine.ts";
 import { startMonitorEngine } from "./monitors.ts";
+import { sealStoredSecrets } from "./notifications/store.ts";
+import { configureSecrets } from "./secrets.ts";
 import { notifyAction, startNotificationEngine } from "./notifications/engine.ts";
 import { finalizePendingRestore, preparePendingRestore } from "./restore/boot.ts";
 import { startRetentionJob } from "./retention.ts";
@@ -30,6 +32,16 @@ process.on("unhandledRejection", (reason) => {
 
 async function main(): Promise<void> {
   const config = loadConfig();
+
+  // Before anything reads a stored channel secret.
+  configureSecrets(config.secretKey);
+
+  if (config.secretKey === null) {
+    console.warn(
+      "[kinglet] KINGLET_SECRET_KEY is not set: notification channels can't be added or changed, and any existing channel secrets stay unencrypted. Generate one with: openssl rand -base64 32",
+    );
+  }
+
   // Must run before the live database is opened: applies a staged restore.
   const restoreBoot = await preparePendingRestore(config);
 
@@ -64,6 +76,16 @@ async function main(): Promise<void> {
 
   const bootstrap = await ensureBootstrapAdmin(storage, config, auth);
 
+  // Encrypt secrets stored before a key was set (or before encryption existed).
+  try {
+    await sealStoredSecrets(storage);
+  } catch (err) {
+    console.warn(
+      "[kinglet] could not encrypt stored channel secrets:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   // Start notifications before the monitor engine so legacy monitor channels
   // are linked before the first refresh. A migration failure must not take
   // logging down; monitors fall back to inline channels.
@@ -81,6 +103,7 @@ async function main(): Promise<void> {
   const monitorEngine = startMonitorEngine(storage, {
     baseUrl: config.baseUrl,
     allowPrivateWebhooks: config.allowPrivateWebhooks,
+    smtp: config.smtp,
     dbPath: config.dbPath,
     maxDbBytes: config.maxDbBytes,
   });
@@ -104,8 +127,18 @@ async function main(): Promise<void> {
     },
   });
 
-  const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, () =>
-    printBanner(config, storage, bootstrap),
+  const server = serve(
+    {
+      fetch: app.fetch,
+      port: config.port,
+      hostname: config.host,
+      // Node's 300 s default would let a slow upload hold its buffered body
+      // for five minutes; 60 s still allows an 8 MiB batch at ~140 KB/s.
+      // Live tail is unaffected: these limits cover receiving the request,
+      // not how long the response streams.
+      serverOptions: { requestTimeout: 60_000, headersTimeout: 20_000 },
+    },
+    () => printBanner(config, storage, bootstrap),
   );
 
   server.on("error", (err: NodeJS.ErrnoException) => {
@@ -158,10 +191,6 @@ main().catch((err) => {
   console.error("  start Kinglet again — schema migrations run automatically on boot.");
   process.exit(1);
 });
-
-function isRemoteDbPath(dbPath: string): boolean {
-  return /^(libsql:\/\/|https?:\/\/|wss?:\/\/)/i.test(dbPath);
-}
 
 function printBanner(
   config: Config,
