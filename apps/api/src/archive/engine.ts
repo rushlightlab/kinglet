@@ -535,7 +535,7 @@ function createEngine(
       .where(
         and(eq(schema.events.projectKey, projectKeyOf(projectId)), lt(schema.events.ts, cutoff)),
       )
-      .orderBy(asc(schema.events.id))
+      .orderBy(asc(schema.events.ts), asc(schema.events.id))
       .limit(MAX_PART_EVENTS);
 
     const mapped: ArchiveEventRow[] = [];
@@ -552,6 +552,9 @@ function createEngine(
         fields: row.fields ?? null,
       });
     }
+
+    // Keep id order inside each part so firstId <= lastId holds for part keys.
+    mapped.sort((a, b) => a.id - b.id);
 
     return mapped;
   }

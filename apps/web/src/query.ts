@@ -216,6 +216,9 @@ function fieldSuggestions(typed: string, vocabulary: Vocabulary): Suggestion[] {
   );
 }
 
+const SERVICE_PREFIX = /^service:(.*)$/i;
+const ENV_PREFIX = /^env:(.*)$/i;
+
 function termSuggestions(typed: string, vocabulary: Vocabulary): Suggestion[] {
   const level = /^level(>=|<=|>|<|=|:)(\w*)$/i.exec(typed);
 
@@ -229,11 +232,11 @@ function termSuggestions(typed: string, vocabulary: Vocabulary): Suggestion[] {
     );
   }
 
-  for (const [key, names] of [
-    ["service", vocabulary.services],
-    ["env", vocabulary.envs],
+  for (const [key, pattern, names] of [
+    ["service", SERVICE_PREFIX, vocabulary.services],
+    ["env", ENV_PREFIX, vocabulary.envs],
   ] as const) {
-    const match = new RegExp(`^${key}:(.*)$`, "i").exec(typed);
+    const match = pattern.exec(typed);
 
     if (match) {
       const partial = (match[1] ?? "").replace(/^["']/, "").toLowerCase();

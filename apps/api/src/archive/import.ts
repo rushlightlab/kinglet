@@ -363,8 +363,7 @@ async function insertSpoolFile(
 
       if (parsed === null) continue;
 
-      const { line, level } = parsed;
-      const fields = line.fields === null ? null : JSON.stringify(line.fields);
+      const { line, level, fieldsJson } = parsed;
 
       batch.push({
         uid: line.uid,
@@ -375,14 +374,14 @@ async function insertSpoolFile(
         service: line.service,
         env: line.env,
         message: line.message,
-        fields,
+        fields: fieldsJson,
         sizeBytes: eventSizeBytes({
           ts: line.ts,
           level,
           service: line.service,
           env: line.env,
           message: line.message,
-          fields,
+          fields: fieldsJson,
         }),
       });
 
@@ -413,6 +412,7 @@ async function insertSpoolFile(
 interface ParsedImportLine {
   line: ArchiveLine;
   level: number;
+  fieldsJson: string | null;
 }
 
 /** Parse, cap, and project-check one archive line. Null means skip. */
@@ -425,10 +425,12 @@ function parseImportLine(
 
   if (line === null) return null;
 
+  const fieldsJson = line.fields === null ? null : JSON.stringify(line.fields);
+
   if (
     line.uid.length > 128 ||
     line.message.length > MAX_IMPORT_MESSAGE ||
-    (line.fields !== null && JSON.stringify(line.fields).length > MAX_IMPORT_FIELDS) ||
+    (fieldsJson !== null && fieldsJson.length > MAX_IMPORT_FIELDS) ||
     (line.service?.length ?? 0) > 128 ||
     (line.env?.length ?? 0) > 64 ||
     line.ts > importNow + MAX_IMPORT_FUTURE_SKEW_MS
@@ -444,7 +446,7 @@ function parseImportLine(
 
   if (level < 0) return null;
 
-  return { line, level };
+  return { line, level, fieldsJson };
 }
 
 async function verifyPartDigest(

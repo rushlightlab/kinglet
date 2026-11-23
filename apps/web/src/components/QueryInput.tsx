@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import type { RefObject } from "react";
 import { applySuggestion, suggest } from "../query";
 import type { Vocabulary } from "../query";
@@ -29,7 +29,11 @@ export default function QueryInput(props: QueryInputProps) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
 
-  const suggestions = open ? suggest(props.value, caret, props.vocabulary) : null;
+  const suggestions = useMemo(
+    () => (open ? suggest(props.value, caret, props.vocabulary) : null),
+    [open, props.value, caret, props.vocabulary],
+  );
+
   const items = suggestions?.items ?? [];
   const highlighted = active >= 0 && active < items.length ? active : -1;
 

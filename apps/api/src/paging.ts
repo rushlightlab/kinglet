@@ -36,18 +36,22 @@ export interface ListPage<T> {
   total: number;
 }
 
-/** Every search word appears somewhere in the row's text, in any order and case. */
-export function matchesTableSearch(q: string | undefined, values: readonly Searchable[]): boolean {
-  const words = tableSearchWords(q);
-
-  if (words.length === 0) return true;
-
+function matchesWords(words: readonly string[], values: readonly Searchable[]): boolean {
   const text = values
     .filter((value) => value !== null && value !== undefined)
     .join(" ")
     .toLowerCase();
 
   return words.every((word) => text.includes(word));
+}
+
+/** Every search word appears somewhere in the row's text, in any order and case. */
+export function matchesTableSearch(q: string | undefined, values: readonly Searchable[]): boolean {
+  const words = tableSearchWords(q);
+
+  if (words.length === 0) return true;
+
+  return matchesWords(words, values);
 }
 
 /**
@@ -60,7 +64,11 @@ export function pageList<T>(
   page: PageRequest,
   text: (item: T) => readonly Searchable[],
 ): ListPage<T> {
-  const matching = items.filter((item) => matchesTableSearch(page.q, text(item)));
+  const words = tableSearchWords(page.q);
+
+  const matching =
+    words.length === 0 ? items : items.filter((item) => matchesWords(words, text(item)));
+
   const start = Math.min(page.offset, matching.length);
   const end = page.limit === null ? matching.length : start + page.limit;
 
