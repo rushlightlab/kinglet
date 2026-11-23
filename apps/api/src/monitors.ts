@@ -651,20 +651,21 @@ export async function pageAlerts(
   if (search) conditions.push(search);
   const where = and(...conditions);
 
-  const rows = await storage.db
-    .select(alertSelection)
-    .from(schema.alerts)
-    .innerJoin(schema.monitors, eq(schema.monitors.id, schema.alerts.monitorId))
-    .where(where)
-    .orderBy(desc(schema.alerts.firedAt), desc(schema.alerts.id))
-    .limit(Math.min(500, Math.max(1, page.limit)))
-    .offset(Math.max(0, page.offset));
-
-  const totals = await storage.db
-    .select({ n: count() })
-    .from(schema.alerts)
-    .innerJoin(schema.monitors, eq(schema.monitors.id, schema.alerts.monitorId))
-    .where(where);
+  const [rows, totals] = await Promise.all([
+    storage.db
+      .select(alertSelection)
+      .from(schema.alerts)
+      .innerJoin(schema.monitors, eq(schema.monitors.id, schema.alerts.monitorId))
+      .where(where)
+      .orderBy(desc(schema.alerts.firedAt), desc(schema.alerts.id))
+      .limit(Math.min(500, Math.max(1, page.limit)))
+      .offset(Math.max(0, page.offset)),
+    storage.db
+      .select({ n: count() })
+      .from(schema.alerts)
+      .innerJoin(schema.monitors, eq(schema.monitors.id, schema.alerts.monitorId))
+      .where(where),
+  ]);
 
   return { alerts: rows.map(mapAlertRow), total: Number(totals[0]?.n ?? 0) };
 }
@@ -732,6 +733,7 @@ export function startMonitorEngine(
   const maxDbBytes = opts.maxDbBytes ?? 0;
   const sendBudget = createSendBudget();
   let monitors: Monitor[] = [];
+  let matchMonitorsByProject = new Map<string, Monitor[]>();
   let projectNames = new Map<string, string>();
   const state = new Map<string, MonitorState>();
   const parsedCache = new Map<string, ParsedFilters>();
@@ -775,6 +777,21 @@ export function startMonitorEngine(
       ]);
 
       monitors = rows;
+      const byProject = new Map<string, Monitor[]>();
+
+      for (const monitor of rows) {
+        if (!monitor.enabled || monitor.kind !== "match") continue;
+        let list = byProject.get(monitor.projectId);
+
+        if (!list) {
+          list = [];
+          byProject.set(monitor.projectId, list);
+        }
+
+        list.push(monitor);
+      }
+
+      matchMonitorsByProject = byProject;
       projectNames = new Map(projectRows.map((project) => [project.id, project.name]));
       const ids = new Set(monitors.map((m) => m.id));
 
@@ -1121,14 +1138,23 @@ export function startMonitorEngine(
   }
 
   async function onEvents(rows: StoredEvent[]): Promise<void> {
-    for (const m of monitors) {
-      if (!m.enabled || m.kind !== "match") continue;
+    if (matchMonitorsByProject.size === 0 || rows.length === 0) return;
 
+    const firstProjectId = rows[0]?.projectId;
+
+    const singleProject =
+      firstProjectId !== undefined && rows.every((row) => row.projectId === firstProjectId);
+
+    const candidates = singleProject
+      ? (matchMonitorsByProject.get(firstProjectId) ?? [])
+      : monitors.filter((m) => m.enabled && m.kind === "match");
+
+    for (const m of candidates) {
       try {
         const f = parsed(m.query);
 
         for (const row of rows) {
-          if (row.projectId !== m.projectId) continue;
+          if (!singleProject && row.projectId !== m.projectId) continue;
 
           if (!matchesEvent(f, row)) continue;
           const s = getState(m.id);

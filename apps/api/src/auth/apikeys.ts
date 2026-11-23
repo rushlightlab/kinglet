@@ -280,14 +280,20 @@ export async function verifyApiKey(
   if (!isApi && !isMcp) return null;
 
   const rows = await storage.db
-    .select()
+    .select({
+      key: schema.apiKeys,
+      ownerId: schema.user.id,
+      ownerBanned: schema.user.banned,
+    })
     .from(schema.apiKeys)
+    .leftJoin(schema.user, eq(schema.user.id, schema.apiKeys.createdBy))
     .where(eq(schema.apiKeys.keyHash, sha256hex(plaintext)))
     .limit(1);
 
-  const row = rows[0];
+  const match = rows[0];
 
-  if (!row) return null;
+  if (!match) return null;
+  const row = match.key;
   const keyType = rowKeyType(row);
 
   if (!keyType) return null;
@@ -298,16 +304,8 @@ export async function verifyApiKey(
 
   // Keys are bound to their creator's lifecycle. Revocation on demotion is
   // explicit, but this also closes deleted-user and banned-user windows.
-  if (row.createdBy) {
-    const owners = await storage.db
-      .select({ id: schema.user.id, banned: schema.user.banned })
-      .from(schema.user)
-      .where(eq(schema.user.id, row.createdBy))
-      .limit(1);
-
-    const owner = owners[0];
-
-    if (!owner || owner.banned === true) return null;
+  if (row.createdBy && (!match.ownerId || match.ownerBanned === true)) {
+    return null;
   }
 
   const id = row.id;

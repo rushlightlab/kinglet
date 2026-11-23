@@ -37,39 +37,52 @@ export const Route = createFileRoute("/")({
   component: Explorer,
 });
 
-function histogramWithLiveEvent(data: Histogram, event: KingletEvent): Histogram {
+function histogramWithLiveEvents(data: Histogram, batch: readonly KingletEvent[]): Histogram {
   const first = data.points[0];
 
-  if (!first) return data;
+  if (!first || batch.length === 0) return data;
 
-  if (event.ts < data.from) return data;
+  let points: Histogram["points"] | null = null;
+  let updatedCounts: Map<number, number[]> | null = null;
 
-  if (!Number.isInteger(event.level) || event.level < 0 || event.level > 5) return data;
+  for (const event of batch) {
+    if (event.ts < data.from) continue;
 
-  const bucketTs = Math.floor(event.ts / data.bucketMs) * data.bucketMs;
-  let index = Math.round((bucketTs - first.ts) / data.bucketMs);
+    if (!Number.isInteger(event.level) || event.level < 0 || event.level > 5) continue;
 
-  if (index < 0) return data;
+    const bucketTs = Math.floor(event.ts / data.bucketMs) * data.bucketMs;
+    let index = Math.round((bucketTs - first.ts) / data.bucketMs);
 
-  // Live events arrive just after the loaded window ended; grow the newest
-  // bucket instead of dropping them until the next full refresh.
-  if (index >= data.points.length) {
-    if (event.ts > data.to + data.bucketMs * 2) return data;
-    index = data.points.length - 1;
+    if (index < 0) continue;
+
+    // Live events arrive just after the loaded window ended; grow the newest
+    // bucket instead of dropping them until the next full refresh.
+    if (index >= data.points.length) {
+      if (event.ts > data.to + data.bucketMs * 2) continue;
+      index = data.points.length - 1;
+    }
+
+    const point = data.points[index];
+
+    if (!point) continue;
+
+    if (!points) {
+      points = data.points.slice();
+      updatedCounts = new Map();
+    }
+
+    let counts = updatedCounts?.get(index);
+
+    if (!counts) {
+      counts = point.counts.slice();
+      updatedCounts?.set(index, counts);
+      points[index] = { ...point, counts };
+    }
+
+    counts[event.level] = (counts[event.level] ?? 0) + 1;
   }
 
-  const point = data.points[index];
-
-  if (!point) return data;
-  const counts = point.counts.slice();
-
-  counts[event.level] = (counts[event.level] ?? 0) + 1;
-
-  const points = data.points.slice();
-
-  points[index] = { ...point, counts };
-
-  return { ...data, points };
+  return points ? { ...data, points } : data;
 }
 
 function Explorer() {
@@ -238,22 +251,49 @@ function Explorer() {
     return () => clearInterval(id);
   }, [loadWindow, refreshMs]);
 
-  // Live tail over SSE (session cookie auth).
+  // Live tail over SSE (session cookie auth). Incoming frames are batched per
+  // animation frame so a log burst causes one state update instead of hundreds.
   useEffect(() => {
     if (!live) return;
     const es = openStream(currentProjectId, q);
+    let pending: KingletEvent[] = [];
+    let rafId: number | null = null;
+
+    const flush = (): void => {
+      rafId = null;
+
+      if (pending.length === 0) return;
+      const batch = pending;
+
+      pending = [];
+      const newestFirst: KingletEvent[] = [];
+
+      for (let i = batch.length - 1; i >= 0; i--) {
+        const item = batch[i];
+
+        if (item) newestFirst.push(item);
+      }
+
+      setEvents((prev) =>
+        newestFirst.length >= 5000
+          ? newestFirst.slice(0, 5000)
+          : [...newestFirst, ...prev].slice(0, 5000),
+      );
+      setHistogram((current) => (current ? histogramWithLiveEvents(current, batch) : current));
+
+      if (followRef.current && scrollRef.current) {
+        scrollRef.current.scrollTo({ top: 0 });
+      }
+    };
 
     const onMessage = (msg: MessageEvent): void => {
       try {
         const parsed: unknown = JSON.parse(msg.data);
 
         if (!isKingletEvent(parsed)) return;
-        setEvents((prev) => [parsed, ...prev].slice(0, 5000));
-        setHistogram((current) => (current ? histogramWithLiveEvent(current, parsed) : current));
+        pending.push(parsed);
 
-        if (followRef.current && scrollRef.current) {
-          scrollRef.current.scrollTo({ top: 0 });
-        }
+        if (rafId === null) rafId = window.requestAnimationFrame(flush);
       } catch {
         // ignore malformed frames
       }
@@ -264,6 +304,8 @@ function Explorer() {
     return () => {
       es.removeEventListener("message", onMessage);
       es.close();
+
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
     };
   }, [live, q, currentProjectId]);
 
@@ -380,6 +422,24 @@ function Explorer() {
     }
   }, [rangeKey, refreshKey]);
 
+  const selectHistogramRange = useCallback(
+    (from: number, to: number) => {
+      setCustomRange({ from, to });
+
+      if (refreshKey !== "off") {
+        setRefreshKey(recommendedRefreshKey(to - from));
+      }
+    },
+    [refreshKey],
+  );
+
+  const closeDrawer = useCallback(() => setSelected(null), []);
+
+  const addFilterTerm = useCallback(
+    (term: string) => applyQuery(addTerm(q, term)),
+    [q, applyQuery],
+  );
+
   return (
     <div className="flex h-screen flex-col bg-ink-950 text-mist">
       <SiteHeader>
@@ -436,13 +496,7 @@ function Explorer() {
           <HistogramChart
             key={`${histogram.from}:${histogram.to}:${q}`}
             data={histogram}
-            onSelectRange={(from, to) => {
-              setCustomRange({ from, to });
-
-              if (refreshKey !== "off") {
-                setRefreshKey(recommendedRefreshKey(to - from));
-              }
-            }}
+            onSelectRange={selectHistogramRange}
             onFilterLevel={toggleLevelFilter}
             onReset={customRange ? clearCustomRange : undefined}
           />
@@ -466,11 +520,7 @@ function Explorer() {
           cursorId={cursorId}
         />
         {selected && (
-          <EventDrawer
-            event={selected}
-            onClose={() => setSelected(null)}
-            onFilter={(term) => applyQuery(addTerm(q, term))}
-          />
+          <EventDrawer event={selected} onClose={closeDrawer} onFilter={addFilterTerm} />
         )}
       </div>
     </div>

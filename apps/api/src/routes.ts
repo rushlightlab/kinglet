@@ -1,4 +1,4 @@
-import { and, count, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { bodyLimit } from "hono/body-limit";
 import { Hono } from "hono";
@@ -62,7 +62,7 @@ import {
   setUserRole,
   updateUserName,
 } from "./auth/user-admin.ts";
-import { publishEvents, subscribeEvents } from "./bus.ts";
+import { publishEvents, subscribeProjectEvents } from "./bus.ts";
 import { passwordProblem } from "./auth/password.ts";
 import { buildVocabulary } from "./field-vocabulary.ts";
 import type { Vocabulary } from "./field-vocabulary.ts";
@@ -235,35 +235,43 @@ async function storageAmplification(storage: Storage): Promise<number> {
 }
 
 /**
- * Stored-event counts are cached for 30s so per-batch quota checks do not run
- * a COUNT on the hot ingest path every time.
+ * Stored-event counts and bytes are cached for 30s so per-batch quota checks
+ * do not hit `project_usage` on every ingest request.
  */
-const projectCountCache = new Map<string, { value: number; expiresAt: number }>();
+const projectUsageCache = new Map<string, { events: number; bytes: number; expiresAt: number }>();
 
-async function projectEventCount(storage: Storage, projectId: string): Promise<number> {
+async function projectUsageSnapshot(
+  storage: Storage,
+  projectId: string,
+): Promise<{ events: number; bytes: number }> {
   const now = Date.now();
-  const cached = projectCountCache.get(projectId);
+  const cached = projectUsageCache.get(projectId);
 
-  if (cached && cached.expiresAt > now) return cached.value;
+  if (cached && cached.expiresAt > now) return { events: cached.events, bytes: cached.bytes };
 
   // Trigger-maintained, so this is a primary-key lookup rather than a COUNT(*)
   // over every stored event in the project.
   const rows = await storage.db
-    .select({ n: schema.projectUsage.events })
+    .select({ events: schema.projectUsage.events, bytes: schema.projectUsage.bytes })
     .from(schema.projectUsage)
     .where(eq(schema.projectUsage.projectId, projectId))
     .limit(1);
 
-  const value = Number(rows[0]?.n ?? 0);
-  projectCountCache.set(projectId, { value, expiresAt: now + 30_000 });
+  const events = Number(rows[0]?.events ?? 0);
+  const bytes = Number(rows[0]?.bytes ?? 0);
 
-  return value;
+  projectUsageCache.set(projectId, { events, bytes, expiresAt: now + 30_000 });
+
+  return { events, bytes };
 }
 
-function bumpProjectCount(projectId: string, inserted: number): void {
-  const cached = projectCountCache.get(projectId);
+function bumpProjectUsage(projectId: string, insertedEvents: number, insertedBytes: number): void {
+  const cached = projectUsageCache.get(projectId);
 
-  if (cached) cached.value += inserted;
+  if (cached) {
+    cached.events += insertedEvents;
+    cached.bytes += insertedBytes;
+  }
 }
 
 /** The UI's words for monitor kinds, so a table search finds "spike" or "silence". */
@@ -656,6 +664,7 @@ export function registerRoutes(
       await tx.delete(schema.archiveParts).where(eq(schema.archiveParts.projectId, id));
       await tx.delete(schema.projects).where(eq(schema.projects.id, id));
     });
+    projectUsageCache.delete(id);
     await engine.refresh();
 
     return c.json({ ok: true });
@@ -1335,9 +1344,9 @@ export function registerRoutes(
     }
 
     if (config.maxEventsPerProject > 0) {
-      const stored = await projectEventCount(storage, projectId);
+      const usage = await projectUsageSnapshot(storage, projectId);
 
-      if (stored >= config.maxEventsPerProject) {
+      if (usage.events >= config.maxEventsPerProject) {
         return c.json(
           {
             error:
@@ -1377,28 +1386,43 @@ export function registerRoutes(
 
     const contentType = (c.req.header("content-type") ?? "").toLowerCase();
     const text = await c.req.text();
-    const raws: JsonValue[] = [];
+    const now = Date.now();
+    const normalized: Normalized[] = [];
+    const errors: string[] = [];
     let parseErrors = 0;
     let truncated = false;
 
-    const pushRaw = (value: JsonValue): void => {
-      if (raws.length < MAX_BATCH) raws.push(value);
-      else truncated = true;
+    const pushNormalized = (value: JsonValue): void => {
+      const result = normalizeEvent(value, now);
+
+      if (result.ok) normalized.push(result.value);
+      else errors.push(result.error);
     };
 
     if (contentType.includes("ndjson")) {
-      for (const line of text.split(/\r?\n/)) {
-        const trimmed = line.trim();
+      let rawCount = 0;
+      let start = 0;
+      const len = text.length;
+
+      while (start <= len) {
+        const nl = text.indexOf("\n", start);
+        const end = nl === -1 ? len : nl;
+        const lineEnd = end > start && text.charCodeAt(end - 1) === 13 ? end - 1 : end;
+        const trimmed = text.slice(start, lineEnd).trim();
+
+        start = nl === -1 ? len + 1 : nl + 1;
 
         if (!trimmed) continue;
 
-        if (raws.length >= MAX_BATCH) {
+        if (rawCount >= MAX_BATCH) {
           truncated = true;
           break;
         }
 
         try {
-          raws.push(JSON.parse(trimmed));
+          const parsed: JsonValue = JSON.parse(trimmed);
+          rawCount++;
+          pushNormalized(parsed);
         } catch {
           parseErrors++;
         }
@@ -1414,50 +1438,42 @@ export function registerRoutes(
 
       if (Array.isArray(parsed)) {
         truncated = parsed.length > MAX_BATCH;
+        const limit = Math.min(parsed.length, MAX_BATCH);
 
-        for (let i = 0; i < Math.min(parsed.length, MAX_BATCH); i++) {
+        for (let i = 0; i < limit; i++) {
           const value = parsed[i];
 
-          if (value !== undefined) pushRaw(value);
+          if (value !== undefined) pushNormalized(value);
         }
       } else if (isJsonObject(parsed) && Array.isArray(parsed.events)) {
         const list = parsed.events;
         truncated = list.length > MAX_BATCH;
+        const limit = Math.min(list.length, MAX_BATCH);
 
-        for (let i = 0; i < Math.min(list.length, MAX_BATCH); i++) {
+        for (let i = 0; i < limit; i++) {
           const value = list[i];
 
-          if (value !== undefined) pushRaw(value);
+          if (value !== undefined) pushNormalized(value);
         }
       } else {
-        pushRaw(parsed);
+        pushNormalized(parsed);
       }
     }
 
-    const normalized: Normalized[] = [];
-    const errors: string[] = [];
-
-    for (const raw of raws) {
-      const result = normalizeEvent(raw);
-
-      if (result.ok) normalized.push(result.value);
-      else errors.push(result.error);
-    }
+    let incomingBytes = 0;
 
     if (config.maxProjectBytes > 0 && normalized.length > 0) {
-      const incomingBytes = normalized.reduce((sum, event) => sum + eventSizeBytes(event), 0);
-
-      const usage = await storage.db
-        .select({ bytes: schema.projectUsage.bytes })
-        .from(schema.projectUsage)
-        .where(eq(schema.projectUsage.projectId, projectId))
-        .limit(1);
+      for (const event of normalized) incomingBytes += eventSizeBytes(event);
 
       // Usage counts raw column bytes; the search index and the other indexes
       // add several times that on disk. Scale by the database's measured
       // ratio so a project at its quota cannot fill the shared database cap.
-      const amplification = await storageAmplification(storage);
-      const storedBytes = Number(usage[0]?.bytes ?? 0) * amplification;
+      const [usage, amplification] = await Promise.all([
+        projectUsageSnapshot(storage, projectId),
+        storageAmplification(storage),
+      ]);
+
+      const storedBytes = usage.bytes * amplification;
 
       if (storedBytes + incomingBytes * amplification > config.maxProjectBytes) {
         return c.json(
@@ -1477,7 +1493,7 @@ export function registerRoutes(
       authInfo.kind === "key" ? authInfo.keyId : null,
     );
 
-    bumpProjectCount(projectId, rows.length);
+    bumpProjectUsage(projectId, rows.length, incomingBytes);
     publishEvents(rows);
 
     if (rows.length === 0 && errors.length + parseErrors > 0) {
@@ -1644,7 +1660,7 @@ export function registerRoutes(
         .where(eq(schema.archiveParts.projectId, projectId));
     }
 
-    projectCountCache.delete(projectId);
+    projectUsageCache.delete(projectId);
     invalidateDbSizeCache();
     console.log(
       `[kinglet] cleared ${deleted} event(s) from project ${projectId}` +
@@ -1818,12 +1834,16 @@ export function registerRoutes(
     projectId: string,
     range: { from: number; to: number },
   ): Promise<Vocabulary & { from: number; to: number }> {
-    const rows = await storage.queryEvents({
-      projectId,
-      filter: buildWhere(parseFilters(""), range, projectId, storage.searchMode),
-      limit: FIELD_SAMPLE_EVENTS,
-      cursor: null,
-    });
+    const rows = await storage.db
+      .select({
+        fields: schema.events.fields,
+        service: schema.events.service,
+        env: schema.events.env,
+      })
+      .from(schema.events)
+      .where(buildWhere(parseFilters(""), range, projectId, storage.searchMode))
+      .orderBy(desc(schema.events.ts), desc(schema.events.id))
+      .limit(FIELD_SAMPLE_EVENTS);
 
     return { ...range, ...buildVocabulary(rows) };
   }
@@ -1877,14 +1897,21 @@ export function registerRoutes(
       storage.searchMode,
     );
 
-    // Total and grouped counts are intentionally separate reads. A concurrent
-    // ingest can make `total` differ from the sum of `groups` transiently.
-    const total = await storage.countEvents(filter);
+    if (groupBy === undefined) {
+      const total = await storage.countEvents(filter);
 
-    if (groupBy === undefined) return c.json({ from, to, total });
+      return c.json({ from, to, total });
+    }
 
     const limit = clampInt(c.req.query("limit"), DEFAULT_AGGREGATE_GROUPS, 1, MAX_AGGREGATE_GROUPS);
-    const grouped = await storage.groupEventCounts(filter, groupBy, limit);
+
+    // Total and grouped counts are intentionally separate reads. A concurrent
+    // ingest can make `total` differ from the sum of `groups` transiently.
+    const [total, grouped] = await Promise.all([
+      storage.countEvents(filter),
+      storage.groupEventCounts(filter, groupBy, limit),
+    ]);
+
     const groups = toAggregateGroups(grouped.groups);
 
     if (grouped.truncated) {
@@ -2021,13 +2048,11 @@ export function registerRoutes(
         return false;
       };
 
-      const unsubscribe = subscribeEvents((rows) => {
+      const unsubscribe = subscribeProjectEvents(projectId, (rows) => {
         if (closed) return;
 
         for (const row of rows) {
           if (closed) return;
-
-          if (row.projectId !== projectId) continue;
 
           if (!matchesEvent(f, row)) continue;
 

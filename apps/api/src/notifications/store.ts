@@ -336,20 +336,21 @@ export async function getChannelRecord(
   storage: Storage,
   id: string,
 ): Promise<NotificationChannel | null> {
-  const rows = await storage.db
-    .select()
-    .from(schema.notificationChannels)
-    .where(eq(schema.notificationChannels.id, id))
-    .limit(1);
+  const [rows, actionRows] = await Promise.all([
+    storage.db
+      .select()
+      .from(schema.notificationChannels)
+      .where(eq(schema.notificationChannels.id, id))
+      .limit(1),
+    storage.db
+      .select()
+      .from(schema.notificationChannelActions)
+      .where(eq(schema.notificationChannelActions.channelId, id)),
+  ]);
 
   const row = rows[0];
 
   if (!row) return null;
-
-  const actionRows = await storage.db
-    .select()
-    .from(schema.notificationChannelActions)
-    .where(eq(schema.notificationChannelActions.channelId, id));
 
   return channelFromRow(row, actionsByChannel(actionRows).get(id) ?? []);
 }
@@ -537,16 +538,17 @@ export async function pageDeliveryRecords(
     schema.notificationDeliveries.subject,
   ]);
 
-  const deliveries = await listDeliveryRecords(storage, page.limit, page.offset, where);
-
-  const totals = await storage.db
-    .select({ n: count() })
-    .from(schema.notificationDeliveries)
-    .leftJoin(
-      schema.notificationChannels,
-      eq(schema.notificationChannels.id, schema.notificationDeliveries.channelId),
-    )
-    .where(where);
+  const [deliveries, totals] = await Promise.all([
+    listDeliveryRecords(storage, page.limit, page.offset, where),
+    storage.db
+      .select({ n: count() })
+      .from(schema.notificationDeliveries)
+      .leftJoin(
+        schema.notificationChannels,
+        eq(schema.notificationChannels.id, schema.notificationDeliveries.channelId),
+      )
+      .where(where),
+  ]);
 
   return { deliveries, total: Number(totals[0]?.n ?? 0) };
 }

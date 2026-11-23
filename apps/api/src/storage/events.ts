@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gt, isNotNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNotNull, lt, sql } from "drizzle-orm";
 import type { Client, InStatement, InValue } from "@libsql/client";
 import type { SQL } from "drizzle-orm";
 import type { Normalized } from "../ingest.ts";
@@ -41,12 +41,15 @@ function mapEventRow(row: typeof schema.events.$inferSelect, projectId: string):
 }
 
 export function eventSizeBytes(event: Normalized): number {
-  return (
-    Buffer.byteLength(event.message) +
-    Buffer.byteLength(event.fields ?? "") +
-    Buffer.byteLength(event.service ?? "") +
-    Buffer.byteLength(event.env ?? "")
-  );
+  let bytes = event.message ? Buffer.byteLength(event.message) : 0;
+
+  if (event.fields) bytes += Buffer.byteLength(event.fields);
+
+  if (event.service) bytes += Buffer.byteLength(event.service);
+
+  if (event.env) bytes += Buffer.byteLength(event.env);
+
+  return bytes;
 }
 
 const EVENT_COLUMNS =
@@ -54,10 +57,16 @@ const EVENT_COLUMNS =
 
 const EVENT_PLACEHOLDERS = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-function insertSql(rowCount: number): string {
+function buildInsertSql(rowCount: number): string {
   const values = Array.from({ length: rowCount }, () => EVENT_PLACEHOLDERS).join(", ");
 
   return `INSERT INTO events (${EVENT_COLUMNS}) VALUES ${values} RETURNING id`;
+}
+
+const FULL_CHUNK_INSERT_SQL = buildInsertSql(INSERT_CHUNK);
+
+function insertSql(rowCount: number): string {
+  return rowCount === INSERT_CHUNK ? FULL_CHUNK_INSERT_SQL : buildInsertSql(rowCount);
 }
 
 /**
@@ -80,10 +89,14 @@ export async function insertEvents(
   const statements: InStatement[] = [];
 
   for (let i = 0; i < events.length; i += INSERT_CHUNK) {
+    const end = Math.min(i + INSERT_CHUNK, events.length);
     const chunk: StoredEvent[] = [];
     const args: InValue[] = [];
 
-    for (const event of events.slice(i, i + INSERT_CHUNK)) {
+    for (let j = i; j < end; j++) {
+      const event = events[j];
+
+      if (!event) continue;
       const uid = uuidv7();
 
       chunk.push({
@@ -119,17 +132,21 @@ export async function insertEvents(
   const results = await client.batch(statements, "write");
   const rows: StoredEvent[] = [];
 
-  results.forEach((result, chunkIndex) => {
-    const chunk = chunks[chunkIndex] ?? [];
+  for (let chunkIndex = 0; chunkIndex < results.length; chunkIndex++) {
+    const result = results[chunkIndex];
+    const chunk = chunks[chunkIndex];
 
-    result.rows.forEach((insertedRow, index) => {
+    if (!result || !chunk) continue;
+
+    for (let index = 0; index < result.rows.length; index++) {
+      const insertedRow = result.rows[index];
       const event = chunk[index];
 
-      if (!event) return;
+      if (!insertedRow || !event) continue;
       event.id = Number(insertedRow.id);
       rows.push(event);
-    });
-  });
+    }
+  }
 
   return rows;
 }
@@ -265,41 +282,34 @@ export async function getEventContext(
   const beforeCount = Math.min(20, Math.max(0, Math.trunc(before)));
   const afterCount = Math.min(20, Math.max(0, Math.trunc(after)));
 
-  const beforeRows =
+  const [beforeRows, afterRows] = await Promise.all([
     beforeCount === 0
-      ? []
-      : await db
+      ? Promise.resolve([])
+      : db
           .select()
           .from(schema.events)
           .where(
             and(
               eq(schema.events.projectKey, projectKeyOf(projectId)),
-              or(
-                lt(schema.events.ts, event.ts),
-                and(eq(schema.events.ts, event.ts), lt(schema.events.id, event.id)),
-              ),
+              sql`(${schema.events.ts}, ${schema.events.id}) < (${event.ts}, ${event.id})`,
             ),
           )
           .orderBy(desc(schema.events.ts), desc(schema.events.id))
-          .limit(beforeCount);
-
-  const afterRows =
+          .limit(beforeCount),
     afterCount === 0
-      ? []
-      : await db
+      ? Promise.resolve([])
+      : db
           .select()
           .from(schema.events)
           .where(
             and(
               eq(schema.events.projectKey, projectKeyOf(projectId)),
-              or(
-                gt(schema.events.ts, event.ts),
-                and(eq(schema.events.ts, event.ts), gt(schema.events.id, event.id)),
-              ),
+              sql`(${schema.events.ts}, ${schema.events.id}) > (${event.ts}, ${event.id})`,
             ),
           )
           .orderBy(asc(schema.events.ts), asc(schema.events.id))
-          .limit(afterCount);
+          .limit(afterCount),
+  ]);
 
   const beforeEvents: StoredEvent[] = [];
 
@@ -471,7 +481,7 @@ export async function deleteOlderThan(
 
   for (;;) {
     const result = await db.run(
-      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ts < ${ts}${exclusion ? sql` AND ${exclusion}` : sql``} ORDER BY id LIMIT 10000)`,
+      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ts < ${ts}${exclusion ? sql` AND ${exclusion}` : sql``} LIMIT 10000)`,
     );
 
     const changed = Number(result.rowsAffected ?? 0);
@@ -494,7 +504,7 @@ export async function deleteByProject(
     const rangeClause = range ? sql` AND ts >= ${range.from} AND ts <= ${range.to}` : sql``;
 
     const result = await db.run(
-      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE project_key = ${projectKeyOf(projectId)}${rangeClause} ORDER BY id LIMIT 10000)`,
+      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE project_key = ${projectKeyOf(projectId)}${rangeClause} LIMIT 10000)`,
     );
 
     const changed = Number(result.rowsAffected ?? 0);
@@ -514,7 +524,7 @@ export async function deleteMatching(db: KingletDb, filter: SQL): Promise<number
 
   for (;;) {
     const result = await db.run(
-      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ${filter} ORDER BY id LIMIT 10000)`,
+      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ${filter} LIMIT 10000)`,
     );
 
     const changed = Number(result.rowsAffected ?? 0);

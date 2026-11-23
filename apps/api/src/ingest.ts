@@ -43,10 +43,12 @@ const MAX_MESSAGE = 8000;
 const MAX_FIELDS = 32_768;
 const MAX_FUTURE_SKEW_MS = 5 * 60_000;
 const MAX_PAST_MS = 31 * 24 * 3_600_000;
+const NON_WHITESPACE = /\S/;
+const TRUNCATED_FIELDS = JSON.stringify({ _kinglet_truncated: true });
 
 export type NormalizedResult = { ok: true; value: Normalized } | { ok: false; error: string };
 
-export function normalizeEvent(raw: JsonValue): NormalizedResult {
+export function normalizeEvent(raw: JsonValue, now = Date.now()): NormalizedResult {
   if (!isJsonObject(raw)) {
     return { ok: false, error: "event must be an object" };
   }
@@ -55,7 +57,7 @@ export function normalizeEvent(raw: JsonValue): NormalizedResult {
 
   const rawMessage = obj.message ?? obj.msg;
 
-  if (!isString(rawMessage) || rawMessage.trim().length === 0) {
+  if (!isString(rawMessage) || !NON_WHITESPACE.test(rawMessage)) {
     return { ok: false, error: "missing message" };
   }
 
@@ -72,7 +74,7 @@ export function normalizeEvent(raw: JsonValue): NormalizedResult {
 
   if (!Number.isInteger(level)) level = 2;
 
-  let ts = Date.now();
+  let ts = now;
   const rawTs = obj.ts ?? obj.time ?? obj.timestamp;
 
   if (isFiniteNumber(rawTs) && rawTs > 0) {
@@ -86,16 +88,13 @@ export function normalizeEvent(raw: JsonValue): NormalizedResult {
 
   // Clamp timestamps: future-dated events would otherwise evade retention,
   // and ancient ones pollute the index.
-  const now = Date.now();
   ts = Math.min(now + MAX_FUTURE_SKEW_MS, Math.max(now - MAX_PAST_MS, ts));
 
-  const service =
-    isString(obj.service) && obj.service.trim()
-      ? obj.service.trim().toLowerCase().slice(0, 128)
-      : null;
+  const trimmedService = isString(obj.service) ? obj.service.trim() : "";
+  const service = trimmedService ? trimmedService.toLowerCase().slice(0, 128) : null;
 
-  const env =
-    isString(obj.env) && obj.env.trim() ? obj.env.trim().toLowerCase().slice(0, 64) : null;
+  const trimmedEnv = isString(obj.env) ? obj.env.trim() : "";
+  const env = trimmedEnv ? trimmedEnv.toLowerCase().slice(0, 64) : null;
 
   let fields: string | null = null;
   const rawFields = obj.fields;
@@ -110,8 +109,7 @@ export function normalizeEvent(raw: JsonValue): NormalizedResult {
     }
 
     const serialized = JSON.stringify(rawFields);
-    fields =
-      serialized.length > MAX_FIELDS ? JSON.stringify({ _kinglet_truncated: true }) : serialized;
+    fields = serialized.length > MAX_FIELDS ? TRUNCATED_FIELDS : serialized;
   }
 
   return { ok: true, value: { ts, level, service, env, message, fields } };

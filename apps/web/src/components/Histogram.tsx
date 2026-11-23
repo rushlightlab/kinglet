@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { RotateCcwIcon, XIcon } from "lucide-react";
 import { LEVEL_COLORS, LEVEL_NAMES } from "../types";
@@ -16,39 +16,44 @@ type Selection = { start: number; end: number };
 
 type DragEdge = "start" | "end";
 
+const AXIS_FMT_SHORT = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+
+const AXIS_FMT_LONG = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+const BUCKET_FMT_SHORT_SEC = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+const BUCKET_FMT_LONG_SEC = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
 function formatAxisTime(ts: number, longRange: boolean): string {
-  const options: Intl.DateTimeFormatOptions = {
-    hour: "2-digit",
-    minute: "2-digit",
-  };
-
-  if (longRange) {
-    options.month = "short";
-    options.day = "numeric";
-  }
-
-  return new Date(ts).toLocaleString(undefined, options);
+  return (longRange ? AXIS_FMT_LONG : AXIS_FMT_SHORT).format(ts);
 }
 
 function formatBucketRange(ts: number, bucketMs: number, longRange: boolean): string {
-  const from = new Date(ts);
-  const to = new Date(ts + bucketMs);
+  const formatter =
+    bucketMs < 60_000
+      ? longRange
+        ? BUCKET_FMT_LONG_SEC
+        : BUCKET_FMT_SHORT_SEC
+      : longRange
+        ? AXIS_FMT_LONG
+        : AXIS_FMT_SHORT;
 
-  const options: Intl.DateTimeFormatOptions = {
-    hour: "2-digit",
-    minute: "2-digit",
-  };
-
-  if (longRange) {
-    options.month = "short";
-    options.day = "numeric";
-  }
-
-  if (bucketMs < 60_000) {
-    options.second = "2-digit";
-  }
-
-  return `${from.toLocaleString(undefined, options)} – ${to.toLocaleString(undefined, options)}`;
+  return `${formatter.format(ts)} – ${formatter.format(ts + bucketMs)}`;
 }
 
 function formatDuration(ms: number): string {
@@ -73,7 +78,7 @@ function formatDuration(ms: number): string {
  * Drag to select a range, drag the selection handles to refine it, then press
  * Zoom (or Enter). Clicking a colored level segment filters that level.
  */
-export default function HistogramChart({
+const HistogramChart = memo(function HistogramChart({
   data,
   onSelectRange,
   onReset,
@@ -88,9 +93,20 @@ export default function HistogramChart({
   const [focusIndex, setFocusIndex] = useState(0);
   const [focused, setFocused] = useState(false);
 
-  const totals = data.points.map((p) => p.counts.reduce((a, b) => a + b, 0));
-  const totalEvents = totals.reduce((a, b) => a + b, 0);
-  const max = Math.max(1, ...totals);
+  const { totals, totalEvents, max } = useMemo(() => {
+    const bucketTotals = data.points.map((p) => p.counts.reduce((a, b) => a + b, 0));
+    let sum = 0;
+    let peak = 1;
+
+    for (const total of bucketTotals) {
+      sum += total;
+
+      if (total > peak) peak = total;
+    }
+
+    return { totals: bucketTotals, totalEvents: sum, max: peak };
+  }, [data.points]);
+
   const longRange = data.to - data.from >= 24 * 60 * 60_000;
   const count = data.points.length;
   const safeFocus = Math.min(focusIndex, Math.max(0, count - 1));
@@ -179,21 +195,23 @@ export default function HistogramChart({
     pressedLevel.current = Number.isInteger(level) && level >= 0 && level <= 5 ? level : null;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    setDrag({ start: indexAt(event.clientX), end: indexAt(event.clientX) });
+    const index = indexAt(event.clientX);
+
+    setDrag({ start: index, end: index });
     setSelection(null);
-    setHoverIndex(indexAt(event.clientX));
+    setHoverIndex(index);
   }
 
   function onPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
     const index = indexAt(event.clientX);
 
     if (!drag) {
-      setHoverIndex(index);
+      setHoverIndex((current) => (current === index ? current : index));
 
       return;
     }
 
-    setDrag((current) => (current ? { ...current, end: index } : current));
+    setDrag((current) => (current && current.end !== index ? { ...current, end: index } : current));
   }
 
   function finishDrag(event: ReactPointerEvent<HTMLDivElement>): void {
@@ -615,7 +633,9 @@ export default function HistogramChart({
       </div>
     </div>
   );
-}
+});
+
+export default HistogramChart;
 
 // Bar heights for the placeholder; fixed so it doesn't jump between renders.
 const SKELETON_BARS = Array.from({ length: 90 }, (_, i) =>

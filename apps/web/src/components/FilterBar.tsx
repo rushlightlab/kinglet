@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { RefObject } from "react";
 import { LinkIcon, RefreshCwIcon, StarIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -57,9 +57,11 @@ interface FilterBarProps {
   vocabulary: Vocabulary;
 }
 
-export default function FilterBar(props: FilterBarProps) {
+const FilterBar = memo(function FilterBar(props: FilterBarProps) {
   const [saved, setSaved] = useState<SavedSearch[]>(loadSaved);
   const [copied, setCopied] = useState(false);
+
+  const appliedTerms = useMemo(() => new Set(props.appliedQ.split(/\s+/)), [props.appliedQ]);
 
   const saveCurrent = (): void => {
     const q = props.appliedQ.trim();
@@ -166,7 +168,7 @@ export default function FilterBar(props: FilterBarProps) {
         {LEVEL_NAMES.map((name, i) => {
           const color = LEVEL_COLORS[i] ?? "#6b756c";
           const term = `level:${name}`;
-          const active = props.appliedQ.split(/\s+/).includes(term);
+          const active = appliedTerms.has(term);
 
           return (
             <Tooltip key={name}>
@@ -264,4 +266,6 @@ export default function FilterBar(props: FilterBarProps) {
       </div>
     </div>
   );
-}
+});
+
+export default FilterBar;

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { KingletEvent } from "../types";
 import { LevelBadge } from "./LevelBadge";
 import { FilterIcon, XIcon } from "lucide-react";
@@ -10,7 +10,7 @@ import { fieldFilterTerm, fieldLeaves } from "../query";
 import type { FieldLeaf } from "../query";
 import CopyButton from "./CopyButton";
 
-export default function EventDrawer({
+const EventDrawer = memo(function EventDrawer({
   event,
   onClose,
   onFilter,
@@ -21,6 +21,7 @@ export default function EventDrawer({
   onFilter: (term: string) => void;
 }) {
   const [rawOpen, setRawOpen] = useState(false);
+  const leaves = useMemo(() => (event.fields ? fieldLeaves(event.fields) : []), [event.fields]);
 
   return (
     <aside className="absolute right-0 top-0 z-10 flex h-full w-[26rem] flex-col overflow-y-auto border-l border-white/[0.08] bg-ink-900 p-4">
@@ -64,7 +65,7 @@ export default function EventDrawer({
         <div className="mt-4">
           <div className="k-kicker">fields</div>
           <dl className="mt-1 flex flex-col rounded-[5px] border border-white/[0.08] bg-ink-850 font-mono text-xs">
-            {fieldLeaves(event.fields).map((leaf) => (
+            {leaves.map((leaf) => (
               <FieldRow key={leaf.path.join(".")} leaf={leaf} onFilter={onFilter} />
             ))}
           </dl>
@@ -83,7 +84,9 @@ export default function EventDrawer({
       )}
     </aside>
   );
-}
+});
+
+export default EventDrawer;
 
 function leafText(value: JsonValue): string {
   return isString(value) ? value : JSON.stringify(value);

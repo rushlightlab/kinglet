@@ -528,23 +528,26 @@ export function matchesEvent(
   if (f.env !== null && (row.env ?? "").toLowerCase() !== f.env) return false;
 
   if (f.apiKeyId !== null && (row.apiKeyId ?? null) !== f.apiKeyId) return false;
-  const message = row.message.toLowerCase();
-  const fieldsText = (row.fields ?? "").toLowerCase();
 
-  const containsTerm = (term: string): boolean => {
-    if (f.textScope === "fields") return fieldsText.includes(term);
+  if (f.includes.length > 0 || f.excludes.length > 0) {
+    const message = f.textScope === "fields" ? "" : row.message.toLowerCase();
+    const fieldsText = f.textScope === "message" ? "" : (row.fields ?? "").toLowerCase();
 
-    if (f.textScope === "all") return message.includes(term) || fieldsText.includes(term);
+    const containsTerm = (term: string): boolean => {
+      if (f.textScope === "fields") return fieldsText.includes(term);
 
-    return message.includes(term);
-  };
+      if (f.textScope === "all") return message.includes(term) || fieldsText.includes(term);
 
-  for (const term of f.includes) {
-    if (!containsTerm(term)) return false;
-  }
+      return message.includes(term);
+    };
 
-  for (const term of f.excludes) {
-    if (containsTerm(term)) return false;
+    for (const term of f.includes) {
+      if (!containsTerm(term)) return false;
+    }
+
+    for (const term of f.excludes) {
+      if (containsTerm(term)) return false;
+    }
   }
 
   if (f.fields.length === 0) return true;

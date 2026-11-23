@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { memo, useEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { RefObject } from "react";
 import type { KingletEvent } from "../types";
@@ -21,7 +21,7 @@ interface LogTableProps {
   loading?: boolean;
 }
 
-export default function LogTable({
+const LogTable = memo(function LogTable({
   events,
   scrollRef,
   onSelect,
@@ -131,7 +131,9 @@ export default function LogTable({
       </div>
     </div>
   );
-}
+});
+
+export default LogTable;
 
 function formatTime(ts: number): string {
   const d = new Date(ts);

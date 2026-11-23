@@ -102,29 +102,30 @@ function record(stats: Map<string, KeyStats>, path: string, value: JsonValue): v
   const plain = scalar(value);
 
   if (plain === undefined) return;
-  const id = JSON.stringify(plain);
+  const id = isString(plain) ? `s:${plain}` : `p:${String(plain)}`;
   const known = entry.values.get(id);
 
   if (known) known.count++;
   else if (entry.values.size < MAX_TRACKED_VALUES) entry.values.set(id, { value: plain, count: 1 });
 }
 
-function walk(stats: Map<string, KeyStats>, object: JsonObject, prefix: string[]): void {
+function walk(
+  stats: Map<string, KeyStats>,
+  object: JsonObject,
+  prefix: string,
+  depth: number,
+): void {
   for (const [key, value] of Object.entries(object)) {
     if (!KEY.test(key)) continue;
-    const path = [...prefix, key];
+    const path = prefix ? `${prefix}.${key}` : key;
 
-    record(stats, path.join("."), value);
+    record(stats, path, value);
 
-    if (isJsonObject(value) && path.length < MAX_DEPTH) walk(stats, value, path);
+    if (isJsonObject(value) && depth < MAX_DEPTH) walk(stats, value, path, depth + 1);
   }
 }
 
-function distinct(values: readonly (string | null)[]): string[] {
-  const seen = new Set<string>();
-
-  for (const value of values) if (value) seen.add(value);
-
+function sortedDistinct(seen: Set<string>): string[] {
   const sorted = [...seen];
 
   sorted.sort((a, b) => a.localeCompare(b));
@@ -134,11 +135,16 @@ function distinct(values: readonly (string | null)[]): string[] {
 
 export function buildVocabulary(rows: readonly VocabularyInput[]): Vocabulary {
   const stats = new Map<string, KeyStats>();
+  const services = new Set<string>();
+  const envs = new Set<string>();
 
   for (const row of rows) {
+    if (row.service) services.add(row.service);
+
+    if (row.env) envs.add(row.env);
     const fields = parseFields(row.fields);
 
-    if (fields) walk(stats, fields, []);
+    if (fields) walk(stats, fields, "", 1);
   }
 
   const fields: FieldVocabularyEntry[] = [];
@@ -157,7 +163,7 @@ export function buildVocabulary(rows: readonly VocabularyInput[]): Vocabulary {
   return {
     sampled: rows.length,
     fields,
-    services: distinct(rows.map((row) => row.service)),
-    envs: distinct(rows.map((row) => row.env)),
+    services: sortedDistinct(services),
+    envs: sortedDistinct(envs),
   };
 }

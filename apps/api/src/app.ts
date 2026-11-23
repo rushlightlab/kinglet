@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { bodyLimit } from "hono/body-limit";
@@ -362,6 +363,46 @@ function registerStaticUi(app: Hono<AppEnv>): void {
     [".txt", "text/plain; charset=utf-8"],
   ]);
 
+  const compressible = new Set([".html", ".js", ".css", ".svg", ".json", ".map", ".txt"]);
+  const webDistRoot = webDist.endsWith(path.sep) ? webDist : `${webDist}${path.sep}`;
+
+  interface CachedAsset {
+    body: Buffer;
+    gzip: Buffer | null;
+    contentType: string;
+    etag: string;
+  }
+
+  const assetCache = new Map<string, CachedAsset>();
+
+  function loadAsset(filePath: string): CachedAsset | null {
+    const cached = assetCache.get(filePath);
+
+    if (cached) return cached;
+
+    let stat: fs.Stats;
+
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      return null;
+    }
+
+    if (!stat.isFile()) return null;
+    const body = fs.readFileSync(filePath);
+    const ext = path.extname(filePath);
+    const contentType = mimeTypes.get(ext) ?? "application/octet-stream";
+    const gzip = compressible.has(ext) && body.length >= 1024 ? gzipSync(body) : null;
+    const etag = `W/"${body.length}-${Math.trunc(stat.mtimeMs)}"`;
+    const entry: CachedAsset = { body, gzip, contentType, etag };
+
+    assetCache.set(filePath, entry);
+
+    return entry;
+  }
+
+  const indexPath = path.join(webDist, "index.html");
+
   app.get("*", (c) => {
     let pathname = "/";
 
@@ -375,18 +416,14 @@ function registerStaticUi(app: Hono<AppEnv>): void {
     if (pathname === "/v1" || pathname.startsWith("/v1/")) return apiNotFound(c, pathname);
 
     if (pathname.includes("..")) return c.notFound();
-    let filePath = path.join(webDist, pathname.replace(/^\/+/, ""));
+    let candidate = path.resolve(webDist, pathname.replace(/^\/+/, ""));
 
-    if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {
-      filePath = path.join(filePath, "index.html");
-    }
+    if (candidate !== webDist && !candidate.startsWith(webDistRoot)) return c.notFound();
 
-    if (!fs.existsSync(filePath)) filePath = path.join(webDist, "index.html"); // SPA fallback
+    if (candidate === webDist) candidate = indexPath;
+    const asset = loadAsset(candidate) ?? loadAsset(indexPath);
 
-    if (!fs.existsSync(filePath)) return c.notFound();
-    const body = fs.readFileSync(filePath);
-
-    c.header("content-type", mimeTypes.get(path.extname(filePath)) ?? "application/octet-stream");
+    if (!asset) return c.notFound();
 
     // Hashed build assets never change; the HTML entrypoint must always be
     // revalidated so a new deploy cannot keep loading an old bundle.
@@ -396,6 +433,22 @@ function registerStaticUi(app: Hono<AppEnv>): void {
       c.header("cache-control", "no-cache");
     }
 
-    return c.body(body);
+    c.header("etag", asset.etag);
+
+    if (c.req.header("if-none-match") === asset.etag) {
+      return c.body(null, 304);
+    }
+
+    c.header("content-type", asset.contentType);
+    const acceptEncoding = c.req.header("accept-encoding") ?? "";
+
+    if (asset.gzip && acceptEncoding.includes("gzip")) {
+      c.header("content-encoding", "gzip");
+      c.header("vary", "Accept-Encoding");
+
+      return c.body(new Uint8Array(asset.gzip));
+    }
+
+    return c.body(new Uint8Array(asset.body));
   });
 }
