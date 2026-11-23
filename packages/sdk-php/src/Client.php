@@ -28,7 +28,7 @@ use Kinglet\Transport\Transport;
  */
 final class Client
 {
-    public const VERSION = '0.4.0';
+    public const VERSION = '0.5.0';
 
     /** The server accepts up to 10,000 events per batch; stay well under it. */
     public const MAX_EVENTS_PER_REQUEST = 5000;

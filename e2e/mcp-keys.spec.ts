@@ -33,7 +33,7 @@ test("an MCP key is shown once with the pinned client config and can be revoked"
 
   const config = await secretDialog.locator("pre").innerText();
 
-  expect(config).toContain('"@kinglet/mcp@0.4.0"');
+  expect(config).toContain('"@kinglet/mcp@0.5.0"');
   expect(config).toContain(`"KINGLET_URL": "${seed.baseURL}"`);
   expect(config).toContain(`"KINGLET_MCP_KEY": "${secret}"`);
 
