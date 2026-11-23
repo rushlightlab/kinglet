@@ -20,6 +20,13 @@ import type {
 /** SQLite caps the number of bound variables per statement. */
 const INSERT_CHUNK = 500;
 
+/**
+ * Rows removed per delete statement. Keeping chunks at 2,000 keeps each
+ * synchronous SQLite + FTS5 delete slice short on 0.5–1 vCPU machines so
+ * retention never stalls live ingest or dashboard requests.
+ */
+const DELETE_CHUNK = 2_000;
+
 /** Yield a real macrotask so large deletes do not monopolize the event loop. */
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
@@ -85,12 +92,12 @@ export async function insertEvents(
 ): Promise<StoredEvent[]> {
   if (events.length === 0) return [];
   const projectKey = await ensureProjectKey(client, projectId);
-  const chunks: StoredEvent[][] = [];
+  const rows: StoredEvent[] = [];
   const statements: InStatement[] = [];
 
   for (let i = 0; i < events.length; i += INSERT_CHUNK) {
     const end = Math.min(i + INSERT_CHUNK, events.length);
-    const chunk: StoredEvent[] = [];
+    const chunkCount = end - i;
     const args: InValue[] = [];
 
     for (let j = i; j < end; j++) {
@@ -99,7 +106,7 @@ export async function insertEvents(
       if (!event) continue;
       const uid = uuidv7();
 
-      chunk.push({
+      rows.push({
         id: 0,
         uid,
         projectId,
@@ -125,27 +132,22 @@ export async function insertEvents(
       );
     }
 
-    chunks.push(chunk);
-    statements.push({ sql: insertSql(chunk.length), args });
+    statements.push({ sql: insertSql(chunkCount), args });
   }
 
   const results = await client.batch(statements, "write");
-  const rows: StoredEvent[] = [];
+  let offset = 0;
 
-  for (let chunkIndex = 0; chunkIndex < results.length; chunkIndex++) {
-    const result = results[chunkIndex];
-    const chunk = chunks[chunkIndex];
-
-    if (!result || !chunk) continue;
-
+  for (const result of results) {
     for (let index = 0; index < result.rows.length; index++) {
       const insertedRow = result.rows[index];
-      const event = chunk[index];
+      const event = rows[offset + index];
 
       if (!insertedRow || !event) continue;
       event.id = Number(insertedRow.id);
-      rows.push(event);
     }
+
+    offset += result.rows.length;
   }
 
   return rows;
@@ -494,7 +496,7 @@ export async function deleteOlderThan(
 
   for (;;) {
     const result = await db.run(
-      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ts < ${ts}${exclusion ? sql` AND ${exclusion}` : sql``} LIMIT 10000)`,
+      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ts < ${ts}${exclusion ? sql` AND ${exclusion}` : sql``} LIMIT ${DELETE_CHUNK})`,
     );
 
     const changed = Number(result.rowsAffected ?? 0);
@@ -517,7 +519,7 @@ export async function deleteByProject(
     const rangeClause = range ? sql` AND ts >= ${range.from} AND ts <= ${range.to}` : sql``;
 
     const result = await db.run(
-      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE project_key = ${projectKeyOf(projectId)}${rangeClause} LIMIT 10000)`,
+      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE project_key = ${projectKeyOf(projectId)}${rangeClause} LIMIT ${DELETE_CHUNK})`,
     );
 
     const changed = Number(result.rowsAffected ?? 0);
@@ -537,7 +539,7 @@ export async function deleteMatching(db: KingletDb, filter: SQL): Promise<number
 
   for (;;) {
     const result = await db.run(
-      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ${filter} LIMIT 10000)`,
+      sql`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ${filter} LIMIT ${DELETE_CHUNK})`,
     );
 
     const changed = Number(result.rowsAffected ?? 0);
@@ -554,7 +556,7 @@ export async function deleteAlertsOlderThan(db: KingletDb, ts: number): Promise<
 
   for (;;) {
     const result = await db.run(
-      sql`DELETE FROM alerts WHERE id IN (SELECT id FROM alerts WHERE fired_at < ${ts} ORDER BY fired_at LIMIT 10000)`,
+      sql`DELETE FROM alerts WHERE id IN (SELECT id FROM alerts WHERE fired_at < ${ts} ORDER BY fired_at LIMIT ${DELETE_CHUNK})`,
     );
 
     const changed = Number(result.rowsAffected ?? 0);

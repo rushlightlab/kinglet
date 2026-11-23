@@ -201,6 +201,12 @@ function allowIngest(auth: AuthInfo): boolean {
   const window = ingestWindows.get(id);
 
   if (!window || now > window.resetAt) {
+    if (ingestWindows.size >= 256) {
+      for (const [key, entry] of ingestWindows) {
+        if (now > entry.resetAt) ingestWindows.delete(key);
+      }
+    }
+
     ingestWindows.set(id, { count: 1, resetAt: now + 60_000 });
 
     return true;
@@ -2149,6 +2155,12 @@ export function registerRoutes(
 
     if (last > 0 && now - last < MONITOR_TEST_COOLDOWN_MS) {
       return MONITOR_TEST_COOLDOWN_MS - (now - last);
+    }
+
+    if (monitorTestLocks.size >= 128) {
+      for (const [entryKey, timestamp] of monitorTestLocks) {
+        if (now - timestamp >= MONITOR_TEST_COOLDOWN_MS) monitorTestLocks.delete(entryKey);
+      }
     }
 
     monitorTestLocks.set(key, now);

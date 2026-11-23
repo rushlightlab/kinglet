@@ -51,16 +51,49 @@ export function toLibsqlUrl(dbPath: string): string {
   return `file:${dbPath}`;
 }
 
+const MIB = 1024 * 1024;
+
+interface ConnectionCacheSettings {
+  cacheKiB: number;
+  journalLimitBytes: number;
+}
+
+/** Available RAM: honors Docker/cgroup limits via `process.constrainedMemory()`. */
+function availableMemoryBytes(): number {
+  const total = os.totalmem();
+  const constrained = process.constrainedMemory();
+
+  return constrained > 0 ? Math.min(constrained, total) : total;
+}
+
+/**
+ * Scale SQLite's page cache and WAL truncation limit to the machine's memory
+ * so 256–512 MB containers keep comfortable headroom while larger hosts get a
+ * bigger cache.
+ */
+function connectionCacheSettings(): ConnectionCacheSettings {
+  const mem = availableMemoryBytes();
+
+  if (mem <= 512 * MIB) return { cacheKiB: 4_000, journalLimitBytes: 32 * MIB };
+
+  if (mem <= 1024 * MIB) return { cacheKiB: 8_000, journalLimitBytes: 64 * MIB };
+
+  return { cacheKiB: 16_000, journalLimitBytes: 64 * MIB };
+}
+
 /**
  * Per-connection settings. `journal_mode = WAL` is persistent and set once;
  * these reset to SQLite defaults (FULL sync, no busy wait) on every new
  * connection.
  */
 async function applyConnectionPragmas(client: Client): Promise<void> {
+  const { cacheKiB, journalLimitBytes } = connectionCacheSettings();
+
   await client.execute("PRAGMA synchronous = NORMAL");
   await client.execute("PRAGMA busy_timeout = 5000");
   await client.execute("PRAGMA temp_store = MEMORY");
-  await client.execute("PRAGMA cache_size = -16000");
+  await client.execute(`PRAGMA cache_size = -${cacheKiB}`);
+  await client.execute(`PRAGMA journal_size_limit = ${journalLimitBytes}`);
 }
 
 /**
