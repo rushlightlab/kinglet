@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { ChevronDownIcon, LogOutIcon, SettingsIcon } from "lucide-react";
@@ -25,7 +26,7 @@ import {
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-export default function SiteHeader({ children }: { children?: ReactNode }) {
+const SiteHeader = memo(function SiteHeader({ children }: { children?: ReactNode }) {
   const { user, projects, currentProjectId, setProjectId, signOut, permissions } = useApp();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -187,4 +188,6 @@ export default function SiteHeader({ children }: { children?: ReactNode }) {
       </div>
     </header>
   );
-}
+});
+
+export default SiteHeader;

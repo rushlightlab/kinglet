@@ -28,6 +28,35 @@ export function projectKeysOf(projectIds: readonly string[]): SQL {
 // cache can never serve a stale value.
 const cache = new WeakMap<Client, Map<string, number>>();
 
+/** Cached read of a project's integer key, or null if it has never stored events. */
+export async function lookupProjectKey(client: Client, projectId: string): Promise<number | null> {
+  let keys = cache.get(client);
+
+  if (!keys) {
+    keys = new Map();
+    cache.set(client, keys);
+  }
+
+  const cached = keys.get(projectId);
+
+  if (cached !== undefined) return cached;
+
+  const result = await client.execute({
+    sql: "SELECT key FROM project_keys WHERE project_id = ?",
+    args: [projectId],
+  });
+
+  const key = Number(result.rows[0]?.key);
+
+  if (Number.isSafeInteger(key) && key > 0) {
+    keys.set(projectId, key);
+
+    return key;
+  }
+
+  return null;
+}
+
 /** The key for a project, assigning the next one on its first write. */
 export async function ensureProjectKey(client: Client, projectId: string): Promise<number> {
   let keys = cache.get(client);

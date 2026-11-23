@@ -96,6 +96,26 @@ import * as schema from "./storage/schema.ts";
 import type { Storage } from "./storage/index.ts";
 import { localDbBytes, invalidateDbSizeCache } from "./storage/db-size.ts";
 import { toClientEvent } from "./types.ts";
+import type { StoredEvent } from "./types.ts";
+
+interface SerializedSseEvent {
+  payload: string;
+  bytes: number;
+}
+
+const ssePayloadCache = new WeakMap<StoredEvent, SerializedSseEvent>();
+
+function serializeSseEvent(row: StoredEvent): SerializedSseEvent {
+  const cached = ssePayloadCache.get(row);
+
+  if (cached) return cached;
+  const payload = JSON.stringify(toClientEvent(row));
+  const entry: SerializedSseEvent = { payload, bytes: Buffer.byteLength(payload) };
+
+  ssePayloadCache.set(row, entry);
+
+  return entry;
+}
 
 const MAX_BATCH = 10000;
 const MAX_STREAMS = 200;
@@ -2062,8 +2082,7 @@ export function registerRoutes(
             return;
           }
 
-          const payload = JSON.stringify(toClientEvent(row));
-          const bytes = Buffer.byteLength(payload);
+          const { payload, bytes } = serializeSseEvent(row);
 
           if (pendingBytes + bytes > MAX_PENDING_BYTES) {
             fail(new Error("slow consumer — stream dropped"));

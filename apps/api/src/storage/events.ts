@@ -5,7 +5,7 @@ import type { Normalized } from "../ingest.ts";
 import { uuidv7 } from "../auth/ids.ts";
 import type { StoredEvent } from "../types.ts";
 import type { KingletDb } from "./db.ts";
-import { ensureProjectKey, projectKeyOf, projectKeysOf } from "./project-keys.ts";
+import { ensureProjectKey, lookupProjectKey, projectKeyOf, projectKeysOf } from "./project-keys.ts";
 import * as schema from "./schema.ts";
 import type {
   AggregateGroupBy,
@@ -348,13 +348,14 @@ export async function histogramPoints(
   to: number,
   bucketMs: number,
   filter?: SQL,
+  client?: Client,
 ): Promise<HistogramPointRow[]> {
   const start = Math.floor(from / bucketMs) * bucketMs;
 
   const map =
     filter !== undefined || engine === "turso-mvcc"
       ? await groupedHistogram(db, projectId, from, to, bucketMs, filter)
-      : await sliceHistogram(db, projectId, from, to, bucketMs, start);
+      : await sliceHistogram(db, projectId, from, to, bucketMs, start, client);
 
   const points: HistogramPointRow[] = [];
   const pointCount = Math.min(HISTOGRAM_MAX_POINTS, Math.ceil((to - start) / bucketMs) + 1);
@@ -413,9 +414,21 @@ async function sliceHistogram(
   to: number,
   bucketMs: number,
   start: number,
+  client?: Client,
 ): Promise<Map<number, number[]>> {
+  let projectKeyExpr: SQL;
+
+  if (client) {
+    const key = await lookupProjectKey(client, projectId);
+
+    if (key === null) return new Map();
+    projectKeyExpr = sql`${key}`;
+  } else {
+    projectKeyExpr = projectKeyOf(projectId);
+  }
+
   const levelCount = (level: number): SQL =>
-    sql`(SELECT count(*) FROM events e WHERE e.project_key = ${projectKeyOf(projectId)} AND e.level = ${level} AND e.ts >= max(buckets.s, ${from}) AND e.ts < buckets.s + ${bucketMs} AND e.ts <= ${to})`;
+    sql`(SELECT count(*) FROM events e WHERE e.project_key = ${projectKeyExpr} AND e.level = ${level} AND e.ts >= max(buckets.s, ${from}) AND e.ts < buckets.s + ${bucketMs} AND e.ts <= ${to})`;
 
   const rows = await db.all<{
     s: number;

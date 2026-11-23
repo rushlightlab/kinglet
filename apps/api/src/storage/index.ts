@@ -36,7 +36,7 @@ export async function createStorage(settings: StorageSettings): Promise<Storage>
     groupEventCounts: (filter, groupBy, limit) =>
       eventsRepo.groupEventCounts(db, filter, groupBy, limit),
     histogramPoints: (projectId, from, to, bucketMs, filter) =>
-      eventsRepo.histogramPoints(db, engine, projectId, from, to, bucketMs, filter),
+      eventsRepo.histogramPoints(db, engine, projectId, from, to, bucketMs, filter, client),
     listServices: (projectId) => eventsRepo.listServices(db, projectId),
     deleteOlderThan: (ts, excludeProjectIds) =>
       eventsRepo.deleteOlderThan(db, ts, excludeProjectIds),

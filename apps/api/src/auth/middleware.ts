@@ -254,12 +254,22 @@ export async function resolveProjectId(
     if (!isUuid(raw)) return c.json({ error: "invalid project id" }, 400);
     const id = raw.toLowerCase();
 
-    if (!(await projectExists(storage, id))) return c.json({ error: "project not found" }, 404);
+    if (auth.user.role === "admin") {
+      if (!(await projectExists(storage, id))) return c.json({ error: "project not found" }, 404);
 
-    // 404 (not 403) so non-members cannot probe which project ids exist.
-    if (!(await canAccessProject(auth, storage, id))) {
-      return c.json({ error: "project not found" }, 404);
+      return id;
     }
+
+    // Single query for non-admins: 404 (not 403) so non-members cannot probe
+    // which project ids exist.
+    const rows = await storage.db
+      .select({ id: schema.projects.id })
+      .from(schema.projects)
+      .innerJoin(schema.projectMembers, eq(schema.projectMembers.projectId, schema.projects.id))
+      .where(and(eq(schema.projects.id, id), eq(schema.projectMembers.userId, auth.user.id)))
+      .limit(1);
+
+    if (rows.length === 0) return c.json({ error: "project not found" }, 404);
 
     return id;
   }

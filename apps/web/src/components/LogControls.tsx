@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   ActivityIcon,
   ArrowDownToLineIcon,
@@ -66,13 +66,15 @@ function toggleTerm(q: string, term: string): string {
   return parts.join(" ");
 }
 
+const SHORT_TIME_FMT = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 function formatShortTime(ts: number): string {
-  return new Date(ts).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return SHORT_TIME_FMT.format(ts);
 }
 
 function customRangeTitle(range: { from: number; to: number }): string {
@@ -87,16 +89,22 @@ const presetButtonClass =
   "h-7 rounded-[4px] border font-mono text-[10px] transition-colors " +
   "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gold/40";
 
-export default function LogControls(props: LogControlsProps) {
+const LogControls = memo(function LogControls(props: LogControlsProps) {
   const [open, setOpen] = useState(false);
   const [fromDraft, setFromDraft] = useState("");
   const [toDraft, setToDraft] = useState("");
   const [rangeError, setRangeError] = useState<string | null>(null);
 
-  const terms = props.appliedQ
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((term) => term.toLowerCase());
+  const terms = useMemo(
+    () =>
+      new Set(
+        props.appliedQ
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((term) => term.toLowerCase()),
+      ),
+    [props.appliedQ],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -388,7 +396,7 @@ export default function LogControls(props: LogControlsProps) {
             <DropdownMenuSeparator />
             {props.services.map((service) => {
               const term = serviceTerm(service.name);
-              const active = terms.includes(term);
+              const active = terms.has(term);
 
               return (
                 <DropdownMenuItem
@@ -411,4 +419,6 @@ export default function LogControls(props: LogControlsProps) {
       </DropdownMenu>
     </div>
   );
-}
+});
+
+export default LogControls;

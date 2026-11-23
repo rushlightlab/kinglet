@@ -433,6 +433,30 @@ function Explorer() {
     [refreshKey],
   );
 
+  const handleRangeChange = useCallback(
+    (value: string) => {
+      const width = WINDOWS.get(value) ?? 60 * 60_000;
+      setRangeKey(value);
+      setCustomRange(null);
+
+      if (refreshKey !== "off") setRefreshKey(recommendedRefreshKey(width));
+    },
+    [refreshKey],
+  );
+
+  const handleCustomRange = useCallback(
+    (range: { from: number; to: number }) => {
+      setCustomRange(range);
+
+      if (refreshKey !== "off") {
+        setRefreshKey(recommendedRefreshKey(range.to - range.from));
+      }
+    },
+    [refreshKey],
+  );
+
+  const toggleFollow = useCallback(() => setFollow((v) => !v), []);
+
   const closeDrawer = useCallback(() => setSelected(null), []);
 
   const addFilterTerm = useCallback(
@@ -448,26 +472,14 @@ function Explorer() {
           windowMs={windowMs}
           refreshKey={refreshKey}
           customRange={customRange}
-          onRangeChange={(value) => {
-            const width = WINDOWS.get(value) ?? 60 * 60_000;
-            setRangeKey(value);
-            setCustomRange(null);
-
-            if (refreshKey !== "off") setRefreshKey(recommendedRefreshKey(width));
-          }}
-          onCustomRange={(range) => {
-            setCustomRange(range);
-
-            if (refreshKey !== "off") {
-              setRefreshKey(recommendedRefreshKey(range.to - range.from));
-            }
-          }}
+          onRangeChange={handleRangeChange}
+          onCustomRange={handleCustomRange}
           onClearCustom={clearCustomRange}
           onRefreshChange={setRefreshKey}
           live={live}
           follow={follow}
           onToggleLive={toggleLive}
-          onToggleFollow={() => setFollow((v) => !v)}
+          onToggleFollow={toggleFollow}
           services={services}
           appliedQ={q}
           onApplyQuery={applyQuery}
