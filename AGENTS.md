@@ -231,8 +231,12 @@ a pnpm workspace project, so the root scripts don't build or test it. Run
 include real HTTP against a local `php -S` server. Logging must never throw, and
 automatic sends back off after a failure so an unreachable Kinglet can't slow
 every request. Keep `Client::VERSION` aligned with the workspace version.
-Packagist can't install from a monorepo subfolder, so releases need a read-only
-mirror repository; don't add that workflow without approval.
+Packagist reads only a root `composer.json`, so the package is published from
+this repository: the root `composer.json` maps `Kinglet\` to
+`packages/sdk-php/src/` (keep its metadata in step with
+`packages/sdk-php/composer.json`, which is for the SDK's own tests), and the root
+`.gitattributes` export-ignores everything but the SDK so Composer downloads
+only it. Each `vX.Y.Z` tag is a Packagist release.
 
 ## Common change recipes
 

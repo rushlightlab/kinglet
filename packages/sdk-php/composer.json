@@ -16,7 +16,7 @@
   "support": {
     "issues": "https://github.com/rushlightlab/kinglet/issues",
     "docs": "https://kinglet.rushlightlab.com/php-sdk/",
-    "source": "https://github.com/rushlightlab/kinglet-php"
+    "source": "https://github.com/rushlightlab/kinglet"
   },
   "require": {
     "php": ">=8.1",
