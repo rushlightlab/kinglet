@@ -330,6 +330,32 @@ describe("restore staging", () => {
     expectRejectedStage(scratch, store);
   });
 
+  it("stops a download that runs past the manifest size when HEAD has no length", async () => {
+    const scratch = currentTemp();
+    const fixture = createSnapshotFixture(scratch.directory);
+    const store = new InMemoryBackupStore(SIGNING_KEY);
+    const id = uuidv7();
+
+    const manifest = store.signManifest(
+      manifestFor(fixture, { id, objectBytes: fixture.compressed.length - 1 }),
+    );
+
+    const destroy = vi.spyOn(store, "destroy");
+
+    seedSnapshot(store, manifest, fixture.compressed);
+    // Some S3-compatible stores omit ContentLength, so only the stream can tell.
+    vi.spyOn(store, "headObject").mockResolvedValue({});
+
+    const error = await backupErrorOf(
+      stageRestore({ config: fixtureConfig(scratch), snapshotId: id, store }),
+    );
+
+    expect(error.status).toBe(502);
+    expect(error.message).toContain("larger than the expected");
+    expect(destroy).not.toHaveBeenCalled();
+    expectRejectedStage(scratch, store);
+  });
+
   it("rejects a manifest with sizeBytes=0 before downloading", async () => {
     const scratch = currentTemp();
     const fixture = createSnapshotFixture(scratch.directory);

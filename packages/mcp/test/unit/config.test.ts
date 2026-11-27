@@ -44,6 +44,19 @@ describe("loadConfig URLs", () => {
     );
   });
 
+  it("refuses cleartext http to a host other than loopback unless opted in", () => {
+    for (const url of ["http://localhost:3000", "http://127.0.0.1:3000", "http://[::1]:3000"]) {
+      expect(loadConfig({ ...BASE_ENV, KINGLET_URL: url }).url).toBe(url);
+    }
+
+    for (const url of ["http://logs.example.com", "http://192.168.1.20:3000"]) {
+      expect(() => loadConfig({ ...BASE_ENV, KINGLET_URL: url })).toThrow(/must use https/);
+      expect(
+        loadConfig({ ...BASE_ENV, KINGLET_URL: url, KINGLET_MCP_ALLOW_INSECURE_HTTP: "1" }).url,
+      ).toBe(url);
+    }
+  });
+
   it("rejects malformed URLs and non-http protocols", () => {
     expect(() => loadConfig({ ...BASE_ENV, KINGLET_URL: "not a url" })).toThrow(
       /must be a valid http\(s\) URL/,

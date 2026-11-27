@@ -589,6 +589,9 @@ export class KingletClient {
     const requestInit: RequestInit = {
       method: options.method ?? "GET",
       headers,
+      // Never follow a redirect: it would replay the key and any write to a
+      // location KINGLET_URL did not name.
+      redirect: "error",
       signal: AbortSignal.timeout(this.timeoutMs),
     };
 

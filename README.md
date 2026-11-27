@@ -31,7 +31,7 @@ Run the public image — no clone or build:
 ```bash
 docker run -d --name kinglet \
   --restart unless-stopped \
-  -p 8080:3000 \
+  -p 127.0.0.1:8080:3000 \
   -v kinglet-data:/data \
   -e KINGLET_BASE_URL=http://localhost:8080 \
   ghcr.io/rushlightlab/kinglet:latest

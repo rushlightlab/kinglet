@@ -69,6 +69,8 @@ describe("createLogger batching", () => {
 
     expect(headers.get("authorization")).toBe(`Bearer ${TEST_TOKEN}`);
     expect(headers.get("content-type")).toBe("application/x-ndjson");
+    // A redirect would replay the token to another location.
+    expect(call.init?.redirect).toBe("error");
 
     const lines = bodyLines(call.init);
 

@@ -413,15 +413,18 @@ export class BackupStore implements BackupObjectStore {
 
 /**
  * Stream one stored object to a local file for restore or export work. The
- * caller owns size, hash, decryption, and decompression checks — and decides
- * what to do with a partial file if the transfer fails.
+ * caller owns hash, decryption, and decompression checks — and decides what to
+ * do with a partial file if the transfer fails. With `maxBytes`, a stream that
+ * runs past it fails at once instead of filling the disk first, so a swapped
+ * or oversized object cannot outgrow what the manifest promised.
  */
 export async function downloadToFile(
   store: BackupObjectStore,
   key: string,
   destinationPath: string,
-  onProgress?: (bytesWritten: number) => void,
+  options: { maxBytes?: number; onProgress?: (bytesWritten: number) => void } = {},
 ): Promise<number> {
+  const { maxBytes, onProgress } = options;
   const source = await store.getObjectStream(key);
   let written = 0;
   let lastReported = 0;
@@ -431,6 +434,12 @@ export async function downloadToFile(
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
 
       written += buffer.length;
+
+      if (maxBytes !== undefined && written > maxBytes) {
+        callback(new Error(`object is larger than the expected ${maxBytes} bytes`));
+
+        return;
+      }
 
       if (written - lastReported >= DOWNLOAD_PROGRESS_STEP_BYTES) {
         lastReported = written;

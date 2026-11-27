@@ -10,6 +10,7 @@ import { createZstdDecompress } from "node:zlib";
 import { isUuid } from "../auth/ids.ts";
 import { describeBackupError } from "../backups/s3.ts";
 import type { BackupObjectStore } from "../backups/s3.ts";
+import { invalidateDbSizeCache, localDbBytes } from "../storage/db-size.ts";
 import { eventSizeBytes } from "../storage/events.ts";
 import type { KingletDb } from "../storage/db.ts";
 import type { Storage } from "../storage/index.ts";
@@ -59,6 +60,13 @@ export interface ImportArchiveOptions {
    * small value so the bound can be exercised without a giant fixture.
    */
   maxSpoolBytes?: number;
+  /**
+   * The local database cap (KINGLET_MAX_DB_MB) and file. Ingest refuses new
+   * rows at the cap; an import stops before the next part once it is reached,
+   * so restoring old logs cannot fill the shared disk.
+   */
+  maxDbBytes?: number;
+  dbPath?: string;
 }
 
 interface ArchiveObjectRef {
@@ -134,6 +142,7 @@ export async function importArchive(
   let skipped = 0;
 
   for (const ref of refs) {
+    assertDbBelowCap(options, imported);
     const result = await importPart(storage, options, projectId, ref);
 
     imported += result.imported;
@@ -141,6 +150,24 @@ export async function importArchive(
   }
 
   return { imported, skipped };
+}
+
+function assertDbBelowCap(options: ImportArchiveOptions, importedSoFar: number): void {
+  const max = options.maxDbBytes ?? 0;
+
+  if (max <= 0 || options.dbPath === undefined) return;
+
+  // Fresh size: the cached value can lag a large import by 30 s.
+  invalidateDbSizeCache();
+  const bytes = localDbBytes(options.dbPath);
+
+  if (bytes !== null && bytes >= max) {
+    throw new ArchiveError(
+      `database size limit reached (${Math.round(max / 1_048_576)} MB) after importing ${importedSoFar} event(s); ` +
+        "free space or raise KINGLET_MAX_DB_MB, then run the import again (imported rows are skipped)",
+      507,
+    );
+  }
 }
 
 async function importPart(

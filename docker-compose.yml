@@ -3,9 +3,10 @@ services:
     build: .
     image: kinglet:latest
     ports:
-      # Bind to localhost when a TLS proxy (Caddy/nginx) fronts the app:
-      #   "127.0.0.1:8080:3000"
-      - "8080:3000"
+      # Loopback only: Docker-published ports bypass host firewalls such as ufw.
+      # Put a TLS proxy (Caddy/nginx) in front, or use "8080:3000" to accept
+      # connections from other machines on purpose.
+      - "127.0.0.1:8080:3000"
     env_file:
       - path: .env
         required: false

@@ -10,6 +10,7 @@ import {
   lockedReason,
   monitorContext,
   openSecret,
+  retirePlaintextSecrets,
   sealSecret,
   secretFingerprint,
   secretsConfigured,
@@ -65,6 +66,9 @@ export function readChannelTarget(channelId: string, stored: string): ReadTarget
  * A locked value reads as no destinations: nothing is sent to a guessed URL.
  */
 export function openMonitorChannels(monitorId: string, stored: string): string {
+  // An empty list holds no secret and is never sealed.
+  if (stored === "[]") return stored;
+
   const opened = openSecret(stored, monitorContext(monitorId));
 
   if (!opened.ok) {
@@ -165,6 +169,10 @@ export async function sealStoredSecrets(
       `[kinglet] encrypted ${channels} notification channel secret(s) and ${monitors} monitor destination list(s)`,
     );
   }
+
+  // Everything readable is sealed now; a plaintext value written later did
+  // not come through Kinglet and must not be trusted.
+  retirePlaintextSecrets();
 
   return { channels, monitors };
 }

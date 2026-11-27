@@ -313,6 +313,8 @@ function createEngine(
       passphrase: config.backup?.passphrase,
       allowUnencrypted: config.backup?.allowUnencryptedSnapshots ?? false,
       s3: activeStore,
+      maxDbBytes: config.maxDbBytes,
+      dbPath: config.dbPath,
     });
   }
 

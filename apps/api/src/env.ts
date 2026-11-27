@@ -131,7 +131,7 @@ function resolveSecretKey(): Buffer | null {
 
   if (key === null) {
     throw new Error(
-      "KINGLET_SECRET_KEY must be at least 32 random bytes, base64 or hex. Generate one with: openssl rand -base64 32",
+      "KINGLET_SECRET_KEY must be at least 32 random bytes as hex or canonical base64, not a passphrase. Generate one with: openssl rand -base64 32 (see the upgrade notes if this key worked before)",
     );
   }
 

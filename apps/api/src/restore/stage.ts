@@ -229,7 +229,9 @@ async function stageSnapshot(
     let downloadedBytes: number;
 
     try {
-      downloadedBytes = await downloadToFile(store, objectKey, downloadPath);
+      downloadedBytes = await downloadToFile(store, objectKey, downloadPath, {
+        maxBytes: manifest.objectBytes,
+      });
     } catch (cause) {
       throw new BackupError(`snapshot download failed: ${describeBackupError(cause)}`, 502);
     }
