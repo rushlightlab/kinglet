@@ -1,9 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildWhere, matchesEvent, parseFilters } from "../../src/filters.ts";
 import type { Normalized } from "../../src/ingest.ts";
 import type { JsonObject } from "../../src/json.ts";
 import type { SearchMode } from "../../src/types.ts";
-import { histogramPoints } from "../../src/storage/events.ts";
+import { eventSizeBytes, histogramPoints } from "../../src/storage/events.ts";
 import { createStorage } from "../../src/storage/index.ts";
 import type { Storage } from "../../src/storage/index.ts";
 import { createTempDatabase } from "../helpers/temp.ts";
@@ -78,6 +81,40 @@ describe("insertEvents", () => {
 
     expect(stored?.id).toBe(rows[700]?.id);
     expect(stored?.message).toBe("bulk 700");
+  });
+});
+
+describe("stored size estimate", () => {
+  it("is what the 0013 migration backfills into existing rows", async () => {
+    const rows: Normalized[] = [
+      event("", BASE),
+      { ts: BASE, level: 3, service: "api", env: "prod", message: "héllo wörld", fields: null },
+      { ts: BASE, level: 4, service: null, env: "dev", message: "x", fields: '{"note":"café"}' },
+      { ts: BASE, level: 2, service: "s", env: null, message: "😀", fields: '{"n":1}' },
+    ];
+
+    await store().insertEvents(PROJECT, rows, null);
+
+    // Rows written before the migration hold raw byte counts.
+    await store().client.execute("UPDATE events SET size_bytes = 1");
+
+    const migration = fs.readFileSync(
+      path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../drizzle/0013_quota_storage_estimate.sql",
+      ),
+      "utf8",
+    );
+
+    await store().client.execute(migration);
+
+    const stored = await store().client.execute("SELECT size_bytes FROM events ORDER BY id");
+    const usage = await store().client.execute("SELECT sum(bytes) AS bytes FROM project_usage");
+    const expected = rows.map(eventSizeBytes);
+
+    // The backfill writes what the app writes, and the usage trigger follows.
+    expect(stored.rows.map((row) => Number(row.size_bytes))).toEqual(expected);
+    expect(Number(usage.rows[0]?.bytes)).toBe(expected.reduce((sum, bytes) => sum + bytes, 0));
   });
 });
 

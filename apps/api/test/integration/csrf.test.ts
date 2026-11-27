@@ -38,6 +38,23 @@ describe("CSRF guard for cookie mutations", () => {
     expect(errorOf(await jsonBody(response))).toContain("X-Kinglet-Request");
   });
 
+  it("does not exempt an empty Bearer token that falls back to the cookie", async () => {
+    const { harness, adminJar } = ctx();
+
+    const response = await request(harness.app, "/v1/projects", {
+      method: "POST",
+      body: { name: "empty-bearer" },
+      cookies: adminJar,
+      // Header values are trimmed of ASCII spaces, but a no-break space
+      // survives and is then removed by the token's String.prototype.trim().
+      headers: { authorization: "Bearer \u00a0" },
+      csrf: false,
+    });
+
+    expect(response.status).toBe(403);
+    expect(errorOf(await jsonBody(response))).toContain("X-Kinglet-Request");
+  });
+
   it("rejects a cookie mutation from a foreign Origin even with the marker", async () => {
     const { harness, adminJar } = ctx();
 

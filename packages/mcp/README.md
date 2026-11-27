@@ -204,7 +204,7 @@ Truncated responses set `truncated: true` and `search_events` returns a
 | `get_alert`         | `monitors.read`   | read        | One alert by id, with the same masking rules                              |
 | `list_channels`     | `monitors.read`   | read        | Channel id/name/type/enabled/health only                                  |
 | `create_monitor`    | `monitors.write`  | write       | Creates a monitor; channels are `channelIds`, never URLs                  |
-| `update_monitor`    | `monitors.write`  | write       | Partial update by id                                                      |
+| `update_monitor`    | `monitors.write`  | destructive | Partial update by id; can disable or silence alerting                     |
 | `delete_monitor`    | `monitors.write`  | destructive | Deletes a monitor and its alert history                                   |
 
 `monitors.write` implies `monitors.read`. MCP keys never have `logs.write`.

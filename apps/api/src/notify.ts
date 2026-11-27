@@ -161,6 +161,7 @@ function ipv4Private(address: string): boolean {
     (a === 169 && b === 254) ||
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+    (a === 192 && b === 88 && c === 99) || // deprecated 6to4 relay anycast
     (a === 192 && b === 168) ||
     (a === 198 && (b === 18 || b === 19)) ||
     (a === 198 && b === 51 && c === 100) ||
@@ -647,7 +648,9 @@ function genericSlackPayload(notice: GenericNotice, decoration: boolean): SlackP
   const meta = genericActionMeta(notice.action);
   const textParts: string[] = [];
 
-  if (notice.summary) textParts.push(sanitizeNotificationText(notice.summary, 1000));
+  if (notice.summary) {
+    textParts.push(slackEscapeAmpersands(sanitizeNotificationText(notice.summary, 1000)));
+  }
 
   return {
     text: `${decoration ? `${meta.emoji} ` : ""}Kinglet · ${meta.label.toLowerCase()}`,
@@ -658,7 +661,7 @@ function genericSlackPayload(notice: GenericNotice, decoration: boolean): SlackP
         text: textParts.join("\n"),
         fields: genericDiscordFields(notice).map((field) => ({
           title: field.name,
-          value: field.value,
+          value: slackEscapeAmpersands(field.value),
           short: field.inline,
         })),
         footer: "Kinglet",
@@ -760,6 +763,15 @@ function codeBlock(text: string): string {
 }
 
 /**
+ * Slack decodes &lt; and &gt; in message text, so event text such as
+ * "&lt;!here&gt;" would render as a look-alike mention. Escaping & keeps it
+ * literal; < and > are already replaced by sanitizeNotificationText.
+ */
+function slackEscapeAmpersands(text: string): string {
+  return text.replace(/&/g, "&amp;");
+}
+
+/**
  * Slack parses <!here>, <@user>, and <url|label> sequences even inside a code
  * fence, so event text there must have &, <, and > escaped as Slack requires.
  */
@@ -778,10 +790,12 @@ function slackCodeBlock(text: string): string {
  */
 export function sanitizeNotificationText(value: string, max: number): string {
   const flattened = value
-    .replace(/[\r\n]+/g, " ")
-    // Control characters are stripped from untrusted event text.
+    .replace(/[\r\n\u0085\u2028\u2029]+/g, " ")
+    // Control characters (C0 and C1) and bidi overrides are stripped from
+    // untrusted event text, so it cannot break lines or reorder what is shown.
     // oxlint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "")
+    .replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
     // Escape existing backslashes before adding markdown escapes below.
     // Otherwise an attacker-supplied "\[" becomes "\\[", where the doubled
     // backslash is consumed as a literal and the bracket becomes active.
@@ -888,7 +902,7 @@ export function slackPayload(n: AlertNotice): SlackPayload {
   const meta = STATE_META[n.state];
   const textParts: string[] = [];
 
-  if (n.summary) textParts.push(sanitizeNotificationText(n.summary, 1000));
+  if (n.summary) textParts.push(slackEscapeAmpersands(sanitizeNotificationText(n.summary, 1000)));
 
   if (n.sampleMessage) textParts.push(slackCodeBlock(n.sampleMessage));
 
@@ -901,7 +915,8 @@ export function slackPayload(n: AlertNotice): SlackPayload {
         text: textParts.join("\n"),
         fields: noticeFields(n, (url) => `<${url}|Open in Kinglet>`).map((field) => ({
           title: field.name,
-          value: field.value,
+          // The link is Kinglet's own markup; event-derived values are not.
+          value: field.name === "Link" ? field.value : slackEscapeAmpersands(field.value),
           short: field.inline,
         })),
         footer: "Kinglet",

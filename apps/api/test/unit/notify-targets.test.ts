@@ -224,6 +224,10 @@ describe("plain-text messages", () => {
     expect(plainNotificationText("a\u0000b\n\n c\t d", 100)).toBe("a b c d");
   });
 
+  it("strips C1 controls, line separators, and bidi overrides", () => {
+    expect(plainNotificationText("a\u0085b\u2028c\u202ed", 100)).toBe("a b cd");
+  });
+
   it("titles an alert with its state and monitor", () => {
     const message = alertMessage({
       monitorId: "m1",

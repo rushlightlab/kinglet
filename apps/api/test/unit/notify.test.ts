@@ -78,6 +78,7 @@ describe("isPrivateAddress", () => {
     expect(isPrivateAddress("203.0.113.10")).toBe(true);
     expect(isPrivateAddress("224.0.0.1")).toBe(true);
     expect(isPrivateAddress("239.255.255.250")).toBe(true);
+    expect(isPrivateAddress("192.88.99.1")).toBe(true);
   });
 
   it("accepts public IPv4 addresses", () => {
@@ -218,6 +219,11 @@ describe("validateWebhookUrl", () => {
 describe("sanitizeNotificationText", () => {
   it("flattens CRLF and bare newlines", () => {
     expect(sanitizeNotificationText("one\r\ntwo\nthree\rfour", 200)).toBe("one two three four");
+  });
+
+  it("strips C1 controls and bidi overrides that could break lines or reorder text", () => {
+    expect(sanitizeNotificationText("a\u0085b\u2028c\u2029d", 200)).toBe("a b c d");
+    expect(sanitizeNotificationText("x\u009by\u202ez\u2066w\u200f", 200)).toBe("xyzw");
   });
 
   it("strips control characters", () => {
@@ -406,6 +412,15 @@ describe("slackPayload", () => {
 
     expect(attachment.text.startsWith("5 errors in 10 minutes\n```\n")).toBe(true);
     expect(attachment.text).toContain("stack line\nsecond");
+  });
+
+  it("escapes ampersands in event-derived text so entities stay literal", () => {
+    const attachment = firstAttachment(
+      slackPayload(makeNotice({ summary: "&lt;!here&gt; now", service: "a&b" })),
+    );
+
+    expect(attachment.text).toBe("&amp;lt;!here&amp;gt; now");
+    expect(attachment.fields.find((field) => field.title === "Service")?.value).toBe("a&amp;b");
   });
 
   it("escapes Slack control sequences in the sample code block", () => {

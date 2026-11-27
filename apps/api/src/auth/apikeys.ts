@@ -284,9 +284,18 @@ export async function verifyApiKey(
       key: schema.apiKeys,
       ownerId: schema.user.id,
       ownerBanned: schema.user.banned,
+      ownerRole: schema.user.role,
+      ownerMembership: schema.projectMembers.id,
     })
     .from(schema.apiKeys)
     .leftJoin(schema.user, eq(schema.user.id, schema.apiKeys.createdBy))
+    .leftJoin(
+      schema.projectMembers,
+      and(
+        eq(schema.projectMembers.userId, schema.apiKeys.createdBy),
+        eq(schema.projectMembers.projectId, schema.apiKeys.projectId),
+      ),
+    )
     .where(eq(schema.apiKeys.keyHash, sha256hex(plaintext)))
     .limit(1);
 
@@ -306,6 +315,18 @@ export async function verifyApiKey(
   // explicit, but this also closes deleted-user and banned-user windows.
   if (row.createdBy && (!match.ownerId || match.ownerBanned === true)) {
     return null;
+  }
+
+  // A key never outlives its creator's authority to mint it. The offboarding
+  // sweeps can be outrun by a create that was authorized just before a
+  // demotion, so check the owner's current role and membership here too:
+  // admins may hold keys for any project, members only for projects they
+  // still belong to, and nobody else may hold keys at all.
+  if (row.createdBy) {
+    const role = match.ownerRole;
+    const allowed = role === "admin" || (role === "member" && match.ownerMembership !== null);
+
+    if (!allowed) return null;
   }
 
   const id = row.id;

@@ -114,6 +114,37 @@ describe("substring text plans", () => {
     expect(await chooseTextPlan(store().db, f, RANGE, OTHER_PROJECT, "substring")).toBe("scan");
   });
 
+  it("scans a large window when other projects match more rows than it holds", async () => {
+    const f = parseFilters("gateway");
+    const ownRows = TEXT_SCAN_MAX_ROWS + 1;
+
+    const filler = Array.from({ length: ownRows }, (_, i) =>
+      event(`filler ${i}`, BASE + (i % 600) * 1_000),
+    );
+
+    for (let i = 0; i < filler.length; i += 1_000) {
+      await store().insertEvents(PROJECT, filler.slice(i, i + 1_000), null);
+    }
+
+    // Few matches anywhere: the index is cheaper than reading the window.
+    expect(await chooseTextPlan(store().db, f, RANGE, PROJECT, "substring")).toBe("index");
+
+    // Another project's matches now outnumber this project's window, so the
+    // shared index would cost more than a scan of the caller's own rows.
+    const matches = Array.from({ length: ownRows + 10 }, (_, i) =>
+      event(`gateway noise ${i}`, BASE + (i % 600) * 1_000),
+    );
+
+    for (let i = 0; i < matches.length; i += 1_000) {
+      await store().insertEvents(OTHER_PROJECT, matches.slice(i, i + 1_000), null);
+    }
+
+    expect(await chooseTextPlan(store().db, f, RANGE, PROJECT, "substring")).toBe("scan");
+    expect(
+      await chooseTextPlan(store().db, parseFilters("-gateway"), RANGE, PROJECT, "substring"),
+    ).toBe("scan");
+  });
+
   it("keeps the index for queries the index does not serve", async () => {
     expect(await chooseTextPlan(store().db, parseFilters("ok"), RANGE, PROJECT, "substring")).toBe(
       "index",

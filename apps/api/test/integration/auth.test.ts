@@ -97,3 +97,33 @@ describe("authentication", () => {
     expect(arrayAt((await jsonBody(response)).events, "events")).toEqual([]);
   });
 });
+
+describe("Better Auth routes", () => {
+  it("serves only the auth endpoints Kinglet uses", async () => {
+    const { harness, adminJar } = ctx();
+
+    const current = await request(harness.app, "/api/auth/get-session", { cookies: adminJar });
+
+    expect(current.status).toBe(200);
+
+    // Better Auth serves these, but Kinglet does not use them, so they are not
+    // forwarded: unused endpoints stay closed even to an administrator.
+    for (const path of ["/api/auth/ok", "/api/auth/admin/get-user?id=" + harness.admin.id]) {
+      const response = await request(harness.app, path, { cookies: adminJar });
+
+      expect(response.status, path).toBe(404);
+    }
+
+    // Unknown and percent-encoded paths never reach Better Auth either, so
+    // they cannot add per-path rate-limit buckets.
+    for (const path of [
+      "/api/auth/unknown-" + "x".repeat(64),
+      "/api/auth/sign-in/%65mail",
+      "/api/auth/sign-in/email/",
+    ]) {
+      const response = await request(harness.app, path, { method: "POST", body: {} });
+
+      expect(response.status, path).toBe(404);
+    }
+  });
+});

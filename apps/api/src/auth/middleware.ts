@@ -110,10 +110,32 @@ async function resolveAuth(
   });
 }
 
+/**
+ * Reads that return admin secrets (unmasked channel targets, snapshot
+ * downloads, the side-effecting backup refresh) skip the signed cookie cache
+ * like mutations do, so a demoted or signed-out admin loses them at once.
+ */
+function readsAdminSecret(c: Context): boolean {
+  const path = c.req.path;
+
+  if (path.startsWith("/v1/notifications/channels/")) {
+    const rest = path.slice("/v1/notifications/channels/".length);
+
+    return rest !== "" && rest !== "summary" && !rest.includes("/");
+  }
+
+  if (path.startsWith("/v1/backups/") && path.endsWith("/download")) return true;
+
+  return path === "/v1/backups" && c.req.query("refresh") !== undefined;
+}
+
 export function authMiddleware(storage: Storage, auth: KingletAuth): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const method = c.req.method;
-    const forceFreshSession = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+
+    const forceFreshSession =
+      (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") || readsAdminSecret(c);
+
     const info = await resolveAuth(c, storage, auth, forceFreshSession);
 
     if (!info) return c.json({ error: "unauthorized" }, 401);

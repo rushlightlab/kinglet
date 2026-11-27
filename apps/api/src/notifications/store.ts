@@ -1,7 +1,7 @@
 import { and, asc, count, desc, eq, inArray, lt, or } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { uuidv7 } from "../auth/ids.ts";
-import { isChannelType } from "../notify.ts";
+import { isChannelType, LEGACY_CHANNEL_TYPES } from "../notify.ts";
 import type { ChannelType } from "../notify.ts";
 import * as schema from "../storage/schema.ts";
 import {
@@ -395,6 +395,33 @@ export async function channelsForAction(
       decoration: row.decoration,
       locked: target.locked,
     });
+  }
+
+  return targets;
+}
+
+/**
+ * Fingerprints (`type\nurl`) of every managed channel that a legacy inline
+ * destination could duplicate, enabled or not. The legacy fallback must never
+ * deliver to one of these: an admin who disables or locks a migrated channel
+ * would otherwise be overridden by the inline copy the migration kept.
+ */
+export async function managedLegacyTargets(storage: Storage): Promise<Set<string>> {
+  const rows = await storage.db
+    .select({
+      id: schema.notificationChannels.id,
+      type: schema.notificationChannels.type,
+      url: schema.notificationChannels.url,
+    })
+    .from(schema.notificationChannels)
+    .where(inArray(schema.notificationChannels.type, [...LEGACY_CHANNEL_TYPES]));
+
+  const targets = new Set<string>();
+
+  for (const row of rows) {
+    const target = readChannelTarget(row.id, row.url);
+
+    if (target.url) targets.add(`${row.type}\n${target.url.trim()}`);
   }
 
   return targets;

@@ -11,6 +11,7 @@ import type { AlertNotice, NotifyChannel, SmtpSettings } from "./notify.ts";
 import { uuidv7, isUuid } from "./auth/ids.ts";
 import type { AlertState } from "./alerts.ts";
 import {
+  managedLegacyTargets,
   openMonitorChannels,
   recordDelivery,
   resolveMonitorChannelData,
@@ -691,12 +692,22 @@ export async function getAlert(
 /**
  * Delivery targets for one monitor: linked channels when present, otherwise
  * legacy inline channels. Route handlers can use this for monitor test sends.
+ * The legacy fallback skips any destination that is also a managed channel,
+ * so unlinking a disabled channel cannot revive it through the inline copy.
  */
 export async function resolveMonitorNotifyTargets(
   storage: Storage,
   monitor: Monitor,
 ): Promise<NotifyChannel[]> {
-  if (monitor.channelIds.length === 0) return monitor.channels;
+  if (monitor.channelIds.length === 0) {
+    if (monitor.channels.length === 0) return [];
+
+    const managed = await managedLegacyTargets(storage);
+
+    return monitor.channels.filter(
+      (channel) => !managed.has(`${channel.type}\n${channel.url.trim()}`),
+    );
+  }
 
   const data = await resolveMonitorChannelData(storage, [monitor.id]);
 

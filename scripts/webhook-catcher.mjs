@@ -27,6 +27,6 @@ createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end("{}");
   });
-}).listen(port, () => {
+}).listen(port, "127.0.0.1", () => {
   console.log(`webhook catcher listening on http://localhost:${port} — point channels here`);
 });

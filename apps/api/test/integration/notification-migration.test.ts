@@ -1,6 +1,10 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMonitorFromRaw } from "../../src/monitors.ts";
+import {
+  createMonitorFromRaw,
+  getMonitor,
+  resolveMonitorNotifyTargets,
+} from "../../src/monitors.ts";
 import { migrateLegacyMonitorChannels } from "../../src/notifications/migrate.ts";
 import { readChannelTarget } from "../../src/notifications/store.ts";
 import * as schema from "../../src/storage/schema.ts";
@@ -163,5 +167,73 @@ describe("legacy monitor channel migration", () => {
 
     expect(third).toEqual({ monitorsScanned: 0, channelsCreated: 0, linksCreated: 0 });
     expect(await channelRows(lateUrl)).toHaveLength(0);
+  });
+});
+
+describe("legacy fallback after migration", () => {
+  it("never delivers to a managed channel's destination through the legacy copy", async () => {
+    // A fresh database: the migration runs once per database.
+    const harness = await createTestHarness();
+
+    try {
+      const project = await seedProject(harness.storage, { name: "Fallback" });
+      const migratedUrl = "https://example.test/hooks/fallback-migrated";
+
+      const created = await createMonitorFromRaw(
+        harness.storage,
+        project.id,
+        {
+          name: "fallback-monitor",
+          query: "level>=error",
+          kind: "match",
+          channels: [{ type: "webhook", url: migratedUrl }],
+        },
+        { allowPrivateWebhooks: false },
+      );
+
+      if (!created.ok) throw new Error(`fallback suite: ${created.error}`);
+
+      await migrateLegacyMonitorChannels(harness.storage, false);
+
+      // An admin disables the migrated channel, then a monitor writer unlinks it.
+      await harness.storage.db
+        .update(schema.notificationChannels)
+        .set({ enabled: false })
+        .where(eq(schema.notificationChannels.type, "webhook"));
+      await harness.storage.db
+        .delete(schema.monitorChannels)
+        .where(eq(schema.monitorChannels.monitorId, created.monitor.id));
+
+      const monitor = await getMonitor(harness.storage, created.monitor.id);
+
+      if (monitor === null) throw new Error("fallback suite: monitor missing");
+
+      // The legacy copy is still on the monitor, but it is never a target.
+      expect(monitor.channels.map((channel) => channel.url)).toEqual([migratedUrl]);
+      expect(await resolveMonitorNotifyTargets(harness.storage, monitor)).toEqual([]);
+
+      // A legacy destination that is not a managed channel still delivers.
+      const lateUrl = "https://example.test/hooks/fallback-late";
+
+      const late = await createMonitorFromRaw(
+        harness.storage,
+        project.id,
+        {
+          name: "fallback-late",
+          query: "level>=error",
+          kind: "match",
+          channels: [{ type: "webhook", url: lateUrl }],
+        },
+        { allowPrivateWebhooks: false },
+      );
+
+      if (!late.ok) throw new Error(`fallback suite: ${late.error}`);
+
+      const targets = await resolveMonitorNotifyTargets(harness.storage, late.monitor);
+
+      expect(targets.map((target) => target.url)).toEqual([lateUrl]);
+    } finally {
+      await harness.close();
+    }
   });
 });
