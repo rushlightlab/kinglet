@@ -197,6 +197,21 @@ describe("ingest formats", () => {
     expect(invalidBody.rejected).toBe(2);
   });
 
+  it("counts malformed NDJSON lines toward the batch cap", async () => {
+    const { data: seeded } = ctx();
+
+    const response = await ingest("x\n".repeat(20_000), seeded.keys.alpha.plaintext, {
+      "content-type": "application/x-ndjson",
+    });
+
+    expect(response.status).toBe(422);
+
+    // Parsing stops at the 10,000-line batch cap instead of trying every line.
+    const parsed = await jsonBody(response);
+    expect(parsed.accepted).toBe(0);
+    expect(parsed.rejected).toBe(10_000);
+  });
+
   it("rejects invalid event shapes without dropping valid siblings", async () => {
     const { data: seeded } = ctx();
 
@@ -252,7 +267,9 @@ describe("ingest formats", () => {
   });
 
   it("enforces the per-project byte quota cumulatively", async () => {
-    const limited = await createTestHarness({ config: { maxProjectBytes: 20 } });
+    // "first-ok" is estimated at 224 bytes on disk and the second event at
+    // 272, so a 300-byte quota holds the first and refuses the second.
+    const limited = await createTestHarness({ config: { maxProjectBytes: 300 } });
 
     try {
       const project = await seedProject(limited.storage, { name: "Quota" });
@@ -272,7 +289,7 @@ describe("ingest formats", () => {
       expect(first.status).toBe(200);
       expect((await jsonBody(first)).accepted).toBe(1);
 
-      // 8 stored bytes + a 20-byte message crosses the 20-byte cap.
+      // 224 stored bytes + 272 incoming crosses the 300-byte cap.
       const second = await request(limited.app, "/v1/events", {
         method: "POST",
         body: { message: "second-event-payload" },

@@ -27,6 +27,7 @@ import {
   MAX_MANIFEST_BYTES,
 } from "./manifest.ts";
 import { BackupStore, describeBackupError } from "./s3.ts";
+import { scrubSnapshotCredentials } from "./scrub.ts";
 import { BackupError } from "./types.ts";
 import type {
   BackupCounts,
@@ -322,6 +323,7 @@ function createEngine(storage: Storage, config: Config): BackupEngine {
       const escapedPath = escapeSqlLiteral(tempPaths.snapshot);
 
       await storage.client.execute(`VACUUM INTO '${escapedPath}'`);
+      await scrubSnapshotCredentials(tempPaths.snapshot);
       const snapshotBytes = await fileSize(tempPaths.snapshot);
 
       if (snapshotBytes === 0) throw new BackupError("database snapshot is empty", 500);

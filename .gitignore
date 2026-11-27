@@ -11,6 +11,10 @@ blob-report/
 *.db-shm
 *.db-wal
 .env
+.env.*
+!.env.example
+*.pem
+*.key
 admin-password.txt
 auth-secret.txt
 .DS_Store

@@ -20,15 +20,19 @@ database, never ingests logs, and never inherits a human role.
 
 ## Configuration
 
-| Variable                 | Required | Description                                                                 |
-| ------------------------ | -------- | --------------------------------------------------------------------------- |
-| `KINGLET_URL`            | yes      | Base URL, e.g. `https://logs.example.com`. Must be `http://` or `https://`. |
-| `KINGLET_MCP_KEY`        | yes      | MCP key starting with `km_…`. Project-bound.                                |
-| `KINGLET_MCP_TIMEOUT_MS` | no       | Per-request timeout in ms. Default `15000` (1s–300s).                       |
+| Variable                          | Required | Description                                                                          |
+| --------------------------------- | -------- | ------------------------------------------------------------------------------------ |
+| `KINGLET_URL`                     | yes      | Base URL, e.g. `https://logs.example.com`. `http://` only for localhost (see below). |
+| `KINGLET_MCP_KEY`                 | yes      | MCP key starting with `km_…`. Project-bound.                                         |
+| `KINGLET_MCP_TIMEOUT_MS`          | no       | Per-request timeout in ms. Default `15000` (1s–300s).                                |
+| `KINGLET_MCP_ALLOW_INSECURE_HTTP` | no       | `1` allows `http://` to a host other than localhost (trusted private networks only). |
 
 The URL may include a path prefix (for example `https://example.com/kinglet`)
-but not credentials, a query string, or a fragment. Use HTTPS outside local
-development.
+but not credentials, a query string, or a fragment. `http://` is accepted only
+for `localhost`, `*.localhost`, `127.0.0.0/8`, and `[::1]`, because the key is
+sent with every request; any other host needs HTTPS or the explicit
+`KINGLET_MCP_ALLOW_INSECURE_HTTP=1` opt-in. Redirects are never followed: point
+`KINGLET_URL` at the final address.
 
 Never commit the key or paste it into a shared config. The server never prints
 it; tool-call audit lines go to stderr and contain only the tool name, duration,
@@ -204,7 +208,7 @@ Truncated responses set `truncated: true` and `search_events` returns a
 | `get_alert`         | `monitors.read`   | read        | One alert by id, with the same masking rules                              |
 | `list_channels`     | `monitors.read`   | read        | Channel id/name/type/enabled/health only                                  |
 | `create_monitor`    | `monitors.write`  | write       | Creates a monitor; channels are `channelIds`, never URLs                  |
-| `update_monitor`    | `monitors.write`  | write       | Partial update by id                                                      |
+| `update_monitor`    | `monitors.write`  | destructive | Partial update by id; can disable or silence alerting                     |
 | `delete_monitor`    | `monitors.write`  | destructive | Deletes a monitor and its alert history                                   |
 
 `monitors.write` implies `monitors.read`. MCP keys never have `logs.write`.
@@ -238,7 +242,11 @@ shell, and outbound fetch.
   data, not instructions. The server never executes or acts on text found in
   events, and the system prompt tells the model to treat it as data, but prompt
   injection defense ultimately depends on the client/model. Be cautious with
-  agents that can take follow-up actions.
+  agents that can take follow-up actions. With monitor writes enabled, a log
+  line could ask the model to disable or delete a monitor: enable
+  `KINGLET_MCP_ALLOW_MONITOR_WRITES` only with a client that asks you to approve
+  each `create_monitor`, `update_monitor`, and `delete_monitor` call (they are
+  annotated `destructiveHint`), and never auto-approve them.
 - **Keys are project-bound machine credentials.** A `km_` key cannot inherit a
   human role, cross projects, mint keys, administer users, or reach admin routes.
   Revoke or rotate it in project settings; the change applies on the next

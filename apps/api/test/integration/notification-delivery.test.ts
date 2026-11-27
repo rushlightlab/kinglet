@@ -6,7 +6,7 @@ import type { TestHarness } from "../helpers/harness.ts";
 import { reserveClosedLoopbackPort } from "../helpers/loopback.ts";
 import { request, signIn } from "../helpers/request.ts";
 import type { CookieJar } from "../helpers/request.ts";
-import { seedProject } from "../helpers/seed.ts";
+import { seedProject, seedUser } from "../helpers/seed.ts";
 import type { SeededProject } from "../helpers/seed.ts";
 
 /**
@@ -192,5 +192,45 @@ describe("notification test cooldowns", () => {
         cookies: adminJar,
       });
     }
+  });
+});
+
+describe("channel test sends with private webhooks allowed", () => {
+  it("gives private reach only to callers who may set destinations", async () => {
+    const { harness, adminJar, closedPort } = ctx();
+    const url = `http://127.0.0.1:${closedPort}/member-probe`;
+
+    const member = await seedUser(harness.auth, harness.storage, {
+      email: "private-probe-member@example.test",
+      role: "member",
+    });
+
+    const project = await seedProject(harness.storage, {
+      name: "Private probe",
+      memberIds: [member.id],
+    });
+
+    const signedIn = await signIn(harness.app, member.email, member.password);
+
+    expect(signedIn.response.ok).toBe(true);
+
+    const memberTest = await request(
+      harness.app,
+      "/v1/monitors/test-channel?project=" + project.id,
+      { method: "POST", body: { type: "webhook", url }, cookies: signedIn.jar },
+    );
+
+    // The member is refused before any request is made.
+    expect(memberTest.status).toBe(400);
+    expect(errorOf(await jsonBody(memberTest))).toContain("private");
+
+    const adminTest = await request(
+      harness.app,
+      "/v1/monitors/test-channel?project=" + project.id,
+      { method: "POST", body: { type: "webhook", url }, cookies: adminJar },
+    );
+
+    // The admin's send is attempted; the reserved port refuses it.
+    expect(adminTest.status).toBe(502);
   });
 });

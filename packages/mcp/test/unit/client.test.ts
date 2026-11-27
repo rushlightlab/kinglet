@@ -166,6 +166,26 @@ describe("KingletClient alerts", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("never follows a redirect with the key attached", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, init?: RequestInit): Promise<Response> =>
+        new Response(JSON.stringify({ redirect: init?.redirect ?? "follow" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await new KingletClient(TEST_CONFIG).getAlert("0190f5b2-7c3a-7def-8abc-0123456789ab");
+
+      expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("error");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("KingletClient context", () => {

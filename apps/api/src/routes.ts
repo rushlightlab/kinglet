@@ -219,48 +219,6 @@ function allowIngest(auth: AuthInfo): boolean {
 }
 
 /**
- * On-disk bytes per counted event byte, from the database's used pages over
- * the sum of every project's counted bytes. At least 1; cached for 30 s. Below
- * 8 MiB of events the fixed schema overhead would dominate the ratio, so 1 is
- * used there.
- */
-const AMPLIFICATION_MIN_COUNTED_BYTES = 8 * 1_048_576;
-let amplificationCache: { value: number; expiresAt: number } | null = null;
-
-async function storageAmplification(storage: Storage): Promise<number> {
-  const now = Date.now();
-
-  if (amplificationCache && amplificationCache.expiresAt > now) return amplificationCache.value;
-
-  let value = 1;
-
-  try {
-    const counted = await storage.db.all<{ n: number | null }>(
-      sql`SELECT sum(bytes) AS n FROM project_usage`,
-    );
-
-    const countedBytes = Number(counted[0]?.n ?? 0);
-
-    if (countedBytes >= AMPLIFICATION_MIN_COUNTED_BYTES) {
-      const pages = await storage.db.all<{ used: number; size: number }>(
-        sql`SELECT (SELECT page_count FROM pragma_page_count()) - (SELECT freelist_count FROM pragma_freelist_count()) AS used, (SELECT page_size FROM pragma_page_size()) AS size`,
-      );
-
-      const usedBytes = Number(pages[0]?.used ?? 0) * Number(pages[0]?.size ?? 0);
-
-      if (Number.isFinite(usedBytes) && usedBytes > countedBytes) value = usedBytes / countedBytes;
-    }
-  } catch {
-    // Remote databases may not expose page counts; fall back to raw bytes.
-    value = 1;
-  }
-
-  amplificationCache = { value, expiresAt: now + 30_000 };
-
-  return value;
-}
-
-/**
  * Stored-event counts and bytes are cached for 30s so per-batch quota checks
  * do not hit `project_usage` on every ingest request.
  */
@@ -750,6 +708,22 @@ export function registerRoutes(
     }
   });
 
+  /**
+   * Second offboarding sweep, after the authority change has committed. The
+   * pre-change sweep stays authoritative for the response; this one only
+   * catches creates that raced it, so a failure is logged, not returned.
+   */
+  async function sweepOwnedKeysAfter(userId: string, reason: string): Promise<void> {
+    try {
+      const revoked = await deleteApiKeysByOwner(storage, userId);
+
+      if (revoked > 0)
+        console.log(`[kinglet] revoked ${revoked} late API key(s) for ${reason} user ${userId}`);
+    } catch {
+      console.warn(`[kinglet] could not re-sweep API keys for ${reason} user ${userId}`);
+    }
+  }
+
   app.patch("/v1/users/:id", async (c) => {
     const denied = requirePermission(c, "users.write");
 
@@ -829,6 +803,19 @@ export function registerRoutes(
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : "could not change role" }, 400);
       }
+
+      // Sweep again once the new role is committed: a key create authorized
+      // under the old role can insert after the first sweep.
+      if (demotion) await sweepOwnedKeysAfter(userId, "demoted");
+
+      // Viewers cannot clear logs; drop the grant so a later re-promotion
+      // does not silently bring it back.
+      if (role === "viewer") {
+        await storage.db
+          .update(schema.projectMembers)
+          .set({ canClearLogs: false })
+          .where(eq(schema.projectMembers.userId, userId));
+      }
     }
 
     if (disabled !== undefined) {
@@ -854,6 +841,10 @@ export function registerRoutes(
           400,
         );
       }
+
+      // Keys minted between the first sweep and the ban would otherwise
+      // authenticate again after an unban.
+      if (disabled) await sweepOwnedKeysAfter(userId, "disabled");
     }
 
     const updated = await getUserById(storage, userId);
@@ -1445,9 +1436,13 @@ export function registerRoutes(
           break;
         }
 
+        // Every non-empty line counts toward the batch cap whether or not it
+        // parses; otherwise a body of invalid lines costs one throwing
+        // JSON.parse per line and stalls the shared event loop.
+        rawCount++;
+
         try {
           const parsed: JsonValue = JSON.parse(trimmed);
-          rawCount++;
           pushNormalized(parsed);
         } catch {
           parseErrors++;
@@ -1489,19 +1484,14 @@ export function registerRoutes(
     let incomingBytes = 0;
 
     if (config.maxProjectBytes > 0 && normalized.length > 0) {
+      // Usage already holds each row's estimated on-disk size, indexes
+      // included (eventSizeBytes), so a project is charged only for its own
+      // rows and another tenant's data cannot push it over its quota.
       for (const event of normalized) incomingBytes += eventSizeBytes(event);
 
-      // Usage counts raw column bytes; the search index and the other indexes
-      // add several times that on disk. Scale by the database's measured
-      // ratio so a project at its quota cannot fill the shared database cap.
-      const [usage, amplification] = await Promise.all([
-        projectUsageSnapshot(storage, projectId),
-        storageAmplification(storage),
-      ]);
+      const usage = await projectUsageSnapshot(storage, projectId);
 
-      const storedBytes = usage.bytes * amplification;
-
-      if (storedBytes + incomingBytes * amplification > config.maxProjectBytes) {
+      if (usage.bytes + incomingBytes > config.maxProjectBytes) {
         return c.json(
           {
             error:
@@ -2190,7 +2180,17 @@ export function registerRoutes(
       return c.json({ error: "type must be webhook, discord, or slack" }, 400);
     }
 
-    const urlError = validateWebhookUrl(url, config.allowPrivateWebhooks);
+    // The private-webhook escape hatch is for destinations an administrator
+    // configures. Only callers who may set destinations get private reach;
+    // otherwise a member could probe internal hosts through test sends.
+    const testAuth = getAuth(c);
+
+    const allowPrivate =
+      config.allowPrivateWebhooks &&
+      testAuth.kind === "user" &&
+      can(testAuth, "notifications.write");
+
+    const urlError = validateWebhookUrl(url, allowPrivate);
 
     if (urlError) return c.json({ error: urlError }, 400);
 
@@ -2220,7 +2220,7 @@ export function registerRoutes(
           summary: "Test notification from Kinglet — your channel works.",
           firedAt: Date.now(),
         },
-        { allowPrivate: config.allowPrivateWebhooks },
+        { allowPrivate },
       );
 
       return c.json({ ok: true });

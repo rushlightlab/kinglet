@@ -31,24 +31,46 @@ interface SecretKeys {
 
 let keys: SecretKeys | null = null;
 
+/**
+ * Set once every plaintext secret stored before the key was configured has
+ * been sealed (sealStoredSecrets). From then on an unsealed value can only be
+ * a row someone wrote around Kinglet, so it is refused instead of trusted.
+ */
+let plaintextRetired = false;
+
 function derive(master: Buffer, info: string): Buffer {
   return Buffer.from(hkdfSync("sha256", master, Buffer.alloc(0), info, 32));
 }
 
-/** Decode KINGLET_SECRET_KEY: base64, base64url, or hex, at least 32 bytes. */
+/**
+ * Decode KINGLET_SECRET_KEY: hex, or canonical base64/base64url, at least 32
+ * bytes. Anything else, such as a typed passphrase that lenient base64 would
+ * half-decode, is refused: the master key is used without a password KDF, so
+ * it must be random bytes.
+ */
 export function decodeSecretKey(raw: string): Buffer | null {
   const value = raw.trim();
+  let decoded: Buffer;
 
-  const decoded =
-    /^[0-9a-f]+$/i.test(value) && value.length % 2 === 0
-      ? Buffer.from(value, "hex")
-      : Buffer.from(value.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+  if (/^[0-9a-f]+$/i.test(value) && value.length % 2 === 0) {
+    decoded = Buffer.from(value, "hex");
+  } else {
+    const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) return null;
+    decoded = Buffer.from(base64, "base64");
+
+    // Canonical only: re-encoding must give back the same characters.
+    if (decoded.toString("base64").replace(/=+$/, "") !== base64.replace(/=+$/, "")) return null;
+  }
 
   return decoded.length >= MIN_KEY_BYTES ? decoded : null;
 }
 
 /** Install the master key for this process; null turns encryption off. */
 export function configureSecrets(master: Buffer | null): void {
+  plaintextRetired = false;
+
   if (master === null) {
     keys = null;
 
@@ -68,6 +90,11 @@ export function secretsConfigured(): boolean {
 
 export function isSealed(stored: string): boolean {
   return stored.startsWith(PREFIX);
+}
+
+/** Called once boot has sealed every plaintext secret under the current key. */
+export function retirePlaintextSecrets(): void {
+  if (keys !== null) plaintextRetired = true;
 }
 
 /** Associated data that binds a channel target to its row. */
@@ -98,10 +125,15 @@ export type OpenedSecret =
 
 /**
  * Read a stored secret. Plaintext from before encryption reads as-is
- * (`sealed: false`); a sealed value needs the key that sealed it.
+ * (`sealed: false`) until boot has sealed it; after that, plaintext is a
+ * downgrade and reads as corrupt. A sealed value needs the key that sealed it.
  */
 export function openSecret(stored: string, context: string): OpenedSecret {
-  if (!isSealed(stored)) return { ok: true, value: stored, sealed: false };
+  if (!isSealed(stored)) {
+    if (plaintextRetired) return { ok: false, reason: "corrupt" };
+
+    return { ok: true, value: stored, sealed: false };
+  }
 
   if (keys === null) return { ok: false, reason: "no-key" };
   const [kid, ivText, bodyText] = stored.slice(PREFIX.length).split(":");

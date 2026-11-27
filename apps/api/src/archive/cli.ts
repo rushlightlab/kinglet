@@ -90,6 +90,8 @@ async function main(): Promise<void> {
       passphrase: config.backup.passphrase,
       allowUnencrypted: config.backup.allowUnencryptedSnapshots,
       s3: store,
+      maxDbBytes: config.maxDbBytes,
+      dbPath: config.dbPath,
     });
 
     process.stdout.write(

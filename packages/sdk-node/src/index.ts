@@ -111,6 +111,8 @@ export function createLogger(opts: LoggerOptions): Logger {
           "content-type": "application/x-ndjson",
         },
         body: batch.map((e) => JSON.stringify(e)).join("\n"),
+        // Never follow a redirect: point the client at the final URL instead.
+        redirect: "error",
       });
 
       if (!res.ok) throw new Error(`kinglet ingest failed: HTTP ${res.status}`);

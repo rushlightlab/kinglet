@@ -47,16 +47,26 @@ function mapEventRow(row: typeof schema.events.$inferSelect, projectId: string):
   };
 }
 
+/**
+ * Estimated on-disk bytes for one stored event, indexes included, from its
+ * own content only. The constants were measured on local SQLite with the
+ * trigram index: about 190 bytes per row before any content, message text
+ * about 3.3-5.7x (search index), fields about 1.2x, and the indexed service
+ * and env columns about 2x. Keep them in step with the `size_bytes` backfill
+ * in the 0013 migration.
+ *
+ * Each project is charged for its own rows; the quota never depends on
+ * another tenant's data.
+ */
+export const EVENT_ROW_OVERHEAD_BYTES = 192;
+
 export function eventSizeBytes(event: Normalized): number {
-  let bytes = event.message ? Buffer.byteLength(event.message) : 0;
+  const message = event.message ? Buffer.byteLength(event.message) : 0;
+  const fields = event.fields ? Buffer.byteLength(event.fields) : 0;
+  const service = event.service ? Buffer.byteLength(event.service) : 0;
+  const env = event.env ? Buffer.byteLength(event.env) : 0;
 
-  if (event.fields) bytes += Buffer.byteLength(event.fields);
-
-  if (event.service) bytes += Buffer.byteLength(event.service);
-
-  if (event.env) bytes += Buffer.byteLength(event.env);
-
-  return bytes;
+  return EVENT_ROW_OVERHEAD_BYTES + message * 4 + Math.ceil((fields * 5) / 4) + (service + env) * 2;
 }
 
 const EVENT_COLUMNS =

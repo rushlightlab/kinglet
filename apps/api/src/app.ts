@@ -32,6 +32,14 @@ import * as schema from "./storage/schema.ts";
 import { configureSecrets } from "./secrets.ts";
 import type { Storage } from "./storage/index.ts";
 
+/** Better Auth endpoints reachable over HTTP; everything else under /api/auth is 404. */
+const BETTER_AUTH_PATHS = new Set([
+  "/api/auth/sign-in/email",
+  "/api/auth/sign-out",
+  "/api/auth/get-session",
+  "/api/auth/change-password",
+]);
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Long-lived engines the HTTP app delegates to. Created and owned by `main()`. */
@@ -96,7 +104,7 @@ export function createApp(options: CreateAppOptions): Hono<AppEnv> {
     return c.json({ error: "internal server error", requestId }, 500);
   });
 
-  app.notFound((c) => c.json({ error: "not found", path: c.req.path }, 404));
+  app.notFound((c) => c.json({ error: "not found" }, 404));
 
   // Small JSON bodies everywhere except ingest; auth endpoints are public.
   const smallJsonLimit = bodyLimit({
@@ -123,15 +131,22 @@ export function createApp(options: CreateAppOptions): Hono<AppEnv> {
   // or the same-origin request marker that cross-site forms cannot send.
   const allowedOrigins = (() => {
     const origins = new Set<string>();
+    let baseHost = "";
 
     try {
-      origins.add(new URL(config.baseUrl ?? `http://localhost:${config.port}`).origin);
+      const base = new URL(config.baseUrl ?? `http://localhost:${config.port}`);
+      origins.add(base.origin);
+      baseHost = base.hostname;
     } catch {
       // ignore invalid base URL
     }
 
-    for (const host of ["localhost", "127.0.0.1"]) {
-      for (const port of [3000, 5173, 8080]) origins.add(`http://${host}:${port}`);
+    // Local dev origins only for a local base URL, matching Better Auth's
+    // trustedOrigins (auth.ts); a public deployment does not accept them.
+    if (baseHost === "localhost" || baseHost === "127.0.0.1") {
+      for (const host of ["localhost", "127.0.0.1"]) {
+        for (const port of [3000, 5173, 8080]) origins.add(`http://${host}:${port}`);
+      }
     }
 
     return origins;
@@ -141,7 +156,12 @@ export function createApp(options: CreateAppOptions): Hono<AppEnv> {
     const method = c.req.method;
 
     if (method === "GET" || method === "HEAD" || method === "OPTIONS") return next();
-    const hasBearer = (c.req.header("authorization") ?? "").toLowerCase().startsWith("bearer ");
+    // Only a non-empty token counts: an empty one falls back to the session
+    // cookie in authMiddleware, and that request must still pass the guard.
+    const authorization = c.req.header("authorization") ?? "";
+
+    const hasBearer =
+      authorization.toLowerCase().startsWith("bearer ") && authorization.slice(7).trim() !== "";
 
     if (hasBearer) return next();
     const origin = c.req.header("origin");
@@ -235,7 +255,20 @@ export function createApp(options: CreateAppOptions): Hono<AppEnv> {
       await deleteApiKeysByOwner(storage, session.user.id);
     }
   });
-  app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
+  // Forward only the Better Auth endpoints Kinglet uses. Better Auth keys its
+  // in-memory rate limiter by IP and path, so every unknown path would add a
+  // bucket that each later request has to scan. The raw (undecoded) pathname
+  // is compared so percent-encoded variants are refused too.
+  app.on(["GET", "POST"], "/api/auth/*", async (c) => {
+    if (!BETTER_AUTH_PATHS.has(new URL(c.req.url).pathname)) {
+      return new Response(JSON.stringify({ error: "not found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    return auth.handler(c.req.raw);
+  });
 
   app.use("/v1/*", authMiddleware(storage, auth));
   app.use("/v1/*", async (c, next) => {

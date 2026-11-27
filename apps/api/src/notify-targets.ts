@@ -306,7 +306,9 @@ export function plainNotificationText(value: string, max: number): string {
   const flattened = value
     // Control characters are stripped from untrusted event text.
     // oxlint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ")
+    // Bidi overrides would reorder how the text is displayed.
+    .replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
     .replace(/\s+/g, " ")
     .trim();
 

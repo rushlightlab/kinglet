@@ -41,7 +41,19 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 300_000;
 
-function parseBaseUrl(raw: string): string {
+/** Hosts where cleartext http never leaves the machine. */
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "[::1]" ||
+    /^127(\.\d{1,3}){3}$/.test(host)
+  );
+}
+
+function parseBaseUrl(raw: string, allowInsecureHttp: boolean): string {
   let url: URL;
 
   try {
@@ -58,6 +70,15 @@ function parseBaseUrl(raw: string): string {
 
   if (url.username || url.password) {
     throw new ConfigError("KINGLET_URL must not contain credentials");
+  }
+
+  // The km_ key rides in every request header; over cleartext http to another
+  // host anyone on the path can read it.
+  if (url.protocol === "http:" && !isLoopbackHost(url.hostname) && !allowInsecureHttp) {
+    throw new ConfigError(
+      "KINGLET_URL must use https:// for a host other than localhost, or the MCP key is sent in cleartext. " +
+        "Set KINGLET_MCP_ALLOW_INSECURE_HTTP=1 only for a trusted private network",
+    );
   }
 
   if (url.search || url.hash) {
@@ -118,7 +139,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   }
 
   return {
-    url: parseBaseUrl(rawUrl),
+    url: parseBaseUrl(rawUrl, env.KINGLET_MCP_ALLOW_INSECURE_HTTP?.trim() === "1"),
     key: parseKey(env.KINGLET_MCP_KEY),
     timeoutMs: parseTimeout(env.KINGLET_MCP_TIMEOUT_MS),
     userAgent: `kinglet-mcp/${MCP_VERSION}`,

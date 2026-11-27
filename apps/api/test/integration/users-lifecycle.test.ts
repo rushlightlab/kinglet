@@ -648,6 +648,58 @@ describe("offboarding side effects", () => {
     expect(await apiKeyRows(harness, key.key.id)).toBe(0);
   });
 
+  it("revokes a key minted while a disable is in flight, so unban cannot revive it", async () => {
+    const { harness, data } = ctx();
+
+    const target = await seedUser(harness.auth, harness.storage, {
+      email: "racing-disable@example.test",
+      role: "member",
+    });
+
+    await addToProject(target.id, data.projects.alpha.id);
+
+    // A key create authorized before the ban lands after the first sweep.
+    const banSpy = vi.spyOn(harness.auth.api, "banUser");
+    let raced: Awaited<ReturnType<typeof seedApiKey>> | null = null;
+
+    banSpy.mockImplementationOnce(async (...args) => {
+      raced = await seedApiKey(harness.storage, {
+        projectId: data.projects.alpha.id,
+        name: "raced-key",
+        scopes: ["ingest", "query"],
+        createdBy: target.id,
+      });
+
+      banSpy.mockRestore();
+
+      return harness.auth.api.banUser(...args);
+    });
+
+    const disabled = await adminRequest("/v1/users/" + target.id, {
+      method: "PATCH",
+      body: { disabled: true },
+    });
+
+    banSpy.mockRestore();
+    expect(disabled.status).toBe(200);
+
+    if (raced === null) throw new Error("users lifecycle suite: raced key was not created");
+    const racedKey: Awaited<ReturnType<typeof seedApiKey>> = raced;
+
+    expect(await apiKeyRows(harness, racedKey.key.id)).toBe(0);
+
+    const unbanned = await adminRequest("/v1/users/" + target.id, {
+      method: "PATCH",
+      body: { disabled: false },
+    });
+
+    expect(unbanned.status).toBe(200);
+
+    const keyAfter = await request(harness.app, "/v1/events", { bearer: racedKey.plaintext });
+
+    expect(keyAfter.status).toBe(401);
+  });
+
   it("resetting a password rotates credentials, revokes keys, and invalidates sessions", async () => {
     const { harness, data } = ctx();
 
@@ -737,5 +789,87 @@ describe("offboarding side effects", () => {
     expect(await findUser(target.id)).toBeNull();
     expect(await apiKeyRows(harness, key.key.id)).toBe(0);
     expect(await sessionRows(harness, target.id)).toBe(0);
+  });
+});
+
+describe("key authority at verification", () => {
+  // These change the creator's authority directly in the database, standing
+  // in for a key create that outran the offboarding sweep.
+
+  it("refuses a key whose creator left the key's project", async () => {
+    const { harness, data } = ctx();
+
+    const target = await seedUser(harness.auth, harness.storage, {
+      email: "left-project@example.test",
+      role: "member",
+    });
+
+    await addToProject(target.id, data.projects.alpha.id);
+
+    const key = await seedApiKey(harness.storage, {
+      projectId: data.projects.alpha.id,
+      name: "left-project-key",
+      scopes: ["ingest", "query"],
+      createdBy: target.id,
+    });
+
+    expect(await eventCountWithKey(key.plaintext)).toBe(0);
+
+    await harness.storage.db
+      .delete(schema.projectMembers)
+      .where(eq(schema.projectMembers.userId, target.id));
+
+    const keyAfter = await request(harness.app, "/v1/events", { bearer: key.plaintext });
+
+    expect(keyAfter.status).toBe(401);
+  });
+
+  it("refuses a key whose creator is now a viewer", async () => {
+    const { harness, data } = ctx();
+
+    const target = await seedUser(harness.auth, harness.storage, {
+      email: "now-viewer@example.test",
+      role: "member",
+    });
+
+    await addToProject(target.id, data.projects.alpha.id);
+
+    const key = await seedApiKey(harness.storage, {
+      projectId: data.projects.alpha.id,
+      name: "now-viewer-key",
+      scopes: ["ingest", "query"],
+      createdBy: target.id,
+    });
+
+    expect(await eventCountWithKey(key.plaintext)).toBe(0);
+
+    await harness.storage.db
+      .update(schema.user)
+      .set({ role: "viewer" })
+      .where(eq(schema.user.id, target.id));
+
+    const keyAfter = await request(harness.app, "/v1/events", { bearer: key.plaintext });
+
+    expect(keyAfter.status).toBe(401);
+  });
+
+  it("keeps an administrator's key for a project they are not a member of", async () => {
+    const { harness, data } = ctx();
+
+    const admin = await seedUser(harness.auth, harness.storage, {
+      email: "keyed-admin@example.test",
+      role: "admin",
+    });
+
+    const key = await seedApiKey(harness.storage, {
+      projectId: data.projects.beta.id,
+      name: "admin-beta-key",
+      scopes: ["ingest", "query"],
+      createdBy: admin.id,
+    });
+
+    const response = await request(harness.app, "/v1/events", { bearer: key.plaintext });
+
+    expect(response.status).toBe(200);
   });
 });

@@ -355,6 +355,30 @@ describe("archive import integrity", () => {
     expect(await eventCount(projectId)).toBe(0);
   });
 
+  it("stops before a part once the database is at its size cap", async () => {
+    const { config, storage } = current();
+    const projectId = await newProject("db-cap");
+    const store = new InMemoryBackupStore();
+    const part = storePart(store, projectId, [makeLine(projectId)]);
+
+    stubDownload(part.compressed);
+
+    // Any real database file is past a one-byte cap.
+    const error = await archiveErrorOf(
+      importArchive(storage, {
+        projectId,
+        dataDir: config.dataDir,
+        s3: store,
+        maxDbBytes: 1,
+        dbPath: config.dbPath,
+      }),
+    );
+
+    expect(error.status).toBe(507);
+    expect(error.message).toContain("database size limit reached");
+    expect(await eventCount(projectId)).toBe(0);
+  });
+
   it("refuses an unencrypted part while a passphrase is configured", async () => {
     const { config, storage } = current();
     const projectId = await newProject("plaintext-with-passphrase");

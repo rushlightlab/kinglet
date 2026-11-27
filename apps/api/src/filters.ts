@@ -232,13 +232,17 @@ export function parseFilters(q: string): ParsedFilters {
  *    into one MATCH (one pass over the index, not one per term).
  *  - "scan": LIKE over the caller's own project and time window, so the cost
  *    depends only on the caller's own data. chooseTextPlan picks it in
- *    substring mode when that window is small, where FTS work would mostly be
- *    spent on other projects' rows.
+ *    substring mode when that window is small, or when the terms match more
+ *    rows across all projects than the window holds, where FTS work would
+ *    mostly be spent on other projects' rows.
  */
 export type TextPlan = "index" | "scan";
 
 /** Own-window rows at or below which substring search scans instead of using the index. */
 export const TEXT_SCAN_MAX_ROWS = 10_000;
+
+/** Upper bound on the own-window count used to compare against index matches. */
+export const TEXT_PLAN_OWN_PROBE_MAX = 200_000;
 
 /**
  * Terms the FTS index can answer:
@@ -305,30 +309,51 @@ function textClauses(f: ParsedFilters, search: SearchMode, plan: TextPlan): SQL[
   }
 
   const parts: SQL[] = [];
-  const includePhrases: string[] = [];
-  const excludePhrases: string[] = [];
 
   for (const term of f.includes) {
-    const phrase = useIndex ? ftsPhrase(term, search) : null;
-
-    if (phrase === null) parts.push(messageLikeClause(term));
-    else includePhrases.push(phrase);
+    if (!useIndex || ftsPhrase(term, search) === null) parts.push(messageLikeClause(term));
   }
 
   for (const term of f.excludes) {
-    const phrase = useIndex ? ftsPhrase(term, search) : null;
-
-    if (phrase === null) parts.push(sql`NOT (${messageLikeClause(term)})`);
-    else excludePhrases.push(phrase);
+    if (!useIndex || ftsPhrase(term, search) === null) {
+      parts.push(sql`NOT (${messageLikeClause(term)})`);
+    }
   }
 
-  if (includePhrases.length > 0) parts.push(ftsMatchClause(includePhrases.join(" AND ")));
+  if (!useIndex) return parts;
 
-  if (excludePhrases.length > 0) {
-    parts.push(sql`NOT (${ftsMatchClause(excludePhrases.join(" OR "))})`);
-  }
+  const { include, exclude } = messageMatchExpressions(f, search);
+
+  if (include !== null) parts.push(ftsMatchClause(include));
+
+  if (exclude !== null) parts.push(sql`NOT (${ftsMatchClause(exclude)})`);
 
   return parts;
+}
+
+/** The (at most two) MATCH expressions a message-scope query sends to the index. */
+interface MessageMatchExpressions {
+  /** Every include phrase, ANDed; null when no include uses the index. */
+  include: string | null;
+  /** Every exclude phrase, ORed; null when no exclude uses the index. */
+  exclude: string | null;
+}
+
+function messageMatchExpressions(f: ParsedFilters, search: SearchMode): MessageMatchExpressions {
+  const phrases = (terms: string[]): string[] =>
+    terms.flatMap((term) => {
+      const phrase = ftsPhrase(term, search);
+
+      return phrase === null ? [] : [phrase];
+    });
+
+  const include = phrases(f.includes);
+  const exclude = phrases(f.excludes);
+
+  return {
+    include: include.length > 0 ? include.join(" AND ") : null,
+    exclude: exclude.length > 0 ? exclude.join(" OR ") : null,
+  };
 }
 
 /** `$."data"."rss"`; keys are pre-validated by FIELD_TOKEN. */
@@ -393,10 +418,27 @@ function windowClauses(range: EventRange, projectId: string): SQL[] {
   ];
 }
 
+/** Rows a subquery yields, counting no further than `max + 1`. */
+async function countUpTo(db: KingletDb, rows: SQL, max: number): Promise<number> {
+  const result = await db.all<{ n: number }>(
+    sql`SELECT count(*) AS n FROM (${rows} LIMIT ${max + 1})`,
+  );
+
+  return Number(result[0]?.n ?? 0);
+}
+
 /**
- * The text plan for a query: "scan" when substring search would otherwise
- * use the shared index for a project window small enough to read directly.
- * The count stops at the threshold, so it costs at most that many index rows.
+ * The text plan for a query in substring mode. The shared index answers a
+ * MATCH over every project's messages before the project filter applies, so
+ * it is used only when that costs less than reading the caller's own window:
+ *  - "scan" when the window is small (at most TEXT_SCAN_MAX_ROWS);
+ *  - otherwise "scan" when a MATCH would return more rows, across all
+ *    projects, than the window holds, and "index" when it returns fewer.
+ * Each count stops at the other's size, so choosing costs at most about the
+ * caller's own window, never another tenant's matching rows.
+ *
+ * Words mode always uses the index, since a LIKE scan would also match
+ * inside words and return different rows.
  */
 export async function chooseTextPlan(
   db: KingletDb,
@@ -405,19 +447,35 @@ export async function chooseTextPlan(
   projectId: string,
   search: SearchMode,
 ): Promise<TextPlan> {
-  if (search !== "substring" || f.textScope === "fields") return "index";
+  if (search !== "substring" || f.textScope !== "message") return "index";
 
-  const indexed = [...f.includes, ...f.excludes].some((term) => ftsPhrase(term, search) !== null);
+  const { include, exclude } = messageMatchExpressions(f, search);
 
-  if (!indexed) return "index";
+  if (include === null && exclude === null) return "index";
 
   const window = sql.join(windowClauses(range, projectId), sql` AND `);
 
-  const rows = await db.all<{ n: number }>(
-    sql`SELECT count(*) AS n FROM (SELECT 1 FROM events WHERE ${window} LIMIT ${TEXT_SCAN_MAX_ROWS + 1})`,
+  const own = await countUpTo(
+    db,
+    sql`SELECT 1 FROM events WHERE ${window}`,
+    TEXT_PLAN_OWN_PROBE_MAX,
   );
 
-  return Number(rows[0]?.n ?? 0) <= TEXT_SCAN_MAX_ROWS ? "scan" : "index";
+  if (own <= TEXT_SCAN_MAX_ROWS) return "scan";
+
+  for (const expression of [include, exclude]) {
+    if (expression === null) continue;
+
+    const matches = await countUpTo(
+      db,
+      sql`SELECT rowid FROM events_fts WHERE events_fts MATCH ${expression}`,
+      own,
+    );
+
+    if (matches > own) return "scan";
+  }
+
+  return "index";
 }
 
 /** Parses `q` and builds the project-scoped condition with the right text plan. */

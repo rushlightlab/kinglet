@@ -75,6 +75,9 @@ final class HttpTransport implements Transport
                 'content' => $body,
                 'timeout' => $timeout,
                 'ignore_errors' => true,
+                // Match the curl path: never follow a redirect, which would
+                // re-send the Authorization header to another location.
+                'follow_location' => 0,
             ],
         ]);
 
